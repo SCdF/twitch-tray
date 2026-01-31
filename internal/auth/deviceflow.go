@@ -14,12 +14,14 @@ import (
 
 const (
 	deviceCodeURL = "https://id.twitch.tv/oauth2/device"
-	tokenURL      = "https://id.twitch.tv/oauth2/token"
 	validateURL   = "https://id.twitch.tv/oauth2/validate"
 
 	// Required scopes for the application
 	requiredScopes = "user:read:follows"
 )
+
+// tokenURL is a variable to allow overriding in tests
+var tokenURL = "https://id.twitch.tv/oauth2/token"
 
 var (
 	ErrAuthorizationPending = errors.New("authorization pending")
@@ -39,11 +41,11 @@ type DeviceCodeResponse struct {
 
 // TokenResponse is the response from the token request
 type TokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int    `json:"expires_in"`
-	Scope        string `json:"scope"`
-	TokenType    string `json:"token_type"`
+	AccessToken  string   `json:"access_token"`
+	RefreshToken string   `json:"refresh_token"`
+	ExpiresIn    int      `json:"expires_in"`
+	Scope        []string `json:"scope"`
+	TokenType    string   `json:"token_type"`
 }
 
 // ValidateResponse is the response from token validation
@@ -260,7 +262,7 @@ func (d *DeviceFlow) Authenticate(ctx context.Context, onCode func(userCode, ver
 		AccessToken:  tr.AccessToken,
 		RefreshToken: tr.RefreshToken,
 		ExpiresAt:    time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second),
-		Scopes:       strings.Split(tr.Scope, " "),
+		Scopes:       tr.Scope,
 		UserID:       vr.UserID,
 		UserLogin:    vr.Login,
 	}, nil
