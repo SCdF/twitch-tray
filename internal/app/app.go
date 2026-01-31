@@ -34,6 +34,9 @@ type App struct {
 	// Track categories for change detection
 	categoryTracker map[string]string // userID -> categoryID
 	categoryMu      sync.RWMutex
+
+	// Track if initial load is complete (don't notify until then)
+	initialLoadDone bool
 }
 
 // New creates a new application instance
@@ -240,6 +243,7 @@ func (a *App) refreshAllData() {
 	a.refreshFollowedStreams()
 	a.refreshCategoryStreams()
 	a.refreshScheduledStreams()
+	a.initialLoadDone = true
 }
 
 func (a *App) refreshFollowedStreams() {
@@ -255,10 +259,12 @@ func (a *App) refreshFollowedStreams() {
 
 	newlyLive, _ := a.state.SetFollowedStreams(streams)
 
-	// Notify for newly live streams
-	for _, stream := range newlyLive {
-		if err := a.notifier.StreamLive(stream); err != nil {
-			log.Printf("Notification error: %v", err)
+	// Notify for newly live streams (only after initial load)
+	if a.initialLoadDone {
+		for _, stream := range newlyLive {
+			if err := a.notifier.StreamLive(stream); err != nil {
+				log.Printf("Notification error: %v", err)
+			}
 		}
 	}
 }
@@ -301,8 +307,10 @@ func (a *App) handleStreamOnline(event eventsub.StreamOnlineEvent) {
 	// Refresh to get full stream info
 	go a.refreshFollowedStreams()
 
-	// Send notification
-	a.notifier.StreamLiveSimple(event.BroadcasterUserName, "")
+	// Send notification (only after initial load)
+	if a.initialLoadDone {
+		a.notifier.StreamLiveSimple(event.BroadcasterUserName, "")
+	}
 }
 
 func (a *App) handleStreamOffline(event eventsub.StreamOfflineEvent) {
@@ -370,7 +378,7 @@ func (a *App) handleLogin() {
 			return
 		}
 
-		a.notifier.AuthSuccess(token.UserLogin)
+		log.Printf("Logged in as %s", token.UserLogin)
 	}()
 }
 
