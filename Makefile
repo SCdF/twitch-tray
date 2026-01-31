@@ -1,67 +1,61 @@
-.PHONY: all build build-linux build-darwin build-windows clean deps run lint test
-
-# Binary name
-BINARY=twitch-tray
+.PHONY: all build dev run clean lint test install-deps
 
 # Build directory
 DIST=dist
 
-# Version (override with: make build VERSION=1.0.0)
-VERSION ?= dev
-LDFLAGS=-ldflags="-s -w -X main.Version=$(VERSION)"
+all: build
 
-# Go parameters
-GOCMD=go
-GOBUILD=$(GOCMD) build $(LDFLAGS)
-GOCLEAN=$(GOCMD) clean
-GOGET=$(GOCMD) get
-GOMOD=$(GOCMD) mod
-
-# CGO is required for systray
-export CGO_ENABLED=1
-
-all: deps build
-
+# Install dependencies
 deps:
-	$(GOMOD) download
-	$(GOMOD) tidy
+	cd src-tauri && cargo fetch
 
+# Development build
 build:
-	mkdir -p $(DIST)
-	$(GOBUILD) -o $(DIST)/$(BINARY) ./cmd/twitch-tray
+	cd src-tauri && cargo build
 
-build-linux:
-	mkdir -p $(DIST)
-	GOOS=linux GOARCH=amd64 $(GOBUILD) -o $(DIST)/$(BINARY)-linux-amd64 ./cmd/twitch-tray
+# Release build
+release:
+	cd src-tauri && cargo build --release
 
-build-darwin:
-	mkdir -p $(DIST)
-	GOOS=darwin GOARCH=amd64 $(GOBUILD) -o $(DIST)/$(BINARY)-darwin-amd64 ./cmd/twitch-tray
-	GOOS=darwin GOARCH=arm64 $(GOBUILD) -o $(DIST)/$(BINARY)-darwin-arm64 ./cmd/twitch-tray
+# Development with hot reload
+dev:
+	cd src-tauri && cargo tauri dev
 
-build-windows:
-	mkdir -p $(DIST)
-	GOOS=windows GOARCH=amd64 $(GOCMD) build -ldflags="-s -w -H=windowsgui -X main.Version=$(VERSION)" -o $(DIST)/$(BINARY)-windows-amd64.exe ./cmd/twitch-tray
-
-build-all: build-linux build-darwin build-windows
-
+# Run the built binary
 run: build
-	./$(DIST)/$(BINARY)
+	./src-tauri/target/debug/twitch-tray
 
+# Clean build artifacts
 clean:
-	$(GOCLEAN)
+	cd src-tauri && cargo clean
 	rm -rf $(DIST)
 
+# Run lints
 lint:
-	$(GOCMD) vet ./...
-	staticcheck ./...
+	cd src-tauri && cargo fmt --check
+	cd src-tauri && cargo clippy -- -D warnings
 
+# Run tests
 test:
-	$(GOCMD) test -v -race ./...
+	cd src-tauri && cargo test
 
-# Install dependencies for development
+# Format code
+fmt:
+	cd src-tauri && cargo fmt
+
+# Build for distribution (uses Tauri bundler)
+dist:
+	cd src-tauri && cargo tauri build
+
+# Install platform-specific dependencies
 install-deps:
-	# Linux: apt-get install gcc libgtk-3-dev libayatana-appindicator3-dev
-	# macOS: xcode-select --install
-	# Windows: Install MinGW or TDM-GCC
-	@echo "See comments in Makefile for platform-specific dependencies"
+	@echo "Platform-specific dependencies:"
+	@echo ""
+	@echo "Linux (Debian/Ubuntu):"
+	@echo "  sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev"
+	@echo ""
+	@echo "macOS:"
+	@echo "  xcode-select --install"
+	@echo ""
+	@echo "Windows:"
+	@echo "  Install Visual Studio Build Tools with C++ workload"

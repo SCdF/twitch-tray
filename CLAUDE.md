@@ -1,78 +1,70 @@
 # Twitch Tray
 
-A cross-platform system tray application for Twitch viewers.
+A cross-platform system tray application for Twitch viewers built with Rust and Tauri 2.0.
 
 ## Project Structure
 
 ```
 twitch-tray/
-├── cmd/twitch-tray/main.go     # Entry point
-├── version.go                  # Version variable (set via ldflags at build time)
+├── src-tauri/
+│   ├── Cargo.toml
+│   ├── tauri.conf.json
+│   ├── build.rs
+│   ├── icons/
+│   │   ├── icon.png           # Tray icon (64x64 RGBA)
+│   │   └── icon_grey.png      # Dimmed icon for unauthenticated state
+│   └── src/
+│       ├── main.rs            # Entry point, Tauri setup
+│       ├── app.rs             # Lifecycle, polling, session management
+│       ├── auth/
+│       │   ├── mod.rs
+│       │   ├── store.rs       # Keyring token storage
+│       │   └── deviceflow.rs  # OAuth Device Code Flow
+│       ├── twitch/
+│       │   ├── mod.rs
+│       │   ├── client.rs      # reqwest-based Helix client
+│       │   └── types.rs       # Stream, ScheduledStream structs
+│       ├── state.rs           # Central state, change detection
+│       ├── config.rs          # XDG config management
+│       ├── tray.rs            # Tray icon + menu construction
+│       └── notify.rs          # Desktop notifications
+├── src/                       # Frontend (empty - tray-only app)
 ├── .github/workflows/
-│   ├── ci.yml                  # Tests, linting on every push
-│   └── release.yml             # Build binaries on git tag push
-├── internal/
-│   ├── app/app.go              # Lifecycle orchestration
-│   ├── auth/
-│   │   ├── auth.go             # Token management (file-based encrypted storage)
-│   │   ├── deviceflow.go       # OAuth Device Code Flow
-│   │   └── deviceflow_test.go  # Polling tests
-│   ├── twitch/
-│   │   ├── client.go           # Helix API wrapper
-│   │   ├── streams.go          # Streams endpoints
-│   │   ├── schedule.go         # Schedule endpoint
-│   │   └── types.go            # Data types
-│   ├── eventsub/               # (Not currently used - kept for future)
-│   │   ├── client.go           # WebSocket connection
-│   │   ├── handlers.go         # Event handlers
-│   │   └── subscriptions.go    # Subscription management
-│   ├── state/state.go          # Central state + change detection
-│   ├── tray/
-│   │   ├── tray.go             # Tray setup
-│   │   ├── menu.go             # Menu construction (mutex-protected)
-│   │   └── handlers.go         # Click handlers (open browser)
-│   ├── notify/notify.go        # Desktop notifications
-│   └── config/config.go        # XDG config management
-├── assets/
-│   ├── original.png            # Source icon (256x256)
-│   ├── icon.png                # Tray icon (64x64, generated)
-│   ├── icon_grey.png           # Dimmed icon for unauthenticated state
-│   ├── assets.go               # go:embed for icons
-│   └── README.md               # Icon conversion instructions
-├── go.mod
+│   ├── ci.yml                 # Clippy, tests on every push
+│   └── release.yml            # Build binaries on git tag push
 ├── Makefile
-└── CLAUDE.md
+└── README.md
 ```
 
 ## Build Commands
 
 ```bash
-make          # Install deps and build
-make run      # Build and run
-make clean    # Remove build artifacts
-```
-
-Cross-platform builds:
-```bash
-make build-linux
-make build-darwin
-make build-windows
-make build-all
+make build     # Development build
+make release   # Release build
+make run       # Build and run
+make dev       # Development with hot reload
+make clean     # Remove build artifacts
+make lint      # Run clippy and fmt check
+make test      # Run tests
+make fmt       # Format code
+make dist      # Build for distribution (Tauri bundler)
 ```
 
 ## Dependencies
 
-- **System tray**: `fyne.io/systray` - requires CGO
-- **Notifications**: `gen2brain/beeep`
-- **Secure storage**: `99designs/keyring` (file backend)
-- **Config paths**: `adrg/xdg`
-- **Twitch API**: `nicklaw5/helix/v2`
+Key crates:
+- **tauri**: System tray, menu, platform integration
+- **tokio**: Async runtime for polling and HTTP
+- **reqwest**: HTTP client for Twitch API
+- **keyring**: Secure token storage
+- **notify-rust**: Desktop notifications (Linux)
+- **chrono**: Date/time handling
 
 ### Platform-specific build dependencies
 
-- **Linux**: `gcc`, `libgtk-3-dev`, `libayatana-appindicator3-dev`
+- **Linux**: `libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev`
 - **macOS**: Xcode command line tools (`xcode-select --install`)
-- **Windows**: MinGW or TDM-GCC
+- **Windows**: Visual Studio Build Tools with C++ workload
 
 ## Configuration
 
@@ -87,9 +79,9 @@ Config file: `~/.config/twitch-tray/config.json`
 }
 ```
 
-**Note**: Client ID is hardcoded in `internal/auth/auth.go`. No user configuration needed.
+**Note**: Client ID is hardcoded in `src/auth/mod.rs`. No user configuration needed.
 
-Token storage: `~/.config/twitch-tray/keyring/` (encrypted file, not system keyring)
+Token storage: System keyring with file fallback at `~/.config/twitch-tray/token.json`
 
 ## Authentication
 
@@ -97,8 +89,8 @@ Uses OAuth Device Code Flow:
 1. Click "Login to Twitch" in tray menu
 2. Browser opens to twitch.tv/activate
 3. Enter the code shown
-4. App polls until authorized (no notification spam)
-5. Token stored in encrypted file
+4. App polls until authorized
+5. Token stored securely
 
 Required scope: `user:read:follows`
 
@@ -126,64 +118,56 @@ Required scope: `user:read:follows`
 ├── StreamerE - Today 8:00 PM
 ├── ... (top 5 shown)
 ├── More (N)...                <- submenu for overflow
-│   └── StreamerF - ...
 ├── ─────────────
 ├── Logout
 └── Quit
 ```
 
-Streams appear directly in the menu (flat structure) for faster access. Shows "Loading..." for schedules until first fetch completes.
-
 ## Data Flow
 
 ```
-Polling (60s) → GetFollowedStreams  → state.Update() → tray.Refresh()
-Polling (5m)  → GetScheduledStreams → state.Update() → tray.Refresh()
+Polling (60s) → GetFollowedStreams  → state.set_followed_streams() → tray.rebuild_menu()
+Polling (5m)  → GetScheduledStreams → state.set_scheduled_streams() → tray.rebuild_menu()
 ```
 
 Notifications only fire for streams that go live AFTER initial load (no startup spam).
 
-**Note**: EventSub WebSocket was removed - subscribing to all followed channels exceeds Twitch's rate limits. Polling is sufficient for this use case.
-
 ## Key Implementation Details
 
 ### Thread Safety
-- `tray/menu.go`: Mutex protects menu rebuilds (systray isn't thread-safe)
-- `state/state.go`: RWMutex protects all state access
+- `state.rs`: `tokio::sync::RwLock` protects all state access
+- State changes trigger menu rebuilds via watch channel
 
 ### API Endpoints Used
-- `GetFollowedChannels` - channels user follows (for schedules)
-- `GetFollowedStream` - live streams from followed channels
-- `GetSchedule` - broadcaster schedules
+- `GET /channels/followed` - channels user follows (for schedules)
+- `GET /streams/followed` - live streams from followed channels
+- `GET /schedule` - broadcaster schedules
 
 ### Icon Assets
-Icons are embedded at compile time via `go:embed`. To update:
+Icons are loaded at runtime from embedded PNG bytes. Must be 64x64 RGBA format.
+
+To regenerate icons:
 ```bash
-cd assets
-magick original.png -resize 64x64 icon.png
-magick original.png -resize 64x64 -channel A -evaluate Multiply 0.4 +channel icon_grey.png
+cd src-tauri/icons
+convert original.png -resize 64x64 -define png:color-type=6 icon.png
+convert original.png -resize 64x64 -channel A -evaluate Multiply 0.4 +channel -define png:color-type=6 icon_grey.png
 ```
 
 ## Testing
 
 ```bash
-make lint    # Run go vet and staticcheck (requires: go install honnef.co/go/tools/cmd/staticcheck@latest)
-make test    # Run tests with race detection
+make lint    # Run clippy and fmt check
+make test    # Run tests
 make build   # Build check
 ```
 
 ## Versioning & Releases
 
-Version is injected at build time via `-ldflags`:
-```go
-var Version = "dev"  // default for local builds
-```
-
-```bash
-go build -ldflags="-X main.Version=1.0.0" ./cmd/twitch-tray
-```
+Version is set in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`.
 
 **To release a new version:**
+1. Update version in both files
+2. Commit and tag:
 ```bash
 git tag v1.0.0
 git push origin v1.0.0
@@ -191,11 +175,17 @@ git push origin v1.0.0
 
 This triggers the release workflow which:
 1. Builds binaries for Linux, macOS (amd64/arm64), and Windows
-2. Injects the version from the git tag
-3. Creates a GitHub release with binaries and checksums
+2. Creates a GitHub release with binaries and checksums
+
+## Architecture
+
+- **Tauri 2.0**: Provides system tray, menu API, and cross-platform support
+- **Tokio**: Multi-threaded async runtime for concurrent polling
+- **State Management**: `Arc<AppState>` with `RwLock` and watch channels for change notification
+- **No Frontend**: This is a tray-only app - the `src/` directory contains only a placeholder HTML
 
 ## Known Issues / Future Work
 
 - Schedule fetching may fail silently for channels without schedules (404s are ignored)
-- EventSub could be re-enabled with selective subscriptions (only subscribe to N most active channels)
-- Category change notifications removed (would need EventSub or more frequent polling)
+- EventSub could be added for real-time notifications (selective subscriptions to avoid rate limits)
+- Category change notifications not implemented (would need EventSub or more frequent polling)

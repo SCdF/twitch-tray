@@ -6,82 +6,117 @@ on:
       - 'v*'
 
 jobs:
-  test:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          go-version: '1.22'
+          components: clippy
 
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc libgtk-3-dev libayatana-appindicator3-dev
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
 
-      - name: Download dependencies
-        run: go mod download
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
 
-      - name: Run go vet
-        run: go vet ./...
-
-      - name: Install staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@latest
-
-      - name: Run staticcheck
-        run: staticcheck ./...
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy -- -D warnings
 
       - name: Run tests
-        run: go test -v -race ./...
+        working-directory: src-tauri
+        run: cargo test
 
   release:
-    needs: test
+    needs: check
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            suffix: linux-amd64
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            suffix: darwin-amd64
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            suffix: darwin-arm64
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: windows-amd64
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2"
+
+      - name: Build
+        working-directory: src-tauri
+        run: cargo tauri build --target ${{ matrix.target }}
+
+      - name: Prepare artifacts (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          mkdir -p dist
+          cp src-tauri/target/${{ matrix.target }}/release/twitch-tray dist/twitch-tray-${{ matrix.suffix }}
+
+      - name: Prepare artifacts (macOS)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          mkdir -p dist
+          cp src-tauri/target/${{ matrix.target }}/release/twitch-tray dist/twitch-tray-${{ matrix.suffix }}
+
+      - name: Prepare artifacts (Windows)
+        if: matrix.platform == 'windows-latest'
+        run: |
+          mkdir -p dist
+          cp src-tauri/target/${{ matrix.target }}/release/twitch-tray.exe dist/twitch-tray-${{ matrix.suffix }}.exe
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: twitch-tray-${{ matrix.suffix }}
+          path: dist/*
+
+  create-release:
+    needs: release
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Get version from tag
-        id: version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
-          go-version: '1.22'
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc libgtk-3-dev libayatana-appindicator3-dev
-
-      - name: Install cross-compilation tools
-        run: |
-          sudo apt-get install -y gcc-mingw-w64-x86-64
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Build Linux amd64
-        env:
-          CGO_ENABLED: 1
-          GOOS: linux
-          GOARCH: amd64
-        run: |
-          mkdir -p dist
-          go build -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}" -o dist/twitch-tray-linux-amd64 ./cmd/twitch-tray
-
-      - name: Build Windows amd64
-        env:
-          CGO_ENABLED: 1
-          GOOS: windows
-          GOARCH: amd64
-          CC: x86_64-w64-mingw32-gcc
-        run: |
-          go build -ldflags="-s -w -H=windowsgui -X main.Version=${{ steps.version.outputs.version }}" -o dist/twitch-tray-windows-amd64.exe ./cmd/twitch-tray
+          path: dist
+          merge-multiple: true
 
       - name: Create checksums
         run: |
@@ -95,53 +130,4 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: |
-            dist/twitch-tray-linux-amd64
-            dist/twitch-tray-windows-amd64.exe
-            dist/checksums.txt
-
-  release-macos:
-    needs: test
-    runs-on: macos-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Get version from tag
-        id: version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-
-      - name: Download dependencies
-        run: go mod download
-
-      - name: Build macOS amd64
-        env:
-          CGO_ENABLED: 1
-          GOOS: darwin
-          GOARCH: amd64
-        run: |
-          mkdir -p dist
-          go build -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}" -o dist/twitch-tray-darwin-amd64 ./cmd/twitch-tray
-
-      - name: Build macOS arm64
-        env:
-          CGO_ENABLED: 1
-          GOOS: darwin
-          GOARCH: arm64
-        run: |
-          go build -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}" -o dist/twitch-tray-darwin-arm64 ./cmd/twitch-tray
-
-      - name: Wait for release to be created
-        run: sleep 30
-
-      - name: Upload macOS binaries to release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/twitch-tray-darwin-amd64
-            dist/twitch-tray-darwin-arm64
+            dist/*

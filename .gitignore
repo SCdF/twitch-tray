@@ -1,20 +1,9 @@
-# Binaries
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-/twitch-tray
+# Rust/Cargo
+/src-tauri/target/
+Cargo.lock
 
 # Build output
 /dist/
-
-# Test binary
-*.test
-
-# Go workspace
-go.work
-go.work.sum
 
 # IDE
 .idea/
@@ -26,5 +15,8 @@ go.work.sum
 .DS_Store
 Thumbs.db
 
-# Config (contains client ID)
+# Config (user-specific)
 config.json
+
+# Tauri
+/src-tauri/gen/
