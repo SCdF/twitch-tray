@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -166,28 +167,36 @@ func (d *DeviceFlow) WaitForToken(ctx context.Context, dcr *DeviceCodeResponse) 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	log.Printf("Polling for token every %v (expires in %ds)", interval, dcr.ExpiresIn)
+
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("Context cancelled: %v", ctx.Err())
 			return nil, ctx.Err()
 		case <-ticker.C:
 			if time.Now().After(deadline) {
+				log.Printf("Device code expired")
 				return nil, ErrExpiredToken
 			}
 
 			tr, err := d.PollForToken(ctx, dcr.DeviceCode)
 			if err == nil {
+				log.Printf("Token received successfully")
 				return tr, nil
 			}
 
 			switch {
 			case errors.Is(err, ErrAuthorizationPending):
+				log.Printf("Authorization pending, continuing to poll...")
 				continue // Keep polling
 			case errors.Is(err, ErrSlowDown):
 				interval += 5 * time.Second
 				ticker.Reset(interval)
+				log.Printf("Slowing down, new interval: %v", interval)
 				continue
 			default:
+				log.Printf("Poll error: %v", err)
 				return nil, err
 			}
 		}

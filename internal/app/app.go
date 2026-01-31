@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -349,16 +350,13 @@ func (a *App) handleLogin() {
 
 	go func() {
 		token, err := flow.Authenticate(a.ctx, func(userCode, verificationURI string) {
-			// Show notification with code
-			a.notifier.AuthCode(userCode, verificationURI)
-
 			// Open browser to verification URL
 			tray.OpenURL(verificationURI)
 		})
 
 		if err != nil {
 			// Only show error for user-actionable failures, not context cancellation
-			if err != context.Canceled && err != context.DeadlineExceeded {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 				log.Printf("Authentication failed: %v", err)
 				a.notifier.Error("Authentication failed: " + err.Error())
 			}
