@@ -100,12 +100,7 @@ func (a *App) restoreSession() error {
 		return fmt.Errorf("stored token is invalid or expired")
 	}
 
-	clientID := a.config.GetClientID()
-	if clientID == "" {
-		return fmt.Errorf("no client ID configured")
-	}
-
-	return a.initializeSession(clientID, token)
+	return a.initializeSession(auth.ClientID, token)
 }
 
 func (a *App) initializeSession(clientID string, token *auth.Token) error {
@@ -349,15 +344,8 @@ func (a *App) handleChannelUpdate(event eventsub.ChannelUpdateEvent) {
 }
 
 func (a *App) handleLogin() {
-	clientID := a.config.GetClientID()
-	if clientID == "" {
-		// Prompt user to configure client ID
-		a.notifier.Error("Please set your Twitch Client ID in the config file: " + a.config.FilePath())
-		return
-	}
-
 	// Start device code flow
-	flow := auth.NewDeviceFlow(clientID)
+	flow := auth.NewDeviceFlow(auth.ClientID)
 
 	go func() {
 		token, err := flow.Authenticate(a.ctx, func(userCode, verificationURI string) {
@@ -380,7 +368,7 @@ func (a *App) handleLogin() {
 		}
 
 		// Initialize session
-		if err := a.initializeSession(clientID, token); err != nil {
+		if err := a.initializeSession(auth.ClientID, token); err != nil {
 			log.Printf("Failed to initialize session: %v", err)
 			a.notifier.Error("Failed to initialize session")
 			return

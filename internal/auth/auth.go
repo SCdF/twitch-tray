@@ -11,6 +11,9 @@ import (
 const (
 	serviceName = "twitch-tray"
 	tokenKey    = "oauth_token"
+
+	// ClientID is the Twitch application client ID
+	ClientID = "w1kicz6atgkpl5jbwtq5tj2u4vd2i7"
 )
 
 var (
