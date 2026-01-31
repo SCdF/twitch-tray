@@ -55,10 +55,21 @@ impl App {
 
     /// Tries to restore a session from stored token
     pub async fn restore_session(&self) -> anyhow::Result<()> {
-        let token = self.store.load_token()?;
+        let mut token = self.store.load_token()?;
+
+        // If token is expired, try to refresh it
+        if token.is_expired() {
+            tracing::info!("Token expired, attempting refresh...");
+            let flow = DeviceFlow::new(CLIENT_ID.to_string());
+            token = flow.refresh_token(&token.refresh_token).await?;
+
+            // Save the refreshed token
+            self.store.save_token(&token)?;
+            tracing::info!("Token refreshed successfully");
+        }
 
         if !token.is_valid() {
-            anyhow::bail!("Stored token is invalid or expired");
+            anyhow::bail!("Stored token is invalid");
         }
 
         self.initialize_session(&token).await?;

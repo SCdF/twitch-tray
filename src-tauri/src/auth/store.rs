@@ -70,33 +70,20 @@ impl TokenStore {
     pub fn save_token(&self, token: &Token) -> Result<()> {
         let data = serde_json::to_string(token).context("Failed to serialize token")?;
 
-        // Try keyring first
-        if let Some(ref entry) = self.keyring_entry {
-            if entry.set_password(&data).is_ok() {
-                // Also remove fallback file if it exists
-                let _ = std::fs::remove_file(&self.fallback_path);
-                return Ok(());
-            }
-        }
-
-        // Fall back to file storage
+        // Always save to file storage for reliability
         std::fs::write(&self.fallback_path, &data).context("Failed to write token file")?;
+
+        // Also try keyring as a secondary store
+        if let Some(ref entry) = self.keyring_entry {
+            let _ = entry.set_password(&data);
+        }
 
         Ok(())
     }
 
     /// Loads the stored OAuth token
     pub fn load_token(&self) -> Result<Token, StoreError> {
-        // Try keyring first
-        if let Some(ref entry) = self.keyring_entry {
-            if let Ok(data) = entry.get_password() {
-                let token: Token =
-                    serde_json::from_str(&data).map_err(|e| StoreError::Storage(e.into()))?;
-                return Ok(token);
-            }
-        }
-
-        // Fall back to file storage
+        // Try file storage first (more reliable)
         if self.fallback_path.exists() {
             let data = std::fs::read_to_string(&self.fallback_path)
                 .map_err(|e| StoreError::Storage(e.into()))?;
@@ -105,19 +92,28 @@ impl TokenStore {
             return Ok(token);
         }
 
+        // Fall back to keyring (for migration from old storage)
+        if let Some(ref entry) = self.keyring_entry {
+            if let Ok(data) = entry.get_password() {
+                let token: Token =
+                    serde_json::from_str(&data).map_err(|e| StoreError::Storage(e.into()))?;
+                return Ok(token);
+            }
+        }
+
         Err(StoreError::NoToken)
     }
 
     /// Deletes the stored token
     pub fn delete_token(&self) -> Result<()> {
-        // Try keyring first
-        if let Some(ref entry) = self.keyring_entry {
-            let _ = entry.delete_credential();
-        }
-
-        // Also remove fallback file
+        // Delete file storage
         if self.fallback_path.exists() {
             std::fs::remove_file(&self.fallback_path).context("Failed to delete token file")?;
+        }
+
+        // Also try to delete from keyring
+        if let Some(ref entry) = self.keyring_entry {
+            let _ = entry.delete_credential();
         }
 
         Ok(())

@@ -223,6 +223,45 @@ impl DeviceFlow {
             .context("Failed to parse validation response")
     }
 
+    /// Refreshes an access token using a refresh token
+    pub async fn refresh_token(&self, refresh_token: &str) -> Result<Token> {
+        let mut params = HashMap::new();
+        params.insert("client_id", self.client_id.as_str());
+        params.insert("refresh_token", refresh_token);
+        params.insert("grant_type", "refresh_token");
+
+        let response = self
+            .http
+            .post(TOKEN_URL)
+            .form(&params)
+            .send()
+            .await
+            .context("Failed to refresh token")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Token refresh failed: {} - {}", status, body);
+        }
+
+        let tr: TokenResponse = response
+            .json()
+            .await
+            .context("Failed to parse refresh response")?;
+
+        // Validate the new token to get user info
+        let vr = self.validate_token(&tr.access_token).await?;
+
+        Ok(Token {
+            access_token: tr.access_token,
+            refresh_token: tr.refresh_token,
+            expires_at: Utc::now() + Duration::seconds(tr.expires_in),
+            scopes: tr.scope,
+            user_id: vr.user_id,
+            user_login: vr.login,
+        })
+    }
+
     /// Performs the full device code flow
     ///
     /// The `on_code` callback is called with the user code and verification URI

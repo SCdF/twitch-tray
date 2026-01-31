@@ -52,25 +52,32 @@ fn main() {
 
             // Spawn async initialization
             tauri::async_runtime::spawn(async move {
-                // Try to restore session
+                // Set initial menu immediately (unauthenticated state - no network needed)
+                if let Err(e) = app_clone.tray_manager.rebuild_menu(&app_handle).await {
+                    tracing::error!("Failed to build initial menu: {}", e);
+                }
+
+                // Try to restore session (may involve token refresh over network)
                 match app_clone.restore_session().await {
                     Ok(()) => {
                         tracing::info!("Session restored");
-                        // Initial data fetch
-                        app_clone.refresh_all_data().await;
+                        // Rebuild menu to show authenticated state
+                        if let Err(e) = app_clone.tray_manager.rebuild_menu(&app_handle).await {
+                            tracing::error!("Failed to rebuild menu after session restore: {}", e);
+                        }
                     }
                     Err(e) => {
                         tracing::info!("No stored session: {}", e);
                     }
                 }
 
-                // Rebuild menu with current state
-                if let Err(e) = app_clone.tray_manager.rebuild_menu(&app_handle).await {
-                    tracing::error!("Failed to build initial menu: {}", e);
-                }
+                // Start polling tasks (includes state change listener for menu updates)
+                app_clone.start_polling(app_handle.clone());
 
-                // Start polling tasks
-                app_clone.start_polling(app_handle);
+                // Fetch initial data in background - menu will update via state change listener
+                if app_clone.state.is_authenticated().await {
+                    app_clone.refresh_all_data().await;
+                }
             });
 
             Ok(())
