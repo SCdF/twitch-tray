@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -355,11 +354,7 @@ func (a *App) handleLogin() {
 		})
 
 		if err != nil {
-			// Only show error for user-actionable failures, not context cancellation
-			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-				log.Printf("Authentication failed: %v", err)
-				a.notifier.Error("Authentication failed: " + err.Error())
-			}
+			log.Printf("Authentication failed: %v", err)
 			return
 		}
 

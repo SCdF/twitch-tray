@@ -123,14 +123,14 @@ func (d *DeviceFlow) PollForToken(ctx context.Context, deviceCode string) (*Toke
 	// Check for pending/error states
 	if resp.StatusCode == http.StatusBadRequest {
 		var errResp struct {
-			Error   string `json:"error"`
+			Status  int    `json:"status"`
 			Message string `json:"message"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
 			return nil, err
 		}
 
-		switch errResp.Error {
+		switch errResp.Message {
 		case "authorization_pending":
 			return nil, ErrAuthorizationPending
 		case "slow_down":
@@ -140,7 +140,7 @@ func (d *DeviceFlow) PollForToken(ctx context.Context, deviceCode string) (*Toke
 		case "expired_token":
 			return nil, ErrExpiredToken
 		default:
-			return nil, fmt.Errorf("token error: %s - %s", errResp.Error, errResp.Message)
+			return nil, fmt.Errorf("token error: %s", errResp.Message)
 		}
 	}
 
