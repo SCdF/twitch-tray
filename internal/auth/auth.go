@@ -52,18 +52,17 @@ func NewStore() (*Store, error) {
 		ServiceName: serviceName,
 		// Use appropriate backend based on platform
 		AllowedBackends: []keyring.BackendType{
-			keyring.SecretServiceBackend,  // Linux
+			keyring.KWalletBackend,        // KDE
+			keyring.SecretServiceBackend,  // GNOME/other Linux
 			keyring.KeychainBackend,       // macOS
 			keyring.WinCredBackend,        // Windows
 			keyring.PassBackend,           // Linux fallback
 			keyring.FileBackend,           // Universal fallback
 		},
+		// Use defaults to avoid prompting for new keychains
+		KeychainTrustApplication: true,
 		FileDir:                  "~/.twitch-tray-keys",
 		FilePasswordFunc:         keyring.FixedStringPrompt("twitch-tray"),
-		LibSecretCollectionName:  serviceName,
-		KWalletAppID:             serviceName,
-		KWalletFolder:            serviceName,
-		KeychainTrustApplication: true,
 	})
 	if err != nil {
 		return nil, err
