@@ -38,16 +38,21 @@ func (c *Client) GetScheduledStreams(ctx context.Context, broadcasterIDs []strin
 			First:         10, // Get next 10 scheduled segments
 		})
 		if err != nil {
-			// Skip this broadcaster if there's an error (they might not have a schedule)
+			log.Printf("Schedule API error for broadcaster %s: %v", broadcasterID, err)
 			continue
 		}
 
 		if resp.ErrorStatus != 0 {
-			// 404 means no schedule, which is fine
+			// 404 means no schedule, which is fine - don't log
 			if resp.ErrorStatus == 404 {
 				continue
 			}
-			continue // Skip other errors too
+			log.Printf("Schedule API returned error %d for broadcaster %s: %s", resp.ErrorStatus, broadcasterID, resp.ErrorMessage)
+			continue
+		}
+
+		if len(resp.Data.Schedule.Segments) > 0 {
+			log.Printf("Broadcaster %s has %d schedule segments", broadcasterID, len(resp.Data.Schedule.Segments))
 		}
 
 		schedule := resp.Data.Schedule
@@ -92,6 +97,7 @@ func (c *Client) GetScheduledStreams(ctx context.Context, broadcasterIDs []strin
 		return allScheduled[i].StartTime.Before(allScheduled[j].StartTime)
 	})
 
+	log.Printf("Returning %d scheduled streams within next 24h", len(allScheduled))
 	return allScheduled, nil
 }
 
