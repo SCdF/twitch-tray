@@ -27,6 +27,11 @@ func (h *Handlers) OpenTwitch() {
 	openBrowser("https://twitch.tv")
 }
 
+// OpenURL opens any URL in the default browser
+func OpenURL(url string) error {
+	return openBrowser(url)
+}
+
 // OpenCategory opens a category/game page
 func (h *Handlers) OpenCategory(gameName string) {
 	// URL encode the game name

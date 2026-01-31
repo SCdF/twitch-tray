@@ -352,13 +352,16 @@ func (a *App) handleLogin() {
 			// Show notification with code
 			a.notifier.AuthCode(userCode, verificationURI)
 
-			// Open browser
-			tray.NewHandlers(a.tray).OpenTwitch()
+			// Open browser to verification URL
+			tray.OpenURL(verificationURI)
 		})
 
 		if err != nil {
-			log.Printf("Authentication failed: %v", err)
-			a.notifier.Error("Authentication failed: " + err.Error())
+			// Only show error for user-actionable failures, not context cancellation
+			if err != context.Canceled && err != context.DeadlineExceeded {
+				log.Printf("Authentication failed: %v", err)
+				a.notifier.Error("Authentication failed: " + err.Error())
+			}
 			return
 		}
 
