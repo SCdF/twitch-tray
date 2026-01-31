@@ -145,7 +145,7 @@ func (a *App) loadFollowedChannels() error {
 
 	ids := make([]string, 0, len(follows))
 	for _, f := range follows {
-		ids = append(ids, f.UserID)
+		ids = append(ids, f.BroadcasterID)
 	}
 	a.state.SetFollowedChannelIDs(ids)
 

@@ -86,7 +86,7 @@ func (c *Client) GetUsers(ctx context.Context, ids []string, logins []string) ([
 }
 
 // GetFollowedChannels retrieves channels the user follows
-func (c *Client) GetFollowedChannels(ctx context.Context, cursor string) ([]helix.ChannelFollow, string, error) {
+func (c *Client) GetFollowedChannels(ctx context.Context, cursor string) ([]helix.FollowedChannel, string, error) {
 	c.mu.RLock()
 	client := c.helix
 	userID := c.userID
@@ -96,7 +96,7 @@ func (c *Client) GetFollowedChannels(ctx context.Context, cursor string) ([]heli
 		return nil, "", fmt.Errorf("user ID not set")
 	}
 
-	resp, err := client.GetChannelFollows(&helix.GetChannelFollowsParams{
+	resp, err := client.GetFollowedChannels(&helix.GetFollowedChannelParams{
 		UserID: userID,
 		First:  100,
 		After:  cursor,
@@ -109,12 +109,12 @@ func (c *Client) GetFollowedChannels(ctx context.Context, cursor string) ([]heli
 		return nil, "", fmt.Errorf("API error %d: %s", resp.ErrorStatus, resp.ErrorMessage)
 	}
 
-	return resp.Data.Channels, resp.Data.Pagination.Cursor, nil
+	return resp.Data.FollowedChannels, resp.Data.Pagination.Cursor, nil
 }
 
 // GetAllFollowedChannels retrieves all channels the user follows (handles pagination)
-func (c *Client) GetAllFollowedChannels(ctx context.Context) ([]helix.ChannelFollow, error) {
-	var allFollows []helix.ChannelFollow
+func (c *Client) GetAllFollowedChannels(ctx context.Context) ([]helix.FollowedChannel, error) {
+	var allFollows []helix.FollowedChannel
 	cursor := ""
 
 	for {

@@ -102,10 +102,10 @@ func (c *Client) GetScheduledStreamsForFollowed(ctx context.Context) ([]Schedule
 		return nil, fmt.Errorf("failed to get followed channels: %w", err)
 	}
 
-	// Extract broadcaster IDs - ChannelFollow has UserID which is the followed broadcaster's ID
+	// Extract broadcaster IDs
 	broadcasterIDs := make([]string, 0, len(follows))
 	for _, f := range follows {
-		broadcasterIDs = append(broadcasterIDs, f.UserID)
+		broadcasterIDs = append(broadcasterIDs, f.BroadcasterID)
 	}
 
 	// Get schedules (limit to avoid too many API calls)
