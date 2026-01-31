@@ -76,11 +76,6 @@ func (m *Menu) buildAuthenticatedMenu() {
 
 	systray.AddSeparator()
 
-	// Top in Category sections
-	m.buildCategorySections()
-
-	systray.AddSeparator()
-
 	// Scheduled section
 	m.buildScheduledSection()
 
@@ -141,50 +136,6 @@ func (m *Menu) buildFollowingLiveSection() {
 	}
 }
 
-func (m *Menu) buildCategorySections() {
-	categories := m.tray.state.GetTrackedCategories()
-	categoryStreams := m.tray.state.GetAllCategoryStreams()
-
-	if len(categories) == 0 {
-		return
-	}
-
-	// Sort categories by name for consistent ordering
-	var categoryIDs []string
-	for id := range categories {
-		categoryIDs = append(categoryIDs, id)
-	}
-	sort.Slice(categoryIDs, func(i, j int) bool {
-		return categories[categoryIDs[i]] < categories[categoryIDs[j]]
-	})
-
-	for _, gameID := range categoryIDs {
-		gameName := categories[gameID]
-		streams := categoryStreams[gameID]
-
-		if len(streams) == 0 {
-			continue
-		}
-
-		title := fmt.Sprintf("Top in %s", gameName)
-		categoryMenu := systray.AddMenuItem(title, fmt.Sprintf("Top streams in %s", gameName))
-
-		// Already sorted by viewer count from API
-		for _, stream := range streams {
-			s := stream // capture for closure
-			label := formatCategoryStreamLabel(s)
-			tooltip := s.Title
-
-			item := categoryMenu.AddSubMenuItem(label, tooltip)
-			go func() {
-				for range item.ClickedCh {
-					m.tray.handlers.OpenStream(s.UserLogin)
-				}
-			}()
-		}
-	}
-}
-
 func (m *Menu) buildScheduledSection() {
 	scheduled := m.tray.state.GetScheduledStreams()
 
@@ -224,12 +175,6 @@ func formatStreamLabel(s twitch.Stream) string {
 		s.FormatViewerCount(),
 		s.FormatDuration(),
 	)
-}
-
-// formatCategoryStreamLabel formats a stream for the Top in Category menu
-// Format: "StreamerName (45.2k)"
-func formatCategoryStreamLabel(s twitch.Stream) string {
-	return fmt.Sprintf("%s (%s)", s.UserName, s.FormatViewerCount())
 }
 
 // formatScheduledLabel formats a scheduled stream

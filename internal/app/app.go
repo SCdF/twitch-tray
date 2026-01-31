@@ -187,23 +187,6 @@ func (a *App) startEventSub(clientID, accessToken string) {
 func (a *App) startPolling() {
 	cfg := a.config.Get()
 
-	// Poll for category streams
-	a.wg.Add(1)
-	go func() {
-		defer a.wg.Done()
-		ticker := time.NewTicker(time.Duration(cfg.PollIntervalSec) * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-a.ctx.Done():
-				return
-			case <-ticker.C:
-				a.refreshCategoryStreams()
-			}
-		}
-	}()
-
 	// Poll for scheduled streams
 	a.wg.Add(1)
 	go func() {
@@ -241,7 +224,6 @@ func (a *App) startPolling() {
 
 func (a *App) refreshAllData() {
 	a.refreshFollowedStreams()
-	a.refreshCategoryStreams()
 	a.refreshScheduledStreams()
 	a.initialLoadDone = true
 }
@@ -266,24 +248,6 @@ func (a *App) refreshFollowedStreams() {
 				log.Printf("Notification error: %v", err)
 			}
 		}
-	}
-}
-
-func (a *App) refreshCategoryStreams() {
-	if a.client == nil {
-		return
-	}
-
-	cfg := a.config.Get()
-	categories := a.state.GetTrackedCategories()
-
-	for gameID := range categories {
-		streams, err := a.client.GetStreamsByGameID(a.ctx, gameID, cfg.TopStreamsPerGame)
-		if err != nil {
-			log.Printf("Failed to get streams for game %s: %v", gameID, err)
-			continue
-		}
-		a.state.SetCategoryStreams(gameID, streams)
 	}
 }
 
@@ -346,9 +310,6 @@ func (a *App) handleChannelUpdate(event eventsub.ChannelUpdateEvent) {
 		stream.GameName = event.CategoryName
 		stream.Title = event.Title
 	}
-
-	// Refresh category streams if this category is tracked
-	go a.refreshCategoryStreams()
 }
 
 func (a *App) handleLogin() {
