@@ -50,19 +50,12 @@ type Store struct {
 func NewStore() (*Store, error) {
 	ring, err := keyring.Open(keyring.Config{
 		ServiceName: serviceName,
-		// Use appropriate backend based on platform
+		// Use file backend to avoid system keyring prompts
 		AllowedBackends: []keyring.BackendType{
-			keyring.KWalletBackend,        // KDE
-			keyring.SecretServiceBackend,  // GNOME/other Linux
-			keyring.KeychainBackend,       // macOS
-			keyring.WinCredBackend,        // Windows
-			keyring.PassBackend,           // Linux fallback
-			keyring.FileBackend,           // Universal fallback
+			keyring.FileBackend,
 		},
-		// Use defaults to avoid prompting for new keychains
-		KeychainTrustApplication: true,
-		FileDir:                  "~/.twitch-tray-keys",
-		FilePasswordFunc:         keyring.FixedStringPrompt("twitch-tray"),
+		FileDir:          "~/.config/twitch-tray/keyring",
+		FilePasswordFunc: keyring.FixedStringPrompt(serviceName),
 	})
 	if err != nil {
 		return nil, err
