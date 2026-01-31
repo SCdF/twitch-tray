@@ -10,25 +10,31 @@ twitch-tray/
 ├── internal/
 │   ├── app/app.go              # Lifecycle orchestration
 │   ├── auth/
-│   │   ├── auth.go             # Token management (keyring storage)
-│   │   └── deviceflow.go       # OAuth Device Code Flow
+│   │   ├── auth.go             # Token management (file-based encrypted storage)
+│   │   ├── deviceflow.go       # OAuth Device Code Flow
+│   │   └── deviceflow_test.go  # Polling tests
 │   ├── twitch/
 │   │   ├── client.go           # Helix API wrapper
 │   │   ├── streams.go          # Streams endpoints
 │   │   ├── schedule.go         # Schedule endpoint
 │   │   └── types.go            # Data types
-│   ├── eventsub/
+│   ├── eventsub/               # (Not currently used - kept for future)
 │   │   ├── client.go           # WebSocket connection
 │   │   ├── handlers.go         # Event handlers
 │   │   └── subscriptions.go    # Subscription management
 │   ├── state/state.go          # Central state + change detection
 │   ├── tray/
 │   │   ├── tray.go             # Tray setup
-│   │   ├── menu.go             # Menu construction
+│   │   ├── menu.go             # Menu construction (mutex-protected)
 │   │   └── handlers.go         # Click handlers (open browser)
 │   ├── notify/notify.go        # Desktop notifications
 │   └── config/config.go        # XDG config management
-├── assets/icon.png             # Tray icon
+├── assets/
+│   ├── original.png            # Source icon (256x256)
+│   ├── icon.png                # Tray icon (64x64, generated)
+│   ├── icon_grey.png           # Dimmed icon for unauthenticated state
+│   ├── assets.go               # go:embed for icons
+│   └── README.md               # Icon conversion instructions
 ├── go.mod
 ├── Makefile
 └── CLAUDE.md
@@ -37,30 +43,26 @@ twitch-tray/
 ## Build Commands
 
 ```bash
-# Install dependencies and build for current platform
-make
+make          # Install deps and build
+make run      # Build and run
+make clean    # Remove build artifacts
+```
 
-# Build for specific platforms
+Cross-platform builds:
+```bash
 make build-linux
 make build-darwin
 make build-windows
 make build-all
-
-# Run locally
-make run
-
-# Clean build artifacts
-make clean
 ```
 
 ## Dependencies
 
 - **System tray**: `fyne.io/systray` - requires CGO
 - **Notifications**: `gen2brain/beeep`
-- **Secure storage**: `99designs/keyring`
+- **Secure storage**: `99designs/keyring` (file backend)
 - **Config paths**: `adrg/xdg`
 - **Twitch API**: `nicklaw5/helix/v2`
-- **WebSocket**: `gorilla/websocket`
 
 ### Platform-specific build dependencies
 
@@ -70,59 +72,96 @@ make clean
 
 ## Configuration
 
-Config file location (XDG): `~/.config/twitch-tray/config.json`
+Config file: `~/.config/twitch-tray/config.json`
 
 ```json
 {
-  "client_id": "YOUR_TWITCH_CLIENT_ID",
   "poll_interval_sec": 60,
   "schedule_poll_min": 5,
-  "top_streams_per_game": 5,
   "notify_on_live": true,
   "notify_on_category": true
 }
 ```
 
-### Getting a Client ID
+**Note**: Client ID is hardcoded in `internal/auth/auth.go`. No user configuration needed.
 
-1. Go to https://dev.twitch.tv/console/apps
-2. Register a new application
-3. Set OAuth Redirect URL to `https://localhost` (not used for device flow)
-4. Copy the Client ID to your config file
+Token storage: `~/.config/twitch-tray/keyring/` (encrypted file, not system keyring)
 
-## Authentication Flow
+## Authentication
 
 Uses OAuth Device Code Flow:
-1. App requests device code from Twitch
-2. User is shown a code and directed to twitch.tv/activate
-3. App polls for token completion
-4. Tokens stored securely in system keyring
+1. Click "Login to Twitch" in tray menu
+2. Browser opens to twitch.tv/activate
+3. Enter the code shown
+4. App polls until authorized (no notification spam)
+5. Token stored in encrypted file
 
 Required scope: `user:read:follows`
 
-## Key Features
+## Menu Structure
 
-- **Following Live**: Shows all live streams from followed channels
-- **Top in Category**: Shows top 5 streams in each category your followed streamers are in
-- **Scheduled**: Shows scheduled streams for the next 24 hours
-- **Notifications**: Desktop notifications when streamers go live or change category
-- **Real-time**: Uses EventSub WebSocket for instant live/offline events
+**Unauthenticated:**
+```
+[Grey Icon]
+├── Login to Twitch
+└── Quit
+```
+
+**Authenticated:**
+```
+[Icon]
+├── Following Live (N)
+│   ├── StreamerA - GameName (1.2k, 2h 15m)
+│   └── StreamerB - GameName (856, 45m)
+├── ─────────────
+├── Scheduled (Next 24h)
+│   ├── StreamerC - Tomorrow 3:00 PM
+│   └── StreamerD - Today 8:00 PM
+├── ─────────────
+├── Logout
+└── Quit
+```
 
 ## Data Flow
 
 ```
-EventSub WebSocket → stream.online/offline → state.Update() → tray.Refresh()
-                                                   │
-                                                   └→ notify.StreamOnline()
+Polling (60s) → GetFollowedStreams  → state.Update() → tray.Refresh()
+Polling (5m)  → GetScheduledStreams → state.Update() → tray.Refresh()
+```
 
-Polling (60s) → GetStreamsByCategory → state.Update() → tray.Refresh()
-Polling (5m)  → GetScheduledStreams  → state.Update() → tray.Refresh()
+Notifications only fire for streams that go live AFTER initial load (no startup spam).
+
+**Note**: EventSub WebSocket was removed - subscribing to all followed channels exceeds Twitch's rate limits. Polling is sufficient for this use case.
+
+## Key Implementation Details
+
+### Thread Safety
+- `tray/menu.go`: Mutex protects menu rebuilds (systray isn't thread-safe)
+- `state/state.go`: RWMutex protects all state access
+
+### API Endpoints Used
+- `GetFollowedChannels` - channels user follows (for schedules)
+- `GetFollowedStream` - live streams from followed channels
+- `GetSchedule` - broadcaster schedules
+
+### Icon Assets
+Icons are embedded at compile time via `go:embed`. To update:
+```bash
+cd assets
+magick original.png -resize 64x64 icon.png
+magick original.png -resize 64x64 -channel A -evaluate Multiply 0.4 +channel icon_grey.png
 ```
 
 ## Testing
 
-1. Build and run: `make run`
-2. Click "Login to Twitch" in the tray menu
-3. Enter the code shown at twitch.tv/activate
-4. Verify followed streams appear in the menu
-5. Click a stream to open in browser
+```bash
+go test -v ./internal/auth/...   # Auth/polling tests
+go build ./cmd/twitch-tray       # Build check
+go vet ./...                     # Static analysis
+```
+
+## Known Issues / Future Work
+
+- Schedule fetching may fail silently for channels without schedules (404s are ignored)
+- EventSub could be re-enabled with selective subscriptions (only subscribe to N most active channels)
+- Category change notifications removed (would need EventSub or more frequent polling)
