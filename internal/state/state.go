@@ -29,9 +29,10 @@ type State struct {
 	userLogin     string
 
 	// Stream data
-	followedStreams   []twitch.Stream
-	categoryStreams   map[string][]twitch.Stream // gameID -> streams
-	scheduledStreams  []twitch.ScheduledStream
+	followedStreams    []twitch.Stream
+	categoryStreams    map[string][]twitch.Stream // gameID -> streams
+	scheduledStreams   []twitch.ScheduledStream
+	schedulesLoaded    bool // true after first successful schedule fetch
 	followedChannelIDs []string
 
 	// Categories being tracked (from followed live streams)
@@ -206,9 +207,17 @@ func (s *State) GetAllCategoryStreams() map[string][]twitch.Stream {
 func (s *State) SetScheduledStreams(streams []twitch.ScheduledStream) {
 	s.mu.Lock()
 	s.scheduledStreams = streams
+	s.schedulesLoaded = true
 	s.mu.Unlock()
 
 	s.notifyChange(ChangeScheduledStreams)
+}
+
+// SchedulesLoaded returns whether schedules have been fetched at least once
+func (s *State) SchedulesLoaded() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.schedulesLoaded
 }
 
 // GetScheduledStreams returns the current scheduled streams
@@ -260,6 +269,7 @@ func (s *State) Clear() {
 	s.followedStreams = nil
 	s.categoryStreams = make(map[string][]twitch.Stream)
 	s.scheduledStreams = nil
+	s.schedulesLoaded = false
 	s.followedChannelIDs = nil
 	s.trackedCategories = make(map[string]string)
 	s.mu.Unlock()

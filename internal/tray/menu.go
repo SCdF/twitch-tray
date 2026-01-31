@@ -109,10 +109,12 @@ func (m *Menu) buildFollowingLiveSection() {
 		title = fmt.Sprintf("Following Live (%d)", len(streams))
 	}
 
-	followingMenu := systray.AddMenuItem(title, "Live streams from channels you follow")
+	// Header (disabled, just a label)
+	header := systray.AddMenuItem(title, "Live streams from channels you follow")
+	header.Disable()
 
 	if len(streams) == 0 {
-		noneItem := followingMenu.AddSubMenuItem("No streams live", "")
+		noneItem := systray.AddMenuItem("  No streams live", "")
 		noneItem.Disable()
 		return
 	}
@@ -122,17 +124,43 @@ func (m *Menu) buildFollowingLiveSection() {
 		return streams[i].ViewerCount > streams[j].ViewerCount
 	})
 
-	for _, stream := range streams {
+	// Show top 10 in main menu
+	const mainMenuLimit = 10
+	showInMain := streams
+	var overflow []twitch.Stream
+	if len(streams) > mainMenuLimit {
+		showInMain = streams[:mainMenuLimit]
+		overflow = streams[mainMenuLimit:]
+	}
+
+	for _, stream := range showInMain {
 		s := stream // capture for closure
 		label := formatStreamLabel(s)
 		tooltip := s.Title
 
-		item := followingMenu.AddSubMenuItem(label, tooltip)
+		item := systray.AddMenuItem(label, tooltip)
 		go func() {
 			for range item.ClickedCh {
 				m.tray.handlers.OpenStream(s.UserLogin)
 			}
 		}()
+	}
+
+	// Add "More" submenu if there are overflow streams
+	if len(overflow) > 0 {
+		moreMenu := systray.AddMenuItem(fmt.Sprintf("More (%d)...", len(overflow)), "Additional live streams")
+		for _, stream := range overflow {
+			s := stream // capture for closure
+			label := formatStreamLabel(s)
+			tooltip := s.Title
+
+			item := moreMenu.AddSubMenuItem(label, tooltip)
+			go func() {
+				for range item.ClickedCh {
+					m.tray.handlers.OpenStream(s.UserLogin)
+				}
+			}()
+		}
 	}
 }
 
@@ -140,16 +168,34 @@ func (m *Menu) buildScheduledSection() {
 	scheduled := m.tray.state.GetScheduledStreams()
 
 	title := "Scheduled (Next 24h)"
-	scheduledMenu := systray.AddMenuItem(title, "Upcoming scheduled streams")
+
+	// Header (disabled, just a label)
+	header := systray.AddMenuItem(title, "Upcoming scheduled streams")
+	header.Disable()
 
 	if len(scheduled) == 0 {
-		noneItem := scheduledMenu.AddSubMenuItem("No scheduled streams", "")
+		var label string
+		if m.tray.state.SchedulesLoaded() {
+			label = "  No scheduled streams"
+		} else {
+			label = "  Loading..."
+		}
+		noneItem := systray.AddMenuItem(label, "")
 		noneItem.Disable()
 		return
 	}
 
+	// Show top 5 in main menu
+	const mainMenuLimit = 5
+	showInMain := scheduled
+	var overflow []twitch.ScheduledStream
+	if len(scheduled) > mainMenuLimit {
+		showInMain = scheduled[:mainMenuLimit]
+		overflow = scheduled[mainMenuLimit:]
+	}
+
 	// Already sorted by start time
-	for _, sched := range scheduled {
+	for _, sched := range showInMain {
 		s := sched // capture for closure
 		label := formatScheduledLabel(s)
 		tooltip := s.Title
@@ -157,12 +203,32 @@ func (m *Menu) buildScheduledSection() {
 			tooltip = fmt.Sprintf("%s - %s", s.Category, s.Title)
 		}
 
-		item := scheduledMenu.AddSubMenuItem(label, tooltip)
+		item := systray.AddMenuItem(label, tooltip)
 		go func() {
 			for range item.ClickedCh {
 				m.tray.handlers.OpenStream(s.BroadcasterLogin)
 			}
 		}()
+	}
+
+	// Add "More" submenu if there are overflow scheduled streams
+	if len(overflow) > 0 {
+		moreMenu := systray.AddMenuItem(fmt.Sprintf("More (%d)...", len(overflow)), "Additional scheduled streams")
+		for _, sched := range overflow {
+			s := sched // capture for closure
+			label := formatScheduledLabel(s)
+			tooltip := s.Title
+			if s.Category != "" {
+				tooltip = fmt.Sprintf("%s - %s", s.Category, s.Title)
+			}
+
+			item := moreMenu.AddSubMenuItem(label, tooltip)
+			go func() {
+				for range item.ClickedCh {
+					m.tray.handlers.OpenStream(s.BroadcasterLogin)
+				}
+			}()
+		}
 	}
 }
 

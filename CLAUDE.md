@@ -110,17 +110,25 @@ Required scope: `user:read:follows`
 **Authenticated:**
 ```
 [Icon]
-├── Following Live (N)
-│   ├── StreamerA - GameName (1.2k, 2h 15m)
-│   └── StreamerB - GameName (856, 45m)
+├── Following Live (N)         <- header (disabled)
+├── StreamerA - GameName (1.2k, 2h 15m)
+├── StreamerB - GameName (856, 45m)
+├── ... (top 10 shown)
+├── More (N)...                <- submenu for overflow
+│   └── StreamerC - GameName (...)
 ├── ─────────────
-├── Scheduled (Next 24h)
-│   ├── StreamerC - Tomorrow 3:00 PM
-│   └── StreamerD - Today 8:00 PM
+├── Scheduled (Next 24h)       <- header (disabled)
+├── StreamerD - Tomorrow 3:00 PM
+├── StreamerE - Today 8:00 PM
+├── ... (top 5 shown)
+├── More (N)...                <- submenu for overflow
+│   └── StreamerF - ...
 ├── ─────────────
 ├── Logout
 └── Quit
 ```
+
+Streams appear directly in the menu (flat structure) for faster access. Shows "Loading..." for schedules until first fetch completes.
 
 ## Data Flow
 
