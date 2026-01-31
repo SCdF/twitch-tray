@@ -167,9 +167,9 @@ magick original.png -resize 64x64 -channel A -evaluate Multiply 0.4 +channel ico
 ## Testing
 
 ```bash
-go test -v ./internal/auth/...   # Auth/polling tests
-go build ./cmd/twitch-tray       # Build check
-go vet ./...                     # Static analysis
+make lint    # Run go vet and staticcheck (requires: go install honnef.co/go/tools/cmd/staticcheck@latest)
+make test    # Run tests with race detection
+make build   # Build check
 ```
 
 ## Versioning & Releases

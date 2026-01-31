@@ -1,4 +1,4 @@
-.PHONY: all build build-linux build-darwin build-windows clean deps run
+.PHONY: all build build-linux build-darwin build-windows clean deps run lint test
 
 # Binary name
 BINARY=twitch-tray
@@ -51,6 +51,13 @@ run: build
 clean:
 	$(GOCLEAN)
 	rm -rf $(DIST)
+
+lint:
+	$(GOCMD) vet ./...
+	staticcheck ./...
+
+test:
+	$(GOCMD) test -v -race ./...
 
 # Install dependencies for development
 install-deps:

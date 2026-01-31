@@ -13,9 +13,6 @@ import (
 type Menu struct {
 	tray *Tray
 	mu   sync.Mutex
-
-	// Menu items (stored for cleanup/rebuild)
-	menuItems []*systray.MenuItem
 }
 
 // NewMenu creates a new menu manager
