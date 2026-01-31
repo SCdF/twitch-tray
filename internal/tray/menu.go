@@ -3,6 +3,7 @@ package tray
 import (
 	"fmt"
 	"sort"
+	"sync"
 
 	"fyne.io/systray"
 	"github.com/user/twitch-tray/internal/twitch"
@@ -11,6 +12,7 @@ import (
 // Menu manages the dynamic menu structure
 type Menu struct {
 	tray *Tray
+	mu   sync.Mutex
 
 	// Menu items (stored for cleanup/rebuild)
 	menuItems []*systray.MenuItem
@@ -30,6 +32,9 @@ func (m *Menu) Build() {
 
 // Rebuild recreates the menu based on current state
 func (m *Menu) Rebuild() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	// Reset menu
 	systray.ResetMenu()
 
