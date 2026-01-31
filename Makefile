@@ -6,9 +6,13 @@ BINARY=twitch-tray
 # Build directory
 DIST=dist
 
+# Version (override with: make build VERSION=1.0.0)
+VERSION ?= dev
+LDFLAGS=-ldflags="-s -w -X main.Version=$(VERSION)"
+
 # Go parameters
 GOCMD=go
-GOBUILD=$(GOCMD) build
+GOBUILD=$(GOCMD) build $(LDFLAGS)
 GOCLEAN=$(GOCMD) clean
 GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
@@ -37,12 +41,11 @@ build-darwin:
 
 build-windows:
 	mkdir -p $(DIST)
-	GOOS=windows GOARCH=amd64 $(GOBUILD) -ldflags "-H=windowsgui" -o $(DIST)/$(BINARY)-windows-amd64.exe ./cmd/twitch-tray
+	GOOS=windows GOARCH=amd64 $(GOCMD) build -ldflags="-s -w -H=windowsgui -X main.Version=$(VERSION)" -o $(DIST)/$(BINARY)-windows-amd64.exe ./cmd/twitch-tray
 
 build-all: build-linux build-darwin build-windows
 
-run:
-	$(GOBUILD) -o $(DIST)/$(BINARY) ./cmd/twitch-tray
+run: build
 	./$(DIST)/$(BINARY)
 
 clean:

@@ -7,6 +7,10 @@ A cross-platform system tray application for Twitch viewers.
 ```
 twitch-tray/
 ├── cmd/twitch-tray/main.go     # Entry point
+├── version.go                  # Version variable (set via ldflags at build time)
+├── .github/workflows/
+│   ├── ci.yml                  # Tests, linting on every push
+│   └── release.yml             # Build binaries on git tag push
 ├── internal/
 │   ├── app/app.go              # Lifecycle orchestration
 │   ├── auth/
@@ -167,6 +171,28 @@ go test -v ./internal/auth/...   # Auth/polling tests
 go build ./cmd/twitch-tray       # Build check
 go vet ./...                     # Static analysis
 ```
+
+## Versioning & Releases
+
+Version is injected at build time via `-ldflags`:
+```go
+var Version = "dev"  // default for local builds
+```
+
+```bash
+go build -ldflags="-X main.Version=1.0.0" ./cmd/twitch-tray
+```
+
+**To release a new version:**
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+This triggers the release workflow which:
+1. Builds binaries for Linux, macOS (amd64/arm64), and Windows
+2. Injects the version from the git tag
+3. Creates a GitHub release with binaries and checksums
 
 ## Known Issues / Future Work
 
