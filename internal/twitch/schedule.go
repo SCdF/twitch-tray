@@ -3,6 +3,7 @@ package twitch
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"time"
 
@@ -102,6 +103,8 @@ func (c *Client) GetScheduledStreamsForFollowed(ctx context.Context) ([]Schedule
 		return nil, fmt.Errorf("failed to get followed channels: %w", err)
 	}
 
+	log.Printf("Got %d followed channels for schedule lookup", len(follows))
+
 	// Extract broadcaster IDs
 	broadcasterIDs := make([]string, 0, len(follows))
 	for _, f := range follows {
@@ -109,11 +112,16 @@ func (c *Client) GetScheduledStreamsForFollowed(ctx context.Context) ([]Schedule
 	}
 
 	// Get schedules (limit to avoid too many API calls)
-	// In practice, we might want to prioritize or limit this
 	maxBroadcasters := 50
 	if len(broadcasterIDs) > maxBroadcasters {
 		broadcasterIDs = broadcasterIDs[:maxBroadcasters]
 	}
 
-	return c.GetScheduledStreams(ctx, broadcasterIDs)
+	scheduled, err := c.GetScheduledStreams(ctx, broadcasterIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("Found %d scheduled streams", len(scheduled))
+	return scheduled, nil
 }

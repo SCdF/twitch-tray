@@ -9,7 +9,6 @@ import (
 
 	"github.com/user/twitch-tray/internal/auth"
 	"github.com/user/twitch-tray/internal/config"
-	"github.com/user/twitch-tray/internal/eventsub"
 	"github.com/user/twitch-tray/internal/notify"
 	"github.com/user/twitch-tray/internal/state"
 	"github.com/user/twitch-tray/internal/tray"
@@ -24,16 +23,10 @@ type App struct {
 	client   *twitch.Client
 	tray     *tray.Tray
 	notifier *notify.Notifier
-	eventsub *eventsub.Client
-	subMgr   *eventsub.SubscriptionManager
 
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
-
-	// Track categories for change detection
-	categoryTracker map[string]string // userID -> categoryID
-	categoryMu      sync.RWMutex
 
 	// Track if initial load is complete (don't notify until then)
 	initialLoadDone bool
@@ -64,12 +57,11 @@ func New() (*App, error) {
 	appTray := tray.New(appState)
 
 	app := &App{
-		config:          cfg,
-		store:           store,
-		state:           appState,
-		tray:            appTray,
-		notifier:        notifier,
-		categoryTracker: make(map[string]string),
+		config:   cfg,
+		store:    store,
+		state:    appState,
+		tray:     appTray,
+		notifier: notifier,
 	}
 
 	// Set tray callbacks
@@ -125,10 +117,7 @@ func (a *App) initializeSession(clientID string, token *auth.Token) error {
 		log.Printf("Failed to load followed channels: %v", err)
 	}
 
-	// Start EventSub connection
-	a.startEventSub(clientID, token.AccessToken)
-
-	// Start polling
+	// Start polling (EventSub removed - too many subscriptions hit rate limits)
 	a.startPolling()
 
 	// Initial data fetch
@@ -150,38 +139,6 @@ func (a *App) loadFollowedChannels() error {
 	a.state.SetFollowedChannelIDs(ids)
 
 	return nil
-}
-
-func (a *App) startEventSub(clientID, accessToken string) {
-	a.eventsub = eventsub.NewClient(clientID, accessToken)
-	a.subMgr = eventsub.NewSubscriptionManager(clientID, accessToken)
-
-	// Set up event handlers
-	a.eventsub.OnEvent(eventsub.NewEventHandlers(eventsub.EventHandlers{
-		OnStreamOnline:  a.handleStreamOnline,
-		OnStreamOffline: a.handleStreamOffline,
-		OnChannelUpdate: a.handleChannelUpdate,
-	}))
-
-	// When connected, subscribe to followed channels
-	a.eventsub.OnConnected(func(sessionID string) {
-		a.subMgr.SetSessionID(sessionID)
-
-		// Subscribe to followed channels
-		channelIDs := a.state.GetFollowedChannelIDs()
-		if err := a.subMgr.SubscribeToChannels(a.ctx, channelIDs); err != nil {
-			log.Printf("Failed to subscribe to channels: %v", err)
-		}
-	})
-
-	// Connect in background
-	a.wg.Add(1)
-	go func() {
-		defer a.wg.Done()
-		if err := a.eventsub.Connect(a.ctx); err != nil {
-			log.Printf("EventSub connection error: %v", err)
-		}
-	}()
 }
 
 func (a *App) startPolling() {
@@ -256,6 +213,7 @@ func (a *App) refreshScheduledStreams() {
 		return
 	}
 
+	log.Printf("Fetching scheduled streams...")
 	scheduled, err := a.client.GetScheduledStreamsForFollowed(a.ctx)
 	if err != nil {
 		log.Printf("Failed to get scheduled streams: %v", err)
@@ -263,53 +221,6 @@ func (a *App) refreshScheduledStreams() {
 	}
 
 	a.state.SetScheduledStreams(scheduled)
-}
-
-func (a *App) handleStreamOnline(event eventsub.StreamOnlineEvent) {
-	log.Printf("Stream online: %s", event.BroadcasterUserName)
-
-	// Refresh to get full stream info
-	go a.refreshFollowedStreams()
-
-	// Send notification (only after initial load)
-	if a.initialLoadDone {
-		a.notifier.StreamLiveSimple(event.BroadcasterUserName, "")
-	}
-}
-
-func (a *App) handleStreamOffline(event eventsub.StreamOfflineEvent) {
-	log.Printf("Stream offline: %s", event.BroadcasterUserName)
-
-	// Refresh streams
-	go a.refreshFollowedStreams()
-}
-
-func (a *App) handleChannelUpdate(event eventsub.ChannelUpdateEvent) {
-	a.categoryMu.Lock()
-	oldCategory := a.categoryTracker[event.BroadcasterUserID]
-	a.categoryTracker[event.BroadcasterUserID] = event.CategoryID
-	a.categoryMu.Unlock()
-
-	// Check if the streamer is live and category changed
-	if stream, found := a.state.FindStreamByUserID(event.BroadcasterUserID); found {
-		if oldCategory != "" && oldCategory != event.CategoryID {
-			log.Printf("Category change: %s now playing %s", event.BroadcasterUserName, event.CategoryName)
-
-			// Get old category name for notification
-			categories, _ := a.client.GetGames(a.ctx, []string{oldCategory})
-			oldCategoryName := "Unknown"
-			if len(categories) > 0 {
-				oldCategoryName = categories[0].Name
-			}
-
-			a.notifier.CategoryChange(event.BroadcasterUserName, oldCategoryName, event.CategoryName)
-		}
-
-		// Update the stream in state
-		stream.GameID = event.CategoryID
-		stream.GameName = event.CategoryName
-		stream.Title = event.Title
-	}
 }
 
 func (a *App) handleLogin() {
@@ -349,37 +260,15 @@ func (a *App) handleLogout() {
 		log.Printf("Failed to delete token: %v", err)
 	}
 
-	// Stop EventSub
-	if a.eventsub != nil {
-		a.eventsub.Close()
-		a.eventsub = nil
-	}
-
-	// Clear subscriptions
-	if a.subMgr != nil {
-		a.subMgr.ClearSubscriptions(a.ctx)
-		a.subMgr = nil
-	}
-
 	// Clear state
 	a.state.Clear()
 	a.client = nil
-
-	// Clear category tracker
-	a.categoryMu.Lock()
-	a.categoryTracker = make(map[string]string)
-	a.categoryMu.Unlock()
 }
 
 func (a *App) handleQuit() {
 	// Cancel context to stop all goroutines
 	if a.cancel != nil {
 		a.cancel()
-	}
-
-	// Close EventSub
-	if a.eventsub != nil {
-		a.eventsub.Close()
 	}
 
 	// Wait for goroutines
