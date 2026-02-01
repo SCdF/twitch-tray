@@ -6,7 +6,7 @@ use tokio::time::{interval, Duration};
 
 use crate::auth::{DeviceFlow, Token, TokenStore, CLIENT_ID};
 use crate::config::ConfigManager;
-use crate::notify::Notifier;
+use crate::notify::{DesktopNotifier, Notifier};
 use crate::state::AppState;
 use crate::tray::TrayManager;
 use crate::twitch::TwitchClient;
@@ -17,7 +17,7 @@ pub struct App {
     pub config: ConfigManager,
     pub store: TokenStore,
     pub client: TwitchClient,
-    pub notifier: Notifier,
+    pub notifier: DesktopNotifier,
     pub tray_manager: TrayManager,
 
     // Tracks if initial load is complete (don't notify until then)
@@ -35,7 +35,7 @@ impl App {
         let store = TokenStore::new()?;
         let state = AppState::new();
         let cfg = config.get();
-        let notifier = Notifier::new(cfg.notify_on_live);
+        let notifier = DesktopNotifier::new(cfg.notify_on_live);
         let client = TwitchClient::new(CLIENT_ID.to_string());
         let tray_manager = TrayManager::new(state.clone());
         let (auth_cancel_tx, auth_cancel_rx) = watch::channel(false);
@@ -283,7 +283,7 @@ impl App {
                 }
                 Err(e) => {
                     tracing::error!("Authentication failed: {}", e);
-                    let notifier = Notifier::new(notifier_enabled);
+                    let notifier = DesktopNotifier::new(notifier_enabled);
                     let _ = notifier.error(&format!("Authentication failed: {}", e));
                 }
             }
@@ -316,7 +316,7 @@ impl Clone for App {
             config: ConfigManager::new().expect("Failed to create config manager"),
             store: TokenStore::new().expect("Failed to create token store"),
             client: self.client.clone(),
-            notifier: Notifier::new(self.config.get().notify_on_live),
+            notifier: DesktopNotifier::new(self.config.get().notify_on_live),
             tray_manager: TrayManager::new(self.state.clone()),
             initial_load_done: AtomicBool::new(self.initial_load_done.load(Ordering::SeqCst)),
             auth_cancel_tx: self.auth_cancel_tx.clone(),

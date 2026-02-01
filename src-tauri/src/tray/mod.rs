@@ -1,3 +1,5 @@
+pub mod menu_data;
+
 use std::sync::Arc;
 use tauri::{
     image::Image,
@@ -9,8 +11,8 @@ use tauri::{
 use crate::state::AppState;
 use crate::twitch::{ScheduledStream, Stream};
 
-const ICON_BYTES: &[u8] = include_bytes!("../icons/icon.png");
-const ICON_GREY_BYTES: &[u8] = include_bytes!("../icons/icon_grey.png");
+const ICON_BYTES: &[u8] = include_bytes!("../../icons/icon.png");
+const ICON_GREY_BYTES: &[u8] = include_bytes!("../../icons/icon_grey.png");
 
 /// Menu item IDs
 mod ids {
@@ -250,7 +252,7 @@ fn open_stream(user_login: &str) {
 
 /// Formats a stream for the Following Live menu
 /// Format: "StreamerName - GameName (1.2k, 2h 15m)"
-fn format_stream_label(s: &Stream) -> String {
+pub(crate) fn format_stream_label(s: &Stream) -> String {
     format!(
         "{} - {} ({}, {})",
         s.user_name,
@@ -262,17 +264,177 @@ fn format_stream_label(s: &Stream) -> String {
 
 /// Formats a scheduled stream
 /// Format: "StreamerName - Tomorrow 3:00 PM"
-fn format_scheduled_label(s: &ScheduledStream) -> String {
+pub(crate) fn format_scheduled_label(s: &ScheduledStream) -> String {
     format!("{} - {}", s.broadcaster_name, s.format_start_time())
 }
 
 /// Truncates a string to max length with ellipsis
-fn truncate(s: &str, max: usize) -> String {
+pub(crate) fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else if max <= 3 {
         s[..max].to_string()
     } else {
         format!("{}...", &s[..max - 3])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, Utc};
+
+    /// Helper to create a test stream
+    fn make_stream(
+        user_name: &str,
+        game_name: &str,
+        viewer_count: i64,
+        hours_ago: i64,
+    ) -> Stream {
+        Stream {
+            id: "123".to_string(),
+            user_id: "456".to_string(),
+            user_login: user_name.to_lowercase(),
+            user_name: user_name.to_string(),
+            game_id: "789".to_string(),
+            game_name: game_name.to_string(),
+            title: "Test Stream".to_string(),
+            viewer_count,
+            started_at: Utc::now() - Duration::hours(hours_ago),
+            thumbnail_url: "https://example.com/thumb.jpg".to_string(),
+            tags: vec![],
+        }
+    }
+
+    /// Helper to create a scheduled stream
+    fn make_scheduled(broadcaster_name: &str, hours_until: i64) -> ScheduledStream {
+        ScheduledStream {
+            id: "sched123".to_string(),
+            broadcaster_id: "456".to_string(),
+            broadcaster_name: broadcaster_name.to_string(),
+            broadcaster_login: broadcaster_name.to_lowercase(),
+            title: "Scheduled Stream".to_string(),
+            start_time: Utc::now() + Duration::hours(hours_until),
+            end_time: None,
+            category: Some("Gaming".to_string()),
+            category_id: Some("123".to_string()),
+            is_recurring: false,
+        }
+    }
+
+    // === truncate tests ===
+
+    #[test]
+    fn truncate_short_string() {
+        assert_eq!(truncate("Hello", 10), "Hello");
+    }
+
+    #[test]
+    fn truncate_exact_length() {
+        assert_eq!(truncate("Hello", 5), "Hello");
+    }
+
+    #[test]
+    fn truncate_long_string() {
+        assert_eq!(truncate("Hello World", 8), "Hello...");
+    }
+
+    #[test]
+    fn truncate_max_3() {
+        // When max <= 3, we just take first max chars without ellipsis
+        assert_eq!(truncate("Hello", 3), "Hel");
+    }
+
+    #[test]
+    fn truncate_max_4() {
+        // max=4 means we show 1 char + "..."
+        assert_eq!(truncate("Hello", 4), "H...");
+    }
+
+    #[test]
+    fn truncate_empty_string() {
+        assert_eq!(truncate("", 10), "");
+    }
+
+    #[test]
+    fn truncate_game_name_realistic() {
+        let long_game = "Counter-Strike: Global Offensive";
+        assert_eq!(truncate(long_game, 20), "Counter-Strike: G...");
+    }
+
+    // === format_stream_label tests ===
+
+    #[test]
+    fn format_stream_label_basic() {
+        let stream = make_stream("Ninja", "Fortnite", 5000, 2);
+        let label = format_stream_label(&stream);
+
+        assert!(label.contains("Ninja"), "Label should contain streamer name");
+        assert!(label.contains("Fortnite"), "Label should contain game name");
+        assert!(label.contains("5k"), "Label should contain viewer count");
+        assert!(label.contains("2h"), "Label should contain duration");
+    }
+
+    #[test]
+    fn format_stream_label_long_game_name() {
+        let stream = make_stream("Streamer", "This Is A Very Long Game Name That Should Be Truncated", 1000, 1);
+        let label = format_stream_label(&stream);
+
+        // Game name should be truncated to 20 chars
+        assert!(
+            label.len() < 100,
+            "Label should be reasonable length: {}",
+            label
+        );
+        assert!(
+            label.contains("..."),
+            "Long game name should be truncated: {}",
+            label
+        );
+    }
+
+    #[test]
+    fn format_stream_label_small_viewers() {
+        let stream = make_stream("SmallStreamer", "Minecraft", 42, 0);
+        let label = format_stream_label(&stream);
+
+        assert!(
+            label.contains("42"),
+            "Small viewer count should show exact number: {}",
+            label
+        );
+    }
+
+    // === format_scheduled_label tests ===
+
+    #[test]
+    fn format_scheduled_label_basic() {
+        let scheduled = make_scheduled("StreamerName", 5);
+        let label = format_scheduled_label(&scheduled);
+
+        assert!(
+            label.starts_with("StreamerName - "),
+            "Label should start with broadcaster name: {}",
+            label
+        );
+    }
+
+    #[test]
+    fn format_scheduled_label_contains_time() {
+        let scheduled = make_scheduled("TestStreamer", 2);
+        let label = format_scheduled_label(&scheduled);
+
+        // Should contain time-related text (Today, Tomorrow, or day name)
+        let has_time_info = label.contains("Today")
+            || label.contains("Tomorrow")
+            || label.contains("Mon")
+            || label.contains("Tue")
+            || label.contains("Wed")
+            || label.contains("Thu")
+            || label.contains("Fri")
+            || label.contains("Sat")
+            || label.contains("Sun");
+
+        assert!(has_time_info, "Label should contain time info: {}", label);
     }
 }

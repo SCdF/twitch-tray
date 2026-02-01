@@ -107,7 +107,7 @@ pub struct FollowedChannel {
 }
 
 /// Helix API pagination
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Pagination {
     #[serde(default)]
     pub cursor: Option<String>,
@@ -130,7 +130,7 @@ pub struct FollowedChannelsResponse {
 }
 
 /// Streams response from Helix API
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamsResponse {
     pub data: Vec<Stream>,
     #[serde(default)]
@@ -181,4 +181,227 @@ pub struct ValidateResponse {
     pub scopes: Vec<String>,
     pub user_id: String,
     pub expires_in: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, TimeZone};
+
+    /// Helper to create a test stream with specified viewer count
+    fn stream_with_viewers(viewer_count: i64) -> Stream {
+        Stream {
+            id: "123".to_string(),
+            user_id: "456".to_string(),
+            user_login: "testuser".to_string(),
+            user_name: "TestUser".to_string(),
+            game_id: "789".to_string(),
+            game_name: "Test Game".to_string(),
+            title: "Test Stream".to_string(),
+            viewer_count,
+            started_at: Utc::now() - Duration::hours(1),
+            thumbnail_url: "https://example.com/thumb.jpg".to_string(),
+            tags: vec![],
+        }
+    }
+
+    /// Helper to create a test stream started at a specific time
+    fn stream_started_at(started_at: DateTime<Utc>) -> Stream {
+        Stream {
+            id: "123".to_string(),
+            user_id: "456".to_string(),
+            user_login: "testuser".to_string(),
+            user_name: "TestUser".to_string(),
+            game_id: "789".to_string(),
+            game_name: "Test Game".to_string(),
+            title: "Test Stream".to_string(),
+            viewer_count: 1000,
+            started_at,
+            thumbnail_url: "https://example.com/thumb.jpg".to_string(),
+            tags: vec![],
+        }
+    }
+
+    /// Helper to create a scheduled stream at a specific time
+    fn scheduled_at(start_time: DateTime<Utc>) -> ScheduledStream {
+        ScheduledStream {
+            id: "sched123".to_string(),
+            broadcaster_id: "456".to_string(),
+            broadcaster_name: "TestBroadcaster".to_string(),
+            broadcaster_login: "testbroadcaster".to_string(),
+            title: "Scheduled Stream".to_string(),
+            start_time,
+            end_time: None,
+            category: Some("Gaming".to_string()),
+            category_id: Some("123".to_string()),
+            is_recurring: false,
+        }
+    }
+
+    // === format_viewer_count tests ===
+
+    #[test]
+    fn viewer_count_small() {
+        let stream = stream_with_viewers(856);
+        assert_eq!(stream.format_viewer_count(), "856");
+    }
+
+    #[test]
+    fn viewer_count_exactly_1k() {
+        let stream = stream_with_viewers(1000);
+        assert_eq!(stream.format_viewer_count(), "1k");
+    }
+
+    #[test]
+    fn viewer_count_decimal() {
+        let stream = stream_with_viewers(1234);
+        assert_eq!(stream.format_viewer_count(), "1.2k");
+    }
+
+    #[test]
+    fn viewer_count_round_down() {
+        // 1049 / 1000 = 1.049, which has fract() < 0.05, so shows as "1k"
+        let stream = stream_with_viewers(1049);
+        assert_eq!(stream.format_viewer_count(), "1k");
+    }
+
+    #[test]
+    fn viewer_count_round_to_decimal() {
+        // 1050 / 1000 = 1.05, which has fract() >= 0.05, so shows as "1.1k"
+        let stream = stream_with_viewers(1050);
+        assert_eq!(stream.format_viewer_count(), "1.1k");
+    }
+
+    #[test]
+    fn viewer_count_large() {
+        let stream = stream_with_viewers(12345);
+        assert_eq!(stream.format_viewer_count(), "12.3k");
+    }
+
+    #[test]
+    fn viewer_count_very_large() {
+        let stream = stream_with_viewers(100000);
+        assert_eq!(stream.format_viewer_count(), "100k");
+    }
+
+    #[test]
+    fn viewer_count_zero() {
+        let stream = stream_with_viewers(0);
+        assert_eq!(stream.format_viewer_count(), "0");
+    }
+
+    #[test]
+    fn viewer_count_999() {
+        let stream = stream_with_viewers(999);
+        assert_eq!(stream.format_viewer_count(), "999");
+    }
+
+    // === format_duration tests ===
+
+    #[test]
+    fn duration_minutes_only() {
+        let stream = stream_started_at(Utc::now() - Duration::minutes(45));
+        assert_eq!(stream.format_duration(), "45m");
+    }
+
+    #[test]
+    fn duration_hours_and_minutes() {
+        let stream = stream_started_at(Utc::now() - Duration::hours(2) - Duration::minutes(15));
+        assert_eq!(stream.format_duration(), "2h 15m");
+    }
+
+    #[test]
+    fn duration_exactly_one_hour() {
+        let stream = stream_started_at(Utc::now() - Duration::hours(1));
+        assert_eq!(stream.format_duration(), "1h 0m");
+    }
+
+    #[test]
+    fn duration_many_hours() {
+        let stream = stream_started_at(Utc::now() - Duration::hours(12) - Duration::minutes(30));
+        assert_eq!(stream.format_duration(), "12h 30m");
+    }
+
+    #[test]
+    fn duration_zero() {
+        let stream = stream_started_at(Utc::now());
+        assert_eq!(stream.format_duration(), "0m");
+    }
+
+    // === ScheduledStream time_until tests ===
+
+    #[test]
+    fn time_until_future() {
+        let start = Utc::now() + Duration::hours(2);
+        let scheduled = scheduled_at(start);
+        let until = scheduled.time_until();
+
+        // Should be approximately 2 hours (allow some tolerance)
+        assert!(until.num_minutes() >= 119 && until.num_minutes() <= 121);
+    }
+
+    #[test]
+    fn time_until_past() {
+        let start = Utc::now() - Duration::hours(1);
+        let scheduled = scheduled_at(start);
+        let until = scheduled.time_until();
+
+        // Should be negative (already started)
+        assert!(until.num_minutes() < 0);
+    }
+
+    // === format_start_time tests ===
+    // Note: These tests are timezone-dependent, so we test the general format
+
+    #[test]
+    fn format_start_time_today() {
+        // Create a time that's definitely today (a few hours from now)
+        let start = Utc::now() + Duration::hours(3);
+        let scheduled = scheduled_at(start);
+        let formatted = scheduled.format_start_time();
+
+        assert!(
+            formatted.starts_with("Today "),
+            "Expected 'Today ...', got: {}",
+            formatted
+        );
+    }
+
+    #[test]
+    fn format_start_time_tomorrow() {
+        // Create a time that's definitely tomorrow
+        let now = Local::now();
+        let tomorrow_noon = (now.date_naive() + Duration::days(1))
+            .and_hms_opt(12, 0, 0)
+            .unwrap();
+        let tomorrow_utc = Local
+            .from_local_datetime(&tomorrow_noon)
+            .single()
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let scheduled = scheduled_at(tomorrow_utc);
+        let formatted = scheduled.format_start_time();
+
+        assert!(
+            formatted.starts_with("Tomorrow "),
+            "Expected 'Tomorrow ...', got: {}",
+            formatted
+        );
+    }
+
+    #[test]
+    fn format_start_time_later_date() {
+        // Create a time that's several days away
+        let start = Utc::now() + Duration::days(5);
+        let scheduled = scheduled_at(start);
+        let formatted = scheduled.format_start_time();
+
+        // Should show day of week, not "Today" or "Tomorrow"
+        assert!(
+            !formatted.starts_with("Today ") && !formatted.starts_with("Tomorrow "),
+            "Expected day format, got: {}",
+            formatted
+        );
+    }
 }

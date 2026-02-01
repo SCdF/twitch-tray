@@ -202,3 +202,233 @@ impl Default for AppState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, Utc};
+
+    /// Helper to create a test stream with a specific user_id
+    fn make_stream(user_id: &str, user_name: &str) -> Stream {
+        Stream {
+            id: format!("stream_{}", user_id),
+            user_id: user_id.to_string(),
+            user_login: user_name.to_lowercase(),
+            user_name: user_name.to_string(),
+            game_id: "game123".to_string(),
+            game_name: "Test Game".to_string(),
+            title: "Test Stream".to_string(),
+            viewer_count: 1000,
+            started_at: Utc::now() - Duration::hours(1),
+            thumbnail_url: "https://example.com/thumb.jpg".to_string(),
+            tags: vec![],
+        }
+    }
+
+    /// Helper to create a stream with a specific game
+    fn make_stream_with_game(user_id: &str, game_id: &str, game_name: &str) -> Stream {
+        Stream {
+            id: format!("stream_{}", user_id),
+            user_id: user_id.to_string(),
+            user_login: format!("user_{}", user_id),
+            user_name: format!("User {}", user_id),
+            game_id: game_id.to_string(),
+            game_name: game_name.to_string(),
+            title: "Test Stream".to_string(),
+            viewer_count: 1000,
+            started_at: Utc::now() - Duration::hours(1),
+            thumbnail_url: "https://example.com/thumb.jpg".to_string(),
+            tags: vec![],
+        }
+    }
+
+    // === set_followed_streams change detection tests ===
+
+    #[tokio::test]
+    async fn newly_live_detected() {
+        let state = AppState::new();
+
+        // Initial state: stream A is live
+        let stream_a = make_stream("a", "StreamerA");
+        state.set_followed_streams(vec![stream_a.clone()]).await;
+
+        // Update: both A and B are live
+        let stream_b = make_stream("b", "StreamerB");
+        let result = state
+            .set_followed_streams(vec![stream_a, stream_b])
+            .await;
+
+        assert_eq!(result.newly_live.len(), 1);
+        assert_eq!(result.newly_live[0].user_id, "b");
+        assert!(result.went_offline.is_empty());
+    }
+
+    #[tokio::test]
+    async fn went_offline_detected() {
+        let state = AppState::new();
+
+        // Initial state: A and B are live
+        let stream_a = make_stream("a", "StreamerA");
+        let stream_b = make_stream("b", "StreamerB");
+        state
+            .set_followed_streams(vec![stream_a.clone(), stream_b.clone()])
+            .await;
+
+        // Update: only A is live (B went offline)
+        let result = state.set_followed_streams(vec![stream_a]).await;
+
+        assert!(result.newly_live.is_empty());
+        assert_eq!(result.went_offline.len(), 1);
+        assert_eq!(result.went_offline[0].user_id, "b");
+    }
+
+    #[tokio::test]
+    async fn no_change_when_same_streams() {
+        let state = AppState::new();
+
+        let stream_a = make_stream("a", "StreamerA");
+        let stream_b = make_stream("b", "StreamerB");
+
+        // Set initial streams
+        state
+            .set_followed_streams(vec![stream_a.clone(), stream_b.clone()])
+            .await;
+
+        // Set same streams again
+        let result = state.set_followed_streams(vec![stream_a, stream_b]).await;
+
+        assert!(result.newly_live.is_empty());
+        assert!(result.went_offline.is_empty());
+    }
+
+    #[tokio::test]
+    async fn initial_load_all_newly_live() {
+        let state = AppState::new();
+
+        let stream_a = make_stream("a", "StreamerA");
+        let stream_b = make_stream("b", "StreamerB");
+
+        // First load - all streams are "newly live"
+        let result = state
+            .set_followed_streams(vec![stream_a, stream_b])
+            .await;
+
+        assert_eq!(result.newly_live.len(), 2);
+        assert!(result.went_offline.is_empty());
+    }
+
+    #[tokio::test]
+    async fn empty_to_streams() {
+        let state = AppState::new();
+
+        // Explicitly set empty first
+        state.set_followed_streams(vec![]).await;
+
+        let stream_a = make_stream("a", "StreamerA");
+        let result = state.set_followed_streams(vec![stream_a]).await;
+
+        assert_eq!(result.newly_live.len(), 1);
+        assert!(result.went_offline.is_empty());
+    }
+
+    #[tokio::test]
+    async fn streams_to_empty() {
+        let state = AppState::new();
+
+        let stream_a = make_stream("a", "StreamerA");
+        state.set_followed_streams(vec![stream_a]).await;
+
+        let result = state.set_followed_streams(vec![]).await;
+
+        assert!(result.newly_live.is_empty());
+        assert_eq!(result.went_offline.len(), 1);
+    }
+
+    // === tracked_categories tests ===
+
+    #[tokio::test]
+    async fn categories_tracked_from_live_streams() {
+        let state = AppState::new();
+
+        let stream1 = make_stream_with_game("1", "game1", "Fortnite");
+        let stream2 = make_stream_with_game("2", "game2", "Minecraft");
+
+        state
+            .set_followed_streams(vec![stream1, stream2])
+            .await;
+
+        // Verify categories are tracked (accessing internal state for test)
+        let inner = state.inner.read().await;
+        assert_eq!(inner.tracked_categories.len(), 2);
+        assert_eq!(inner.tracked_categories.get("game1"), Some(&"Fortnite".to_string()));
+        assert_eq!(inner.tracked_categories.get("game2"), Some(&"Minecraft".to_string()));
+    }
+
+    #[tokio::test]
+    async fn categories_cleared_on_update() {
+        let state = AppState::new();
+
+        let stream1 = make_stream_with_game("1", "game1", "Fortnite");
+        state.set_followed_streams(vec![stream1]).await;
+
+        // Now update with different stream
+        let stream2 = make_stream_with_game("2", "game2", "Minecraft");
+        state.set_followed_streams(vec![stream2]).await;
+
+        // Only the new category should be tracked
+        let inner = state.inner.read().await;
+        assert_eq!(inner.tracked_categories.len(), 1);
+        assert_eq!(inner.tracked_categories.get("game2"), Some(&"Minecraft".to_string()));
+        assert!(inner.tracked_categories.get("game1").is_none());
+    }
+
+    #[tokio::test]
+    async fn empty_game_id_not_tracked() {
+        let state = AppState::new();
+
+        let mut stream = make_stream_with_game("1", "game1", "Fortnite");
+        stream.game_id = "".to_string(); // Empty game ID
+
+        state.set_followed_streams(vec![stream]).await;
+
+        let inner = state.inner.read().await;
+        assert!(inner.tracked_categories.is_empty());
+    }
+
+    // === authentication state tests ===
+
+    #[tokio::test]
+    async fn authentication_state() {
+        let state = AppState::new();
+
+        assert!(!state.is_authenticated().await);
+
+        state
+            .set_authenticated(true, "user123".to_string(), "testuser".to_string())
+            .await;
+
+        assert!(state.is_authenticated().await);
+        assert_eq!(state.get_user_id().await, "user123");
+        assert_eq!(state.get_user_login().await, "testuser");
+    }
+
+    #[tokio::test]
+    async fn clear_resets_all_state() {
+        let state = AppState::new();
+
+        // Set up some state
+        state
+            .set_authenticated(true, "user123".to_string(), "testuser".to_string())
+            .await;
+        state
+            .set_followed_streams(vec![make_stream("1", "Streamer")])
+            .await;
+
+        // Clear everything
+        state.clear().await;
+
+        assert!(!state.is_authenticated().await);
+        assert!(state.get_followed_streams().await.is_empty());
+        assert_eq!(state.get_user_id().await, "");
+    }
+}

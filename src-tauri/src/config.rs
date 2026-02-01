@@ -101,3 +101,104 @@ impl ConfigManager {
             .join(APP_NAME))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // === Config default values tests ===
+
+    #[test]
+    fn default_poll_interval_is_60() {
+        let config = Config::default();
+        assert_eq!(config.poll_interval_sec, 60);
+    }
+
+    #[test]
+    fn default_schedule_poll_is_5() {
+        let config = Config::default();
+        assert_eq!(config.schedule_poll_min, 5);
+    }
+
+    #[test]
+    fn default_notify_on_live_is_true() {
+        let config = Config::default();
+        assert!(config.notify_on_live);
+    }
+
+    #[test]
+    fn default_notify_on_category_is_true() {
+        let config = Config::default();
+        assert!(config.notify_on_category);
+    }
+
+    // === Partial deserialization tests ===
+
+    #[test]
+    fn deserialize_empty_uses_defaults() {
+        let json = "{}";
+        let config: Config = serde_json::from_str(json).unwrap();
+
+        assert_eq!(config.poll_interval_sec, 60);
+        assert_eq!(config.schedule_poll_min, 5);
+        assert!(config.notify_on_live);
+        assert!(config.notify_on_category);
+    }
+
+    #[test]
+    fn deserialize_partial_uses_defaults_for_missing() {
+        let json = r#"{"poll_interval_sec": 30}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+
+        assert_eq!(config.poll_interval_sec, 30); // Overridden
+        assert_eq!(config.schedule_poll_min, 5); // Default
+        assert!(config.notify_on_live); // Default
+        assert!(config.notify_on_category); // Default
+    }
+
+    #[test]
+    fn deserialize_full_config() {
+        let json = r#"{
+            "poll_interval_sec": 120,
+            "schedule_poll_min": 10,
+            "notify_on_live": false,
+            "notify_on_category": false
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+
+        assert_eq!(config.poll_interval_sec, 120);
+        assert_eq!(config.schedule_poll_min, 10);
+        assert!(!config.notify_on_live);
+        assert!(!config.notify_on_category);
+    }
+
+    #[test]
+    fn serialize_roundtrip() {
+        let original = Config {
+            poll_interval_sec: 90,
+            schedule_poll_min: 15,
+            notify_on_live: true,
+            notify_on_category: false,
+        };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: Config = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.poll_interval_sec, original.poll_interval_sec);
+        assert_eq!(deserialized.schedule_poll_min, original.schedule_poll_min);
+        assert_eq!(deserialized.notify_on_live, original.notify_on_live);
+        assert_eq!(deserialized.notify_on_category, original.notify_on_category);
+    }
+
+    #[test]
+    fn deserialize_ignores_unknown_fields() {
+        let json = r#"{
+            "poll_interval_sec": 30,
+            "unknown_field": "should be ignored",
+            "another_unknown": 123
+        }"#;
+        // This should not panic - unknown fields should be ignored
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.poll_interval_sec, 30);
+    }
+}

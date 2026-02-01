@@ -1,25 +1,40 @@
 use anyhow::{Context, Result};
-use reqwest::Client;
+use reqwest::header::HeaderMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use super::http::{HttpClient, ReqwestClient};
 use super::types::*;
 
 const HELIX_BASE_URL: &str = "https://api.twitch.tv/helix";
 
 /// Twitch Helix API client
-pub struct TwitchClient {
-    http: Client,
+///
+/// Generic over the HTTP client implementation for testability.
+pub struct TwitchClient<H: HttpClient = ReqwestClient> {
+    http: H,
     client_id: String,
     access_token: Arc<RwLock<Option<String>>>,
     user_id: Arc<RwLock<Option<String>>>,
 }
 
-impl TwitchClient {
-    /// Creates a new Twitch API client
+impl TwitchClient<ReqwestClient> {
+    /// Creates a new Twitch API client with the default HTTP implementation
     pub fn new(client_id: String) -> Self {
         Self {
-            http: Client::new(),
+            http: ReqwestClient::new(),
+            client_id,
+            access_token: Arc::new(RwLock::new(None)),
+            user_id: Arc::new(RwLock::new(None)),
+        }
+    }
+}
+
+impl<H: HttpClient> TwitchClient<H> {
+    /// Creates a new Twitch API client with a custom HTTP implementation
+    pub fn with_http_client(client_id: String, http: H) -> Self {
+        Self {
+            http,
             client_id,
             access_token: Arc::new(RwLock::new(None)),
             user_id: Arc::new(RwLock::new(None)),
@@ -48,8 +63,8 @@ impl TwitchClient {
         &self.client_id
     }
 
-    /// Makes an authenticated GET request to the Helix API
-    async fn get<T: serde::de::DeserializeOwned>(&self, endpoint: &str) -> Result<T> {
+    /// Builds the headers for an authenticated request
+    async fn build_headers(&self) -> Result<HeaderMap> {
         let token = self
             .access_token
             .read()
@@ -57,24 +72,43 @@ impl TwitchClient {
             .clone()
             .context("No access token set")?;
 
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            format!("Bearer {}", token).parse().unwrap(),
+        );
+        headers.insert("Client-Id", self.client_id.parse().unwrap());
+
+        Ok(headers)
+    }
+
+    /// Makes an authenticated GET request to the Helix API
+    async fn get<T: serde::de::DeserializeOwned + Send>(&self, endpoint: &str) -> Result<T> {
+        let headers = self.build_headers().await?;
+        let url = format!("{}{}", HELIX_BASE_URL, endpoint);
+        self.http.get_json(&url, &headers).await
+    }
+
+    /// Makes an authenticated GET request that may return 404
+    async fn get_optional<T: serde::de::DeserializeOwned + Send>(
+        &self,
+        endpoint: &str,
+    ) -> Result<Option<T>> {
+        let headers = self.build_headers().await?;
         let url = format!("{}{}", HELIX_BASE_URL, endpoint);
 
-        let response = self
-            .http
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", token))
-            .header("Client-Id", &self.client_id)
-            .send()
-            .await
-            .context("Failed to send request")?;
+        let response = self.http.get_response(&url, &headers).await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("API error {}: {}", status, body);
+        if response.is_not_found() {
+            return Ok(None);
         }
 
-        response.json().await.context("Failed to parse response")
+        if !response.is_success() {
+            tracing::warn!("API error {}: {}", response.status, response.body);
+            return Ok(None);
+        }
+
+        Ok(Some(response.json()?))
     }
 
     /// Clears authentication state
@@ -84,7 +118,7 @@ impl TwitchClient {
     }
 }
 
-impl Clone for TwitchClient {
+impl<H: HttpClient + Clone> Clone for TwitchClient<H> {
     fn clone(&self) -> Self {
         Self {
             http: self.http.clone(),
@@ -96,7 +130,7 @@ impl Clone for TwitchClient {
 }
 
 // Stream-related methods
-impl TwitchClient {
+impl<H: HttpClient> TwitchClient<H> {
     /// Gets live streams from channels the user follows
     pub async fn get_followed_streams(&self) -> Result<Vec<Stream>> {
         let user_id = self.get_user_id().await.context("User ID not set")?;
@@ -127,7 +161,7 @@ impl TwitchClient {
 }
 
 // Channel-related methods
-impl TwitchClient {
+impl<H: HttpClient> TwitchClient<H> {
     /// Gets channels the user follows (paginated)
     pub async fn get_followed_channels(
         &self,
@@ -169,47 +203,13 @@ impl TwitchClient {
 }
 
 // Schedule-related methods
-impl TwitchClient {
+impl<H: HttpClient> TwitchClient<H> {
     /// Gets scheduled streams for a broadcaster
     async fn get_schedule(&self, broadcaster_id: &str) -> Result<Option<ScheduleData>> {
         let endpoint = format!("/schedule?broadcaster_id={}&first=10", broadcaster_id);
 
-        // Schedule endpoint returns 404 if no schedule exists
-        let token = self
-            .access_token
-            .read()
-            .await
-            .clone()
-            .context("No access token set")?;
-
-        let url = format!("{}{}", HELIX_BASE_URL, endpoint);
-
-        let response = self
-            .http
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", token))
-            .header("Client-Id", &self.client_id)
-            .send()
-            .await
-            .context("Failed to send request")?;
-
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            tracing::warn!("Schedule API error {}: {}", status, body);
-            return Ok(None);
-        }
-
-        let schedule_response: ScheduleResponse = response
-            .json()
-            .await
-            .context("Failed to parse schedule response")?;
-
-        Ok(Some(schedule_response.data))
+        let response: Option<ScheduleResponse> = self.get_optional(&endpoint).await?;
+        Ok(response.map(|r| r.data))
     }
 
     /// Gets scheduled streams for multiple broadcasters (next 24 hours)
@@ -292,5 +292,138 @@ impl TwitchClient {
         tracing::debug!("Found {} scheduled streams", scheduled.len());
 
         Ok(scheduled)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::twitch::http::mock::MockHttpClient;
+    use chrono::{Duration, Utc};
+
+    fn make_streams_response(streams: Vec<Stream>, cursor: Option<&str>) -> StreamsResponse {
+        StreamsResponse {
+            data: streams,
+            pagination: cursor.map(|c| Pagination {
+                cursor: Some(c.to_string()),
+            }),
+        }
+    }
+
+    fn make_stream(user_id: &str, user_name: &str) -> Stream {
+        Stream {
+            id: format!("stream_{}", user_id),
+            user_id: user_id.to_string(),
+            user_login: user_name.to_lowercase(),
+            user_name: user_name.to_string(),
+            game_id: "game123".to_string(),
+            game_name: "Test Game".to_string(),
+            title: "Test Stream".to_string(),
+            viewer_count: 1000,
+            started_at: Utc::now() - Duration::hours(1),
+            thumbnail_url: "https://example.com/thumb.jpg".to_string(),
+            tags: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn get_followed_streams_single_page() {
+        let streams = vec![
+            make_stream("1", "StreamerOne"),
+            make_stream("2", "StreamerTwo"),
+        ];
+
+        let mock = MockHttpClient::new().on_get_json(
+            "https://api.twitch.tv/helix/streams/followed?user_id=user123&first=100",
+            &make_streams_response(streams, None),
+        );
+
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+        client.set_access_token("test_token".to_string()).await;
+        client.set_user_id("user123".to_string()).await;
+
+        let result = client.get_followed_streams().await.unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].user_id, "1");
+        assert_eq!(result[1].user_id, "2");
+    }
+
+    #[tokio::test]
+    async fn get_followed_streams_pagination() {
+        let page1_streams = vec![make_stream("1", "StreamerOne")];
+        let page2_streams = vec![make_stream("2", "StreamerTwo")];
+
+        let mock = MockHttpClient::new()
+            .on_get_json(
+                "https://api.twitch.tv/helix/streams/followed?user_id=user123&first=100",
+                &make_streams_response(page1_streams, Some("cursor1")),
+            )
+            .on_get_json(
+                "https://api.twitch.tv/helix/streams/followed?user_id=user123&first=100&after=cursor1",
+                &make_streams_response(page2_streams, None),
+            );
+
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+        client.set_access_token("test_token".to_string()).await;
+        client.set_user_id("user123".to_string()).await;
+
+        let result = client.get_followed_streams().await.unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].user_id, "1");
+        assert_eq!(result[1].user_id, "2");
+    }
+
+    #[tokio::test]
+    async fn get_followed_streams_requires_user_id() {
+        let mock = MockHttpClient::new();
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+        client.set_access_token("test_token".to_string()).await;
+        // Don't set user_id
+
+        let result = client.get_followed_streams().await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("User ID not set"));
+    }
+
+    #[tokio::test]
+    async fn clear_auth_clears_both_token_and_user_id() {
+        let mock = MockHttpClient::new();
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+
+        client.set_access_token("test_token".to_string()).await;
+        client.set_user_id("user123".to_string()).await;
+
+        assert!(client.get_user_id().await.is_some());
+
+        client.clear_auth().await;
+
+        assert!(client.get_user_id().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn client_sends_correct_headers() {
+        let streams = vec![make_stream("1", "Streamer")];
+        let mock = MockHttpClient::new().on_get_json(
+            "https://api.twitch.tv/helix/streams/followed?user_id=user123&first=100",
+            &make_streams_response(streams, None),
+        );
+
+        let client = TwitchClient::with_http_client("my_client_id".to_string(), mock.clone());
+        client.set_access_token("my_access_token".to_string()).await;
+        client.set_user_id("user123".to_string()).await;
+
+        client.get_followed_streams().await.unwrap();
+
+        let requests = mock.get_requests();
+        assert_eq!(requests.len(), 1);
+
+        let auth_header = requests[0].headers.get("Authorization").unwrap();
+        assert_eq!(auth_header.to_str().unwrap(), "Bearer my_access_token");
+
+        let client_id_header = requests[0].headers.get("Client-Id").unwrap();
+        assert_eq!(client_id_header.to_str().unwrap(), "my_client_id");
     }
 }
