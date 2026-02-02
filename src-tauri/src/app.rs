@@ -40,7 +40,7 @@ impl App {
         let store = TokenStore::new()?;
         let state = AppState::new();
         let cfg = config.get();
-        let notifier = DesktopNotifier::new(cfg.notify_on_live);
+        let notifier = DesktopNotifier::new(cfg.notify_on_live, cfg.notify_on_category);
         let client = TwitchClient::new(CLIENT_ID.to_string());
         let tray_manager = TrayManager::new(state.clone());
         let (auth_cancel_tx, auth_cancel_rx) = watch::channel(false);
@@ -311,6 +311,14 @@ impl App {
                     tracing::error!("Notification error: {}", e);
                 }
             }
+            for change in &result.category_changes {
+                if let Err(e) = self
+                    .notifier
+                    .category_changed(&change.stream, &change.old_category)
+                {
+                    tracing::error!("Notification error: {}", e);
+                }
+            }
         }
     }
 
@@ -417,7 +425,7 @@ impl App {
                 }
                 Err(e) => {
                     tracing::error!("Authentication failed: {}", e);
-                    let notifier = DesktopNotifier::new(notifier_enabled);
+                    let notifier = DesktopNotifier::new(notifier_enabled, false);
                     let _ = notifier.error(&format!("Authentication failed: {}", e));
                 }
             }
@@ -445,12 +453,13 @@ impl App {
 
 impl Clone for App {
     fn clone(&self) -> Self {
+        let cfg = self.config.get();
         Self {
             state: self.state.clone(),
             config: ConfigManager::new().expect("Failed to create config manager"),
             store: TokenStore::new().expect("Failed to create token store"),
             client: self.client.clone(),
-            notifier: DesktopNotifier::new(self.config.get().notify_on_live),
+            notifier: DesktopNotifier::new(cfg.notify_on_live, cfg.notify_on_category),
             tray_manager: TrayManager::new(self.state.clone()),
             initial_load_done: AtomicBool::new(self.initial_load_done.load(Ordering::SeqCst)),
             auth_cancel_tx: self.auth_cancel_tx.clone(),

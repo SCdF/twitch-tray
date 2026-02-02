@@ -12,9 +12,17 @@ pub enum ChangeType {
     Authentication,
 }
 
+/// A category change event
+#[derive(Debug, Clone)]
+pub struct CategoryChange {
+    pub stream: Stream,
+    pub old_category: String,
+}
+
 /// Result of updating followed streams
 pub struct StreamUpdateResult {
     pub newly_live: Vec<Stream>,
+    pub category_changes: Vec<CategoryChange>,
 }
 
 /// Application state
@@ -33,6 +41,9 @@ struct StateInner {
 
     // Categories being tracked (from followed live streams)
     tracked_categories: HashMap<String, String>, // game_id -> game_name
+
+    // Track previous game per stream (by user_id) for category change detection
+    stream_games: HashMap<String, (String, String)>, // user_id -> (game_id, game_name)
 }
 
 /// Thread-safe application state manager
@@ -104,14 +115,33 @@ impl AppState {
             .cloned()
             .collect();
 
+        // Find category changes for streams that were already live
+        let mut category_changes = Vec::new();
+        for stream in &streams {
+            if let Some((old_game_id, old_game_name)) = state.stream_games.get(&stream.user_id) {
+                // Stream was already live, check if category changed
+                if *old_game_id != stream.game_id && !old_game_id.is_empty() {
+                    category_changes.push(CategoryChange {
+                        stream: stream.clone(),
+                        old_category: old_game_name.clone(),
+                    });
+                }
+            }
+        }
+
         // Update tracked categories based on current live streams
         state.tracked_categories.clear();
+        state.stream_games.clear();
         for stream in &streams {
             if !stream.game_id.is_empty() {
                 state
                     .tracked_categories
                     .insert(stream.game_id.clone(), stream.game_name.clone());
             }
+            state.stream_games.insert(
+                stream.user_id.clone(),
+                (stream.game_id.clone(), stream.game_name.clone()),
+            );
         }
 
         state.followed_streams = streams;
@@ -119,7 +149,10 @@ impl AppState {
 
         self.notify_change(ChangeType::FollowedStreams);
 
-        StreamUpdateResult { newly_live }
+        StreamUpdateResult {
+            newly_live,
+            category_changes,
+        }
     }
 
     /// Returns the current followed live streams
@@ -331,6 +364,90 @@ mod tests {
 
         let inner = state.inner.read().await;
         assert!(inner.tracked_categories.is_empty());
+    }
+
+    // === category change detection tests ===
+
+    #[tokio::test]
+    async fn category_change_detected() {
+        let state = AppState::new();
+
+        // Initial: streamer is playing Fortnite
+        let stream1 = make_stream_with_game("1", "game1", "Fortnite");
+        state.set_followed_streams(vec![stream1]).await;
+
+        // Update: streamer switched to Minecraft
+        let stream2 = make_stream_with_game("1", "game2", "Minecraft");
+        let result = state.set_followed_streams(vec![stream2]).await;
+
+        assert_eq!(result.category_changes.len(), 1);
+        assert_eq!(result.category_changes[0].old_category, "Fortnite");
+        assert_eq!(result.category_changes[0].stream.game_name, "Minecraft");
+    }
+
+    #[tokio::test]
+    async fn no_category_change_when_same_game() {
+        let state = AppState::new();
+
+        let stream1 = make_stream_with_game("1", "game1", "Fortnite");
+        state.set_followed_streams(vec![stream1.clone()]).await;
+
+        // Same game
+        let result = state.set_followed_streams(vec![stream1]).await;
+
+        assert!(result.category_changes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn no_category_change_for_newly_live() {
+        let state = AppState::new();
+
+        // Initial: nobody live
+        state.set_followed_streams(vec![]).await;
+
+        // New stream comes online
+        let stream = make_stream_with_game("1", "game1", "Fortnite");
+        let result = state.set_followed_streams(vec![stream]).await;
+
+        // Should be newly_live, not a category change
+        assert_eq!(result.newly_live.len(), 1);
+        assert!(result.category_changes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn no_category_change_from_empty_game() {
+        let state = AppState::new();
+
+        // Initial: stream with no game (empty game_id)
+        let mut stream1 = make_stream_with_game("1", "", "");
+        stream1.game_name = "".to_string();
+        state.set_followed_streams(vec![stream1]).await;
+
+        // Update: now has a game
+        let stream2 = make_stream_with_game("1", "game1", "Fortnite");
+        let result = state.set_followed_streams(vec![stream2]).await;
+
+        // Not counted as a category change (was empty before)
+        assert!(result.category_changes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn multiple_category_changes() {
+        let state = AppState::new();
+
+        // Initial: two streams
+        let stream1 = make_stream_with_game("1", "game1", "Fortnite");
+        let stream2 = make_stream_with_game("2", "game2", "Minecraft");
+        state.set_followed_streams(vec![stream1, stream2]).await;
+
+        // Both change categories
+        let stream1_new = make_stream_with_game("1", "game3", "Valorant");
+        let stream2_new = make_stream_with_game("2", "game4", "Apex Legends");
+        let result = state
+            .set_followed_streams(vec![stream1_new, stream2_new])
+            .await;
+
+        assert_eq!(result.category_changes.len(), 2);
     }
 
     // === authentication state tests ===

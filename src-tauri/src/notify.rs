@@ -14,6 +14,9 @@ pub trait Notifier: Send + Sync {
     /// Sends a notification when a streamer goes live
     fn stream_live(&self, stream: &Stream) -> anyhow::Result<()>;
 
+    /// Sends a notification when a streamer changes category
+    fn category_changed(&self, stream: &Stream, old_category: &str) -> anyhow::Result<()>;
+
     /// Sends an error notification
     fn error(&self, message: &str) -> anyhow::Result<()>;
 }
@@ -22,14 +25,16 @@ pub trait Notifier: Send + Sync {
 pub struct DesktopNotifier {
     enabled: bool,
     notify_on_live: bool,
+    notify_on_category: bool,
 }
 
 impl DesktopNotifier {
     /// Creates a new notifier
-    pub fn new(notify_on_live: bool) -> Self {
+    pub fn new(notify_on_live: bool, notify_on_category: bool) -> Self {
         Self {
             enabled: true,
             notify_on_live,
+            notify_on_category,
         }
     }
 
@@ -40,8 +45,9 @@ impl DesktopNotifier {
         title: &str,
         message: &str,
         url: Option<&str>,
+        category: Option<&str>,
     ) -> anyhow::Result<()> {
-        use notify_rust::Notification;
+        use notify_rust::{Hint, Notification};
 
         let mut notification = Notification::new();
         notification
@@ -49,6 +55,12 @@ impl DesktopNotifier {
             .body(message)
             .appname(APP_NAME)
             .timeout(5000);
+
+        // Set notification category if provided (freedesktop.org spec)
+        // This allows users to configure different notification behaviors per category
+        if let Some(cat) = category {
+            notification.hint(Hint::Category(cat.to_string()));
+        }
 
         if let Some(url) = url {
             notification.action("default", "Open Stream");
@@ -74,6 +86,7 @@ impl DesktopNotifier {
         title: &str,
         message: &str,
         url: Option<&str>,
+        _category: Option<&str>,
     ) -> anyhow::Result<()> {
         // On macOS and Windows, we'll use a simple approach
         // In a full implementation, you might want to use native APIs
@@ -114,6 +127,15 @@ impl DesktopNotifier {
     }
 }
 
+/// Notification categories (freedesktop.org spec)
+/// These allow users to configure different behaviors per notification type at the OS level
+mod categories {
+    /// Category for "stream went live" notifications
+    pub const STREAM_LIVE: &str = "presence.online";
+    /// Category for "category changed" notifications
+    pub const CATEGORY_CHANGE: &str = "category.changed";
+}
+
 impl Notifier for DesktopNotifier {
     fn stream_live(&self, stream: &Stream) -> anyhow::Result<()> {
         if !self.enabled || !self.notify_on_live {
@@ -128,11 +150,28 @@ impl Notifier for DesktopNotifier {
         };
 
         let url = format!("https://twitch.tv/{}", stream.user_login);
-        self.send_notification(&title, &message, Some(&url))
+        self.send_notification(&title, &message, Some(&url), Some(categories::STREAM_LIVE))
+    }
+
+    fn category_changed(&self, stream: &Stream, old_category: &str) -> anyhow::Result<()> {
+        if !self.enabled || !self.notify_on_category {
+            return Ok(());
+        }
+
+        let title = format!("{} changed category", stream.user_name);
+        let message = format!("{} → {}", old_category, stream.game_name);
+
+        let url = format!("https://twitch.tv/{}", stream.user_login);
+        self.send_notification(
+            &title,
+            &message,
+            Some(&url),
+            Some(categories::CATEGORY_CHANGE),
+        )
     }
 
     fn error(&self, message: &str) -> anyhow::Result<()> {
-        self.send_notification(APP_NAME, message, None)
+        self.send_notification(APP_NAME, message, None, None)
     }
 }
 
@@ -167,6 +206,7 @@ pub mod mock {
     #[derive(Debug, Clone, PartialEq)]
     pub enum NotificationType {
         StreamLive,
+        CategoryChange,
         Error,
     }
 
@@ -226,6 +266,22 @@ pub mod mock {
                 .unwrap()
                 .push(RecordedNotification {
                     notification_type: NotificationType::StreamLive,
+                    title,
+                    message,
+                });
+
+            Ok(())
+        }
+
+        fn category_changed(&self, stream: &Stream, old_category: &str) -> anyhow::Result<()> {
+            let title = format!("{} changed category", stream.user_name);
+            let message = format!("{} → {}", old_category, stream.game_name);
+
+            self.notifications
+                .write()
+                .unwrap()
+                .push(RecordedNotification {
+                    notification_type: NotificationType::CategoryChange,
                     title,
                     message,
                 });
@@ -329,15 +385,54 @@ mod tests {
         assert_eq!(notifier.notification_count(), 0);
     }
 
+    #[test]
+    fn recording_notifier_records_category_change() {
+        let notifier = RecordingNotifier::new();
+        let stream = make_stream("TestStreamer", "Minecraft", "Building a castle!");
+
+        notifier.category_changed(&stream, "Fortnite").unwrap();
+
+        let notifications = notifier.get_notifications();
+        assert_eq!(notifications.len(), 1);
+        assert_eq!(
+            notifications[0].notification_type,
+            NotificationType::CategoryChange
+        );
+        assert!(notifications[0].title.contains("TestStreamer"));
+        assert!(notifications[0].message.contains("Fortnite"));
+        assert!(notifications[0].message.contains("Minecraft"));
+    }
+
+    #[test]
+    fn category_change_shows_arrow() {
+        let notifier = RecordingNotifier::new();
+        let stream = make_stream("Streamer", "New Game", "Title");
+
+        notifier.category_changed(&stream, "Old Game").unwrap();
+
+        let notifications = notifier.get_notifications();
+        assert!(notifications[0].message.contains("→"));
+        assert_eq!(notifications[0].message, "Old Game → New Game");
+    }
+
     // === DesktopNotifier tests ===
 
     #[test]
     fn desktop_notifier_respects_notify_on_live_flag() {
-        let notifier = DesktopNotifier::new(false);
+        let notifier = DesktopNotifier::new(false, false);
 
         let stream = make_stream("Test", "Game", "Title");
         // This should not send a notification (and not error)
         notifier.stream_live(&stream).unwrap();
+    }
+
+    #[test]
+    fn desktop_notifier_respects_notify_on_category_flag() {
+        let notifier = DesktopNotifier::new(true, false);
+
+        let stream = make_stream("Test", "Game", "Title");
+        // This should not send a notification (and not error)
+        notifier.category_changed(&stream, "Old Game").unwrap();
     }
 
     // === truncate tests ===
