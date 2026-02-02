@@ -161,6 +161,15 @@ make test    # Run tests
 make build   # Build check
 ```
 
+## Definition of Done
+
+Before considering any code change complete:
+
+1. **Formatting**: Run `cargo fmt` - code must be formatted
+2. **Linting**: Run `make lint` - no clippy warnings (warnings are errors in CI)
+3. **Tests**: Run `make test` - all tests must pass
+4. **No dead code**: Remove unused code rather than using `#[allow(dead_code)]`
+
 ## Versioning & Releases
 
 Version is set in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`.

@@ -33,28 +33,48 @@ impl DesktopNotifier {
         }
     }
 
-    /// Enables or disables all notifications
-    pub fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = enabled;
-    }
-
     /// Platform-specific notification sending
     #[cfg(target_os = "linux")]
-    fn send_notification(&self, title: &str, message: &str) -> anyhow::Result<()> {
+    fn send_notification(
+        &self,
+        title: &str,
+        message: &str,
+        url: Option<&str>,
+    ) -> anyhow::Result<()> {
         use notify_rust::Notification;
 
-        Notification::new()
+        let mut notification = Notification::new();
+        notification
             .summary(title)
             .body(message)
             .appname(APP_NAME)
-            .timeout(5000)
-            .show()?;
+            .timeout(5000);
+
+        if let Some(url) = url {
+            notification.action("default", "Open Stream");
+            let handle = notification.show()?;
+            let url = url.to_string();
+            std::thread::spawn(move || {
+                handle.wait_for_action(|action| {
+                    if action == "default" {
+                        let _ = open::that(&url);
+                    }
+                });
+            });
+        } else {
+            notification.show()?;
+        }
 
         Ok(())
     }
 
     #[cfg(not(target_os = "linux"))]
-    fn send_notification(&self, title: &str, message: &str) -> anyhow::Result<()> {
+    fn send_notification(
+        &self,
+        title: &str,
+        message: &str,
+        url: Option<&str>,
+    ) -> anyhow::Result<()> {
         // On macOS and Windows, we'll use a simple approach
         // In a full implementation, you might want to use native APIs
         tracing::info!("Notification: {} - {}", title, message);
@@ -62,6 +82,8 @@ impl DesktopNotifier {
         // Try to use the system notification mechanism
         #[cfg(target_os = "macos")]
         {
+            // macOS notifications via osascript don't support click actions directly
+            // We show the notification but can't make it clickable without more native code
             let _ = std::process::Command::new("osascript")
                 .args([
                     "-e",
@@ -71,6 +93,11 @@ impl DesktopNotifier {
                     ),
                 ])
                 .output();
+
+            // Log the URL so users know what stream went live
+            if let Some(url) = url {
+                tracing::info!("Stream URL: {}", url);
+            }
         }
 
         #[cfg(target_os = "windows")]
@@ -78,6 +105,9 @@ impl DesktopNotifier {
             // Windows toast notifications would require additional setup
             // For now, just log
             tracing::info!("Windows notification: {} - {}", title, message);
+            if let Some(url) = url {
+                tracing::info!("Stream URL: {}", url);
+            }
         }
 
         Ok(())
@@ -97,11 +127,12 @@ impl Notifier for DesktopNotifier {
             stream.game_name.clone()
         };
 
-        self.send_notification(&title, &message)
+        let url = format!("https://twitch.tv/{}", stream.user_login);
+        self.send_notification(&title, &message, Some(&url))
     }
 
     fn error(&self, message: &str) -> anyhow::Result<()> {
-        self.send_notification(APP_NAME, message)
+        self.send_notification(APP_NAME, message, None)
     }
 }
 
@@ -162,7 +193,10 @@ pub mod mock {
         }
 
         /// Returns notifications of a specific type
-        pub fn get_by_type(&self, notification_type: NotificationType) -> Vec<RecordedNotification> {
+        pub fn get_by_type(
+            &self,
+            notification_type: NotificationType,
+        ) -> Vec<RecordedNotification> {
             self.notifications
                 .read()
                 .unwrap()
@@ -187,42 +221,28 @@ pub mod mock {
                 stream.game_name.clone()
             };
 
-            self.notifications.write().unwrap().push(RecordedNotification {
-                notification_type: NotificationType::StreamLive,
-                title,
-                message,
-            });
+            self.notifications
+                .write()
+                .unwrap()
+                .push(RecordedNotification {
+                    notification_type: NotificationType::StreamLive,
+                    title,
+                    message,
+                });
 
             Ok(())
         }
 
         fn error(&self, message: &str) -> anyhow::Result<()> {
-            self.notifications.write().unwrap().push(RecordedNotification {
-                notification_type: NotificationType::Error,
-                title: "Twitch Tray".to_string(),
-                message: message.to_string(),
-            });
+            self.notifications
+                .write()
+                .unwrap()
+                .push(RecordedNotification {
+                    notification_type: NotificationType::Error,
+                    title: "Twitch Tray".to_string(),
+                    message: message.to_string(),
+                });
 
-            Ok(())
-        }
-    }
-
-    /// Silent notifier that does nothing (for tests that don't care about notifications)
-    #[derive(Debug, Default, Clone)]
-    pub struct SilentNotifier;
-
-    impl SilentNotifier {
-        pub fn new() -> Self {
-            Self
-        }
-    }
-
-    impl Notifier for SilentNotifier {
-        fn stream_live(&self, _stream: &Stream) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        fn error(&self, _message: &str) -> anyhow::Result<()> {
             Ok(())
         }
     }
@@ -230,8 +250,8 @@ pub mod mock {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::mock::{NotificationType, RecordingNotifier};
+    use super::*;
     use chrono::{Duration, Utc};
 
     fn make_stream(user_name: &str, game_name: &str, title: &str) -> Stream {
@@ -261,7 +281,10 @@ mod tests {
 
         let notifications = notifier.get_notifications();
         assert_eq!(notifications.len(), 1);
-        assert_eq!(notifications[0].notification_type, NotificationType::StreamLive);
+        assert_eq!(
+            notifications[0].notification_type,
+            NotificationType::StreamLive
+        );
         assert!(notifications[0].title.contains("TestStreamer"));
         assert!(notifications[0].message.contains("Minecraft"));
     }
@@ -309,16 +332,6 @@ mod tests {
     // === DesktopNotifier tests ===
 
     #[test]
-    fn desktop_notifier_respects_enabled_flag() {
-        let mut notifier = DesktopNotifier::new(true);
-        notifier.set_enabled(false);
-
-        let stream = make_stream("Test", "Game", "Title");
-        // This should not send a notification (and not error)
-        notifier.stream_live(&stream).unwrap();
-    }
-
-    #[test]
     fn desktop_notifier_respects_notify_on_live_flag() {
         let notifier = DesktopNotifier::new(false);
 
@@ -336,7 +349,10 @@ mod tests {
 
     #[test]
     fn truncate_long_string() {
-        assert_eq!(truncate("This is a very long title that should be truncated", 20), "This is a very lo...");
+        assert_eq!(
+            truncate("This is a very long title that should be truncated", 20),
+            "This is a very lo..."
+        );
     }
 
     #[test]

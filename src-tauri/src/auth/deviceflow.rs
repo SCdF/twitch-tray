@@ -42,32 +42,24 @@ pub struct DeviceCodeResponse {
 
 /// Response from the token request
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 struct TokenResponse {
     access_token: String,
     refresh_token: String,
     expires_in: i64,
     scope: Vec<String>,
-    token_type: String,
 }
 
 /// Error response from Twitch
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 struct ErrorResponse {
-    status: Option<i64>,
     message: String,
 }
 
 /// Response from token validation
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 pub struct ValidateResponse {
-    pub client_id: String,
     pub login: String,
-    pub scopes: Vec<String>,
     pub user_id: String,
-    pub expires_in: i64,
 }
 
 /// OAuth Device Code Flow handler

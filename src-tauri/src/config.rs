@@ -49,7 +49,6 @@ impl Default for Config {
 /// Configuration manager
 pub struct ConfigManager {
     config: RwLock<Config>,
-    file_path: PathBuf,
 }
 
 impl ConfigManager {
@@ -61,10 +60,11 @@ impl ConfigManager {
 
         std::fs::create_dir_all(&config_dir).context("Failed to create config directory")?;
 
-        let file_path = config_dir.join(CONFIG_FILE);
+        let config_file = config_dir.join(CONFIG_FILE);
 
-        let config = if file_path.exists() {
-            let data = std::fs::read_to_string(&file_path).context("Failed to read config file")?;
+        let config = if config_file.exists() {
+            let data =
+                std::fs::read_to_string(&config_file).context("Failed to read config file")?;
             serde_json::from_str(&data).unwrap_or_default()
         } else {
             Config::default()
@@ -72,26 +72,12 @@ impl ConfigManager {
 
         Ok(Self {
             config: RwLock::new(config),
-            file_path,
         })
     }
 
     /// Gets a copy of the current configuration
     pub fn get(&self) -> Config {
         self.config.read().unwrap().clone()
-    }
-
-    /// Saves the configuration to disk
-    pub fn save(&self) -> Result<()> {
-        let config = self.config.read().unwrap();
-        let data = serde_json::to_string_pretty(&*config).context("Failed to serialize config")?;
-        std::fs::write(&self.file_path, data).context("Failed to write config file")?;
-        Ok(())
-    }
-
-    /// Returns the path to the config file
-    pub fn file_path(&self) -> &PathBuf {
-        &self.file_path
     }
 
     /// Returns the config directory path

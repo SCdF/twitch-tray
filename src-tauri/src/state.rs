@@ -15,7 +15,6 @@ pub enum ChangeType {
 /// Result of updating followed streams
 pub struct StreamUpdateResult {
     pub newly_live: Vec<Stream>,
-    pub went_offline: Vec<Stream>,
 }
 
 /// Application state
@@ -87,41 +86,21 @@ impl AppState {
         self.inner.read().await.authenticated
     }
 
-    /// Returns the authenticated user's ID
-    pub async fn get_user_id(&self) -> String {
-        self.inner.read().await.user_id.clone()
-    }
-
-    /// Returns the authenticated user's login
-    pub async fn get_user_login(&self) -> String {
-        self.inner.read().await.user_login.clone()
-    }
-
     /// Updates the followed live streams and returns changes
     pub async fn set_followed_streams(&self, streams: Vec<Stream>) -> StreamUpdateResult {
         let mut state = self.inner.write().await;
 
-        // Build maps for comparison
+        // Build set for comparison
         let old_by_id: HashSet<_> = state
             .followed_streams
             .iter()
             .map(|s| s.user_id.clone())
             .collect();
 
-        let new_by_id: HashSet<_> = streams.iter().map(|s| s.user_id.clone()).collect();
-
         // Find newly live streams
         let newly_live: Vec<_> = streams
             .iter()
             .filter(|s| !old_by_id.contains(&s.user_id))
-            .cloned()
-            .collect();
-
-        // Find streams that went offline
-        let went_offline: Vec<_> = state
-            .followed_streams
-            .iter()
-            .filter(|s| !new_by_id.contains(&s.user_id))
             .cloned()
             .collect();
 
@@ -140,10 +119,7 @@ impl AppState {
 
         self.notify_change(ChangeType::FollowedStreams);
 
-        StreamUpdateResult {
-            newly_live,
-            went_offline,
-        }
+        StreamUpdateResult { newly_live }
     }
 
     /// Returns the current followed live streams
@@ -175,11 +151,6 @@ impl AppState {
     pub async fn set_followed_channel_ids(&self, ids: Vec<String>) {
         let mut state = self.inner.write().await;
         state.followed_channel_ids = ids;
-    }
-
-    /// Returns the list of followed channel IDs
-    pub async fn get_followed_channel_ids(&self) -> Vec<String> {
-        self.inner.read().await.followed_channel_ids.clone()
     }
 
     /// Clears all state (used on logout)
@@ -254,32 +225,10 @@ mod tests {
 
         // Update: both A and B are live
         let stream_b = make_stream("b", "StreamerB");
-        let result = state
-            .set_followed_streams(vec![stream_a, stream_b])
-            .await;
+        let result = state.set_followed_streams(vec![stream_a, stream_b]).await;
 
         assert_eq!(result.newly_live.len(), 1);
         assert_eq!(result.newly_live[0].user_id, "b");
-        assert!(result.went_offline.is_empty());
-    }
-
-    #[tokio::test]
-    async fn went_offline_detected() {
-        let state = AppState::new();
-
-        // Initial state: A and B are live
-        let stream_a = make_stream("a", "StreamerA");
-        let stream_b = make_stream("b", "StreamerB");
-        state
-            .set_followed_streams(vec![stream_a.clone(), stream_b.clone()])
-            .await;
-
-        // Update: only A is live (B went offline)
-        let result = state.set_followed_streams(vec![stream_a]).await;
-
-        assert!(result.newly_live.is_empty());
-        assert_eq!(result.went_offline.len(), 1);
-        assert_eq!(result.went_offline[0].user_id, "b");
     }
 
     #[tokio::test]
@@ -298,7 +247,6 @@ mod tests {
         let result = state.set_followed_streams(vec![stream_a, stream_b]).await;
 
         assert!(result.newly_live.is_empty());
-        assert!(result.went_offline.is_empty());
     }
 
     #[tokio::test]
@@ -309,12 +257,9 @@ mod tests {
         let stream_b = make_stream("b", "StreamerB");
 
         // First load - all streams are "newly live"
-        let result = state
-            .set_followed_streams(vec![stream_a, stream_b])
-            .await;
+        let result = state.set_followed_streams(vec![stream_a, stream_b]).await;
 
         assert_eq!(result.newly_live.len(), 2);
-        assert!(result.went_offline.is_empty());
     }
 
     #[tokio::test]
@@ -328,20 +273,6 @@ mod tests {
         let result = state.set_followed_streams(vec![stream_a]).await;
 
         assert_eq!(result.newly_live.len(), 1);
-        assert!(result.went_offline.is_empty());
-    }
-
-    #[tokio::test]
-    async fn streams_to_empty() {
-        let state = AppState::new();
-
-        let stream_a = make_stream("a", "StreamerA");
-        state.set_followed_streams(vec![stream_a]).await;
-
-        let result = state.set_followed_streams(vec![]).await;
-
-        assert!(result.newly_live.is_empty());
-        assert_eq!(result.went_offline.len(), 1);
     }
 
     // === tracked_categories tests ===
@@ -353,15 +284,19 @@ mod tests {
         let stream1 = make_stream_with_game("1", "game1", "Fortnite");
         let stream2 = make_stream_with_game("2", "game2", "Minecraft");
 
-        state
-            .set_followed_streams(vec![stream1, stream2])
-            .await;
+        state.set_followed_streams(vec![stream1, stream2]).await;
 
         // Verify categories are tracked (accessing internal state for test)
         let inner = state.inner.read().await;
         assert_eq!(inner.tracked_categories.len(), 2);
-        assert_eq!(inner.tracked_categories.get("game1"), Some(&"Fortnite".to_string()));
-        assert_eq!(inner.tracked_categories.get("game2"), Some(&"Minecraft".to_string()));
+        assert_eq!(
+            inner.tracked_categories.get("game1"),
+            Some(&"Fortnite".to_string())
+        );
+        assert_eq!(
+            inner.tracked_categories.get("game2"),
+            Some(&"Minecraft".to_string())
+        );
     }
 
     #[tokio::test]
@@ -378,7 +313,10 @@ mod tests {
         // Only the new category should be tracked
         let inner = state.inner.read().await;
         assert_eq!(inner.tracked_categories.len(), 1);
-        assert_eq!(inner.tracked_categories.get("game2"), Some(&"Minecraft".to_string()));
+        assert_eq!(
+            inner.tracked_categories.get("game2"),
+            Some(&"Minecraft".to_string())
+        );
         assert!(inner.tracked_categories.get("game1").is_none());
     }
 
@@ -408,8 +346,6 @@ mod tests {
             .await;
 
         assert!(state.is_authenticated().await);
-        assert_eq!(state.get_user_id().await, "user123");
-        assert_eq!(state.get_user_login().await, "testuser");
     }
 
     #[tokio::test]
@@ -429,6 +365,5 @@ mod tests {
 
         assert!(!state.is_authenticated().await);
         assert!(state.get_followed_streams().await.is_empty());
-        assert_eq!(state.get_user_id().await, "");
     }
 }

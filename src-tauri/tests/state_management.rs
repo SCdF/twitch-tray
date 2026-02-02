@@ -14,16 +14,14 @@ async fn state_tracks_newly_live_streams() {
 
     // New stream goes live
     let stream_b = common::make_stream("b", "StreamerB", 2000);
-    let result = state
-        .set_followed_streams(vec![stream_a, stream_b])
-        .await;
+    let result = state.set_followed_streams(vec![stream_a, stream_b]).await;
 
     assert_eq!(result.newly_live.len(), 1);
     assert_eq!(result.newly_live[0].user_id, "b");
 }
 
 #[tokio::test]
-async fn state_tracks_streams_going_offline() {
+async fn state_tracks_no_new_streams_when_unchanged() {
     let state = AppState::new();
 
     // Both streams live
@@ -33,12 +31,10 @@ async fn state_tracks_streams_going_offline() {
         .set_followed_streams(vec![stream_a.clone(), stream_b.clone()])
         .await;
 
-    // Stream B goes offline
-    let result = state.set_followed_streams(vec![stream_a]).await;
+    // Same streams again
+    let result = state.set_followed_streams(vec![stream_a, stream_b]).await;
 
     assert!(result.newly_live.is_empty());
-    assert_eq!(result.went_offline.len(), 1);
-    assert_eq!(result.went_offline[0].user_id, "b");
 }
 
 #[tokio::test]
@@ -54,8 +50,6 @@ async fn state_authentication_flow() {
         .await;
 
     assert!(state.is_authenticated().await);
-    assert_eq!(state.get_user_id().await, "user123");
-    assert_eq!(state.get_user_login().await, "testuser");
 
     // Clear state
     state.clear().await;
@@ -67,7 +61,7 @@ async fn state_authentication_flow() {
 #[tokio::test]
 async fn state_change_notification() {
     let state = AppState::new();
-    let mut rx = state.subscribe();
+    let rx = state.subscribe();
 
     // Make a change
     state
@@ -89,15 +83,4 @@ async fn scheduled_streams_storage() {
 
     assert!(state.schedules_loaded().await);
     assert_eq!(state.get_scheduled_streams().await.len(), 5);
-}
-
-#[tokio::test]
-async fn followed_channel_ids_storage() {
-    let state = AppState::new();
-
-    let ids = vec!["1".to_string(), "2".to_string(), "3".to_string()];
-    state.set_followed_channel_ids(ids.clone()).await;
-
-    let retrieved = state.get_followed_channel_ids().await;
-    assert_eq!(retrieved, ids);
 }

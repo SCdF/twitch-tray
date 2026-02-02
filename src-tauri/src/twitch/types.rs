@@ -71,11 +71,6 @@ pub struct ScheduledStream {
 }
 
 impl ScheduledStream {
-    /// Returns the duration until the scheduled stream starts
-    pub fn time_until(&self) -> chrono::Duration {
-        self.start_time.signed_duration_since(Utc::now())
-    }
-
     /// Returns a human-readable start time
     pub fn format_start_time(&self) -> String {
         let now = Local::now();
@@ -111,14 +106,6 @@ pub struct FollowedChannel {
 pub struct Pagination {
     #[serde(default)]
     pub cursor: Option<String>,
-}
-
-/// Generic Helix API response wrapper
-#[derive(Debug, Clone, Deserialize)]
-pub struct HelixResponse<T> {
-    pub data: T,
-    #[serde(default)]
-    pub pagination: Option<Pagination>,
 }
 
 /// Followed channels response
@@ -171,16 +158,6 @@ pub struct ScheduleData {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScheduleResponse {
     pub data: ScheduleData,
-}
-
-/// Token validation response
-#[derive(Debug, Clone, Deserialize)]
-pub struct ValidateResponse {
-    pub client_id: String,
-    pub login: String,
-    pub scopes: Vec<String>,
-    pub user_id: String,
-    pub expires_in: i64,
 }
 
 #[cfg(test)]
@@ -326,28 +303,6 @@ mod tests {
     fn duration_zero() {
         let stream = stream_started_at(Utc::now());
         assert_eq!(stream.format_duration(), "0m");
-    }
-
-    // === ScheduledStream time_until tests ===
-
-    #[test]
-    fn time_until_future() {
-        let start = Utc::now() + Duration::hours(2);
-        let scheduled = scheduled_at(start);
-        let until = scheduled.time_until();
-
-        // Should be approximately 2 hours (allow some tolerance)
-        assert!(until.num_minutes() >= 119 && until.num_minutes() <= 121);
-    }
-
-    #[test]
-    fn time_until_past() {
-        let start = Utc::now() - Duration::hours(1);
-        let scheduled = scheduled_at(start);
-        let until = scheduled.time_until();
-
-        // Should be negative (already started)
-        assert!(until.num_minutes() < 0);
     }
 
     // === format_start_time tests ===

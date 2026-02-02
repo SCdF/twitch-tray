@@ -12,19 +12,8 @@ use serde::de::DeserializeOwned;
 /// This abstraction allows easy mocking of HTTP calls in tests.
 #[async_trait]
 pub trait HttpClient: Send + Sync {
-    /// Makes a GET request and deserializes the JSON response
-    async fn get_json<T: DeserializeOwned + Send>(
-        &self,
-        url: &str,
-        headers: &HeaderMap,
-    ) -> Result<T>;
-
     /// Makes a GET request and returns the raw response for special handling
-    async fn get_response(
-        &self,
-        url: &str,
-        headers: &HeaderMap,
-    ) -> Result<HttpResponse>;
+    async fn get_response(&self, url: &str, headers: &HeaderMap) -> Result<HttpResponse>;
 }
 
 /// Response from an HTTP request
@@ -43,6 +32,11 @@ impl HttpResponse {
     /// Returns true if status is 404
     pub fn is_not_found(&self) -> bool {
         self.status == 404
+    }
+
+    /// Returns true if status is 401 Unauthorized
+    pub fn is_unauthorized(&self) -> bool {
+        self.status == 401
     }
 
     /// Deserializes the body as JSON
@@ -74,33 +68,7 @@ impl Default for ReqwestClient {
 
 #[async_trait]
 impl HttpClient for ReqwestClient {
-    async fn get_json<T: DeserializeOwned + Send>(
-        &self,
-        url: &str,
-        headers: &HeaderMap,
-    ) -> Result<T> {
-        let response = self
-            .inner
-            .get(url)
-            .headers(headers.clone())
-            .send()
-            .await
-            .context("Failed to send request")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("HTTP error {}: {}", status, body);
-        }
-
-        response.json().await.context("Failed to parse response")
-    }
-
-    async fn get_response(
-        &self,
-        url: &str,
-        headers: &HeaderMap,
-    ) -> Result<HttpResponse> {
+    async fn get_response(&self, url: &str, headers: &HeaderMap) -> Result<HttpResponse> {
         let response = self
             .inner
             .get(url)
@@ -153,13 +121,13 @@ pub mod mock {
 
         /// Configures a response for a URL
         pub fn on_get(self, url: &str, status: u16, body: impl Into<String>) -> Self {
-            self.responses
-                .write()
-                .unwrap()
-                .insert(url.to_string(), MockResponse {
+            self.responses.write().unwrap().insert(
+                url.to_string(),
+                MockResponse {
                     status,
                     body: body.into(),
-                });
+                },
+            );
             self
         }
 
@@ -178,50 +146,11 @@ pub mod mock {
         pub fn get_requests(&self) -> Vec<RecordedRequest> {
             self.requests.read().unwrap().clone()
         }
-
-        /// Returns the number of requests made
-        pub fn request_count(&self) -> usize {
-            self.requests.read().unwrap().len()
-        }
-
-        /// Clears all recorded requests
-        pub fn clear_requests(&self) {
-            self.requests.write().unwrap().clear();
-        }
     }
 
     #[async_trait]
     impl HttpClient for MockHttpClient {
-        async fn get_json<T: DeserializeOwned + Send>(
-            &self,
-            url: &str,
-            headers: &HeaderMap,
-        ) -> Result<T> {
-            // Record the request
-            self.requests.write().unwrap().push(RecordedRequest {
-                url: url.to_string(),
-                headers: headers.clone(),
-            });
-
-            // Find matching response
-            let responses = self.responses.read().unwrap();
-            let mock_response = responses
-                .get(url)
-                .ok_or_else(|| anyhow::anyhow!("No mock response configured for URL: {}", url))?;
-
-            if mock_response.status >= 400 {
-                anyhow::bail!("HTTP error {}: {}", mock_response.status, mock_response.body);
-            }
-
-            serde_json::from_str(&mock_response.body)
-                .context("Failed to parse mock response")
-        }
-
-        async fn get_response(
-            &self,
-            url: &str,
-            headers: &HeaderMap,
-        ) -> Result<HttpResponse> {
+        async fn get_response(&self, url: &str, headers: &HeaderMap) -> Result<HttpResponse> {
             // Record the request
             self.requests.write().unwrap().push(RecordedRequest {
                 url: url.to_string(),
@@ -244,8 +173,8 @@ pub mod mock {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::mock::MockHttpClient;
+    use super::*;
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -261,14 +190,14 @@ mod tests {
             value: 42,
         };
 
-        let client = MockHttpClient::new()
-            .on_get_json("https://api.example.com/data", &data);
+        let client = MockHttpClient::new().on_get_json("https://api.example.com/data", &data);
 
-        let result: TestData = client
-            .get_json("https://api.example.com/data", &HeaderMap::new())
+        let response = client
+            .get_response("https://api.example.com/data", &HeaderMap::new())
             .await
             .unwrap();
 
+        let result: TestData = response.json().unwrap();
         assert_eq!(result, data);
     }
 
@@ -276,37 +205,26 @@ mod tests {
     async fn mock_client_returns_error_for_unknown_url() {
         let client = MockHttpClient::new();
 
-        let result: Result<TestData> = client
-            .get_json("https://api.example.com/unknown", &HeaderMap::new())
+        let result = client
+            .get_response("https://api.example.com/unknown", &HeaderMap::new())
             .await;
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No mock response configured"));
-    }
-
-    #[tokio::test]
-    async fn mock_client_returns_error_for_error_status() {
-        let client = MockHttpClient::new()
-            .on_get("https://api.example.com/error", 500, "Internal Server Error");
-
-        let result: Result<TestData> = client
-            .get_json("https://api.example.com/error", &HeaderMap::new())
-            .await;
-
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("500"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No mock response configured"));
     }
 
     #[tokio::test]
     async fn mock_client_records_requests() {
-        let client = MockHttpClient::new()
-            .on_get("https://api.example.com/test", 200, "{}");
+        let client = MockHttpClient::new().on_get("https://api.example.com/test", 200, "{}");
 
         let mut headers = HeaderMap::new();
         headers.insert("Authorization", "Bearer token".parse().unwrap());
 
-        let _: serde_json::Value = client
-            .get_json("https://api.example.com/test", &headers)
+        let _ = client
+            .get_response("https://api.example.com/test", &headers)
             .await
             .unwrap();
 
@@ -318,8 +236,7 @@ mod tests {
 
     #[tokio::test]
     async fn mock_client_get_response_returns_404() {
-        let client = MockHttpClient::new()
-            .on_get_not_found("https://api.example.com/missing");
+        let client = MockHttpClient::new().on_get_not_found("https://api.example.com/missing");
 
         let response = client
             .get_response("https://api.example.com/missing", &HeaderMap::new())
@@ -332,16 +249,28 @@ mod tests {
 
     #[test]
     fn http_response_is_success() {
-        let response = HttpResponse { status: 200, body: "{}".to_string() };
+        let response = HttpResponse {
+            status: 200,
+            body: "{}".to_string(),
+        };
         assert!(response.is_success());
 
-        let response = HttpResponse { status: 201, body: "{}".to_string() };
+        let response = HttpResponse {
+            status: 201,
+            body: "{}".to_string(),
+        };
         assert!(response.is_success());
 
-        let response = HttpResponse { status: 404, body: "{}".to_string() };
+        let response = HttpResponse {
+            status: 404,
+            body: "{}".to_string(),
+        };
         assert!(!response.is_success());
 
-        let response = HttpResponse { status: 500, body: "{}".to_string() };
+        let response = HttpResponse {
+            status: 500,
+            body: "{}".to_string(),
+        };
         assert!(!response.is_success());
     }
 

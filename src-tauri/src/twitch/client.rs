@@ -5,6 +5,7 @@ use tokio::sync::RwLock;
 
 use super::http::{HttpClient, ReqwestClient};
 use super::types::*;
+use super::ApiError;
 
 const HELIX_BASE_URL: &str = "https://api.twitch.tv/helix";
 
@@ -31,16 +32,6 @@ impl TwitchClient<ReqwestClient> {
 }
 
 impl<H: HttpClient> TwitchClient<H> {
-    /// Creates a new Twitch API client with a custom HTTP implementation
-    pub fn with_http_client(client_id: String, http: H) -> Self {
-        Self {
-            http,
-            client_id,
-            access_token: Arc::new(RwLock::new(None)),
-            user_id: Arc::new(RwLock::new(None)),
-        }
-    }
-
     /// Sets the access token for API requests
     pub async fn set_access_token(&self, token: String) {
         let mut guard = self.access_token.write().await;
@@ -56,11 +47,6 @@ impl<H: HttpClient> TwitchClient<H> {
     /// Gets the authenticated user's ID
     pub async fn get_user_id(&self) -> Option<String> {
         self.user_id.read().await.clone()
-    }
-
-    /// Gets the client ID
-    pub fn get_client_id(&self) -> &str {
-        &self.client_id
     }
 
     /// Builds the headers for an authenticated request
@@ -83,21 +69,49 @@ impl<H: HttpClient> TwitchClient<H> {
     }
 
     /// Makes an authenticated GET request to the Helix API
-    async fn get<T: serde::de::DeserializeOwned + Send>(&self, endpoint: &str) -> Result<T> {
-        let headers = self.build_headers().await?;
-        let url = format!("{}{}", HELIX_BASE_URL, endpoint);
-        self.http.get_json(&url, &headers).await
-    }
-
-    /// Makes an authenticated GET request that may return 404
-    async fn get_optional<T: serde::de::DeserializeOwned + Send>(
+    ///
+    /// Returns `ApiError::Unauthorized` for 401 responses, allowing callers
+    /// to handle token refresh and retry.
+    async fn get<T: serde::de::DeserializeOwned + Send>(
         &self,
         endpoint: &str,
-    ) -> Result<Option<T>> {
+    ) -> Result<T, ApiError> {
         let headers = self.build_headers().await?;
         let url = format!("{}{}", HELIX_BASE_URL, endpoint);
 
         let response = self.http.get_response(&url, &headers).await?;
+
+        if response.is_unauthorized() {
+            return Err(ApiError::Unauthorized);
+        }
+
+        if !response.is_success() {
+            return Err(ApiError::Other(anyhow::anyhow!(
+                "API error {}: {}",
+                response.status,
+                response.body
+            )));
+        }
+
+        Ok(response.json()?)
+    }
+
+    /// Makes an authenticated GET request that may return 404
+    ///
+    /// Returns `ApiError::Unauthorized` for 401 responses, allowing callers
+    /// to handle token refresh and retry. Returns `Ok(None)` for 404.
+    async fn get_optional<T: serde::de::DeserializeOwned + Send>(
+        &self,
+        endpoint: &str,
+    ) -> Result<Option<T>, ApiError> {
+        let headers = self.build_headers().await?;
+        let url = format!("{}{}", HELIX_BASE_URL, endpoint);
+
+        let response = self.http.get_response(&url, &headers).await?;
+
+        if response.is_unauthorized() {
+            return Err(ApiError::Unauthorized);
+        }
 
         if response.is_not_found() {
             return Ok(None);
@@ -132,8 +146,14 @@ impl<H: HttpClient + Clone> Clone for TwitchClient<H> {
 // Stream-related methods
 impl<H: HttpClient> TwitchClient<H> {
     /// Gets live streams from channels the user follows
-    pub async fn get_followed_streams(&self) -> Result<Vec<Stream>> {
-        let user_id = self.get_user_id().await.context("User ID not set")?;
+    ///
+    /// Returns `ApiError::Unauthorized` if the token has expired.
+    pub async fn get_followed_streams(&self) -> Result<Vec<Stream>, ApiError> {
+        let user_id = self
+            .get_user_id()
+            .await
+            .context("User ID not set")
+            .map_err(ApiError::Other)?;
 
         let mut all_streams = Vec::new();
         let mut cursor: Option<String> = None;
@@ -163,11 +183,17 @@ impl<H: HttpClient> TwitchClient<H> {
 // Channel-related methods
 impl<H: HttpClient> TwitchClient<H> {
     /// Gets channels the user follows (paginated)
+    ///
+    /// Returns `ApiError::Unauthorized` if the token has expired.
     pub async fn get_followed_channels(
         &self,
         cursor: Option<&str>,
-    ) -> Result<(Vec<FollowedChannel>, Option<String>)> {
-        let user_id = self.get_user_id().await.context("User ID not set")?;
+    ) -> Result<(Vec<FollowedChannel>, Option<String>), ApiError> {
+        let user_id = self
+            .get_user_id()
+            .await
+            .context("User ID not set")
+            .map_err(ApiError::Other)?;
 
         let endpoint = match cursor {
             Some(c) => format!(
@@ -184,7 +210,9 @@ impl<H: HttpClient> TwitchClient<H> {
     }
 
     /// Gets all channels the user follows (handles pagination)
-    pub async fn get_all_followed_channels(&self) -> Result<Vec<FollowedChannel>> {
+    ///
+    /// Returns `ApiError::Unauthorized` if the token has expired.
+    pub async fn get_all_followed_channels(&self) -> Result<Vec<FollowedChannel>, ApiError> {
         let mut all_follows = Vec::new();
         let mut cursor: Option<String> = None;
 
@@ -205,7 +233,9 @@ impl<H: HttpClient> TwitchClient<H> {
 // Schedule-related methods
 impl<H: HttpClient> TwitchClient<H> {
     /// Gets scheduled streams for a broadcaster
-    async fn get_schedule(&self, broadcaster_id: &str) -> Result<Option<ScheduleData>> {
+    ///
+    /// Returns `ApiError::Unauthorized` if the token has expired.
+    async fn get_schedule(&self, broadcaster_id: &str) -> Result<Option<ScheduleData>, ApiError> {
         let endpoint = format!("/schedule?broadcaster_id={}&first=10", broadcaster_id);
 
         let response: Option<ScheduleResponse> = self.get_optional(&endpoint).await?;
@@ -213,10 +243,12 @@ impl<H: HttpClient> TwitchClient<H> {
     }
 
     /// Gets scheduled streams for multiple broadcasters (next 24 hours)
+    ///
+    /// Returns `ApiError::Unauthorized` if the token has expired.
     pub async fn get_scheduled_streams(
         &self,
         broadcaster_ids: &[String],
-    ) -> Result<Vec<ScheduledStream>> {
+    ) -> Result<Vec<ScheduledStream>, ApiError> {
         use chrono::Utc;
 
         let now = Utc::now();
@@ -272,7 +304,11 @@ impl<H: HttpClient> TwitchClient<H> {
     }
 
     /// Gets scheduled streams for all followed channels
-    pub async fn get_scheduled_streams_for_followed(&self) -> Result<Vec<ScheduledStream>> {
+    ///
+    /// Returns `ApiError::Unauthorized` if the token has expired.
+    pub async fn get_scheduled_streams_for_followed(
+        &self,
+    ) -> Result<Vec<ScheduledStream>, ApiError> {
         // First get all followed channels
         let follows = self.get_all_followed_channels().await?;
         tracing::debug!(
@@ -292,6 +328,20 @@ impl<H: HttpClient> TwitchClient<H> {
         tracing::debug!("Found {} scheduled streams", scheduled.len());
 
         Ok(scheduled)
+    }
+}
+
+/// Test-only constructor for dependency injection
+#[cfg(test)]
+impl<H: HttpClient> TwitchClient<H> {
+    /// Creates a new Twitch API client with a custom HTTP implementation
+    pub fn with_http_client(client_id: String, http: H) -> Self {
+        Self {
+            http,
+            client_id,
+            access_token: Arc::new(RwLock::new(None)),
+            user_id: Arc::new(RwLock::new(None)),
+        }
     }
 }
 

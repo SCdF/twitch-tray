@@ -6,12 +6,8 @@ mod auth;
 mod config;
 mod notify;
 mod state;
-mod time;
 mod tray;
 mod twitch;
-
-#[cfg(test)]
-mod testutil;
 
 use std::sync::Arc;
 use tauri::{Listener, Manager};

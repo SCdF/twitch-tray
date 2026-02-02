@@ -9,7 +9,7 @@ use crate::config::ConfigManager;
 use crate::notify::{DesktopNotifier, Notifier};
 use crate::state::AppState;
 use crate::tray::TrayManager;
-use crate::twitch::TwitchClient;
+use crate::twitch::{ApiError, TwitchClient};
 
 /// Main application orchestrator
 pub struct App {
@@ -102,6 +102,29 @@ impl App {
         Ok(())
     }
 
+    /// Attempts to refresh the OAuth token
+    ///
+    /// Called when API calls return 401 Unauthorized, indicating the token
+    /// has expired (e.g., after laptop sleep).
+    async fn try_refresh_token(&self) -> anyhow::Result<()> {
+        tracing::info!("Token expired during API call, attempting refresh...");
+
+        let token = self.store.load_token()?;
+        let flow = DeviceFlow::new(CLIENT_ID.to_string());
+        let new_token = flow.refresh_token(&token.refresh_token).await?;
+
+        // Save the refreshed token
+        self.store.save_token(&new_token)?;
+
+        // Update the client with new credentials
+        self.client
+            .set_access_token(new_token.access_token.clone())
+            .await;
+
+        tracing::info!("Token refreshed successfully");
+        Ok(())
+    }
+
     /// Starts the polling tasks
     pub fn start_polling(self: &Arc<Self>, app_handle: AppHandle) {
         let cfg = self.config.get();
@@ -180,21 +203,40 @@ impl App {
             return;
         }
 
-        match self.client.get_followed_streams().await {
-            Ok(streams) => {
-                let result = self.state.set_followed_streams(streams).await;
-
-                // Notify for newly live streams (only after initial load)
-                if self.initial_load_done.load(Ordering::SeqCst) {
-                    for stream in &result.newly_live {
-                        if let Err(e) = self.notifier.stream_live(stream) {
-                            tracing::error!("Notification error: {}", e);
-                        }
+        let streams = match self.client.get_followed_streams().await {
+            Ok(streams) => streams,
+            Err(ApiError::Unauthorized) => {
+                // Token expired - try to refresh and retry
+                if let Err(e) = self.try_refresh_token().await {
+                    tracing::error!("Failed to refresh token: {}", e);
+                    return;
+                }
+                // Retry the request with new token
+                match self.client.get_followed_streams().await {
+                    Ok(streams) => streams,
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to get followed streams after token refresh: {}",
+                            e
+                        );
+                        return;
                     }
                 }
             }
             Err(e) => {
                 tracing::error!("Failed to get followed streams: {}", e);
+                return;
+            }
+        };
+
+        let result = self.state.set_followed_streams(streams).await;
+
+        // Notify for newly live streams (only after initial load)
+        if self.initial_load_done.load(Ordering::SeqCst) {
+            for stream in &result.newly_live {
+                if let Err(e) = self.notifier.stream_live(stream) {
+                    tracing::error!("Notification error: {}", e);
+                }
             }
         }
     }
@@ -206,14 +248,33 @@ impl App {
 
         tracing::debug!("Fetching scheduled streams...");
 
-        match self.client.get_scheduled_streams_for_followed().await {
-            Ok(scheduled) => {
-                self.state.set_scheduled_streams(scheduled).await;
+        let scheduled = match self.client.get_scheduled_streams_for_followed().await {
+            Ok(scheduled) => scheduled,
+            Err(ApiError::Unauthorized) => {
+                // Token expired - try to refresh and retry
+                if let Err(e) = self.try_refresh_token().await {
+                    tracing::error!("Failed to refresh token: {}", e);
+                    return;
+                }
+                // Retry the request with new token
+                match self.client.get_scheduled_streams_for_followed().await {
+                    Ok(scheduled) => scheduled,
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to get scheduled streams after token refresh: {}",
+                            e
+                        );
+                        return;
+                    }
+                }
             }
             Err(e) => {
                 tracing::error!("Failed to get scheduled streams: {}", e);
+                return;
             }
-        }
+        };
+
+        self.state.set_scheduled_streams(scheduled).await;
     }
 
     /// Handles login request

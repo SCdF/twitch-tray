@@ -5,9 +5,5 @@ pub mod auth;
 pub mod config;
 pub mod notify;
 pub mod state;
-pub mod time;
 pub mod tray;
 pub mod twitch;
-
-#[cfg(test)]
-pub mod testutil;

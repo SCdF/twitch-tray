@@ -1,5 +1,3 @@
-pub mod menu_data;
-
 use std::sync::Arc;
 use tauri::{
     image::Image,
@@ -285,12 +283,7 @@ mod tests {
     use chrono::{Duration, Utc};
 
     /// Helper to create a test stream
-    fn make_stream(
-        user_name: &str,
-        game_name: &str,
-        viewer_count: i64,
-        hours_ago: i64,
-    ) -> Stream {
+    fn make_stream(user_name: &str, game_name: &str, viewer_count: i64, hours_ago: i64) -> Stream {
         Stream {
             id: "123".to_string(),
             user_id: "456".to_string(),
@@ -369,7 +362,10 @@ mod tests {
         let stream = make_stream("Ninja", "Fortnite", 5000, 2);
         let label = format_stream_label(&stream);
 
-        assert!(label.contains("Ninja"), "Label should contain streamer name");
+        assert!(
+            label.contains("Ninja"),
+            "Label should contain streamer name"
+        );
         assert!(label.contains("Fortnite"), "Label should contain game name");
         assert!(label.contains("5k"), "Label should contain viewer count");
         assert!(label.contains("2h"), "Label should contain duration");
@@ -377,7 +373,12 @@ mod tests {
 
     #[test]
     fn format_stream_label_long_game_name() {
-        let stream = make_stream("Streamer", "This Is A Very Long Game Name That Should Be Truncated", 1000, 1);
+        let stream = make_stream(
+            "Streamer",
+            "This Is A Very Long Game Name That Should Be Truncated",
+            1000,
+            1,
+        );
         let label = format_stream_label(&stream);
 
         // Game name should be truncated to 20 chars
