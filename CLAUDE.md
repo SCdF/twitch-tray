@@ -75,9 +75,17 @@ Config file: `~/.config/twitch-tray/config.json`
   "poll_interval_sec": 60,
   "schedule_poll_min": 5,
   "notify_on_live": true,
-  "notify_on_category": true
+  "notify_on_category": true,
+  "notify_max_gap_min": 10
 }
 ```
+
+**Settings:**
+- `poll_interval_sec`: How often to check for live streams (default: 60 seconds)
+- `schedule_poll_min`: How often to check for scheduled streams (default: 5 minutes)
+- `notify_on_live`: Send desktop notifications when streams go live (default: true)
+- `notify_on_category`: Send notifications on category changes (default: true)
+- `notify_max_gap_min`: Maximum gap between refreshes to still send notifications (default: 10 minutes). If the app was asleep/suspended longer than this, notifications are suppressed to avoid a flood of alerts on wake.
 
 **Note**: Client ID is hardcoded in `src/auth/mod.rs`. No user configuration needed.
 

@@ -1,8 +1,9 @@
+use chrono::{DateTime, Utc};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::AppHandle;
-use tokio::sync::watch;
-use tokio::time::{interval, Duration};
+use tokio::sync::{watch, RwLock};
+use tokio::time::Duration;
 
 use crate::auth::{DeviceFlow, Token, TokenStore, CLIENT_ID};
 use crate::config::ConfigManager;
@@ -26,6 +27,10 @@ pub struct App {
     // Cancellation for auth flow
     auth_cancel_tx: watch::Sender<bool>,
     auth_cancel_rx: watch::Receiver<bool>,
+
+    // Last refresh times for sleep-aware polling
+    last_live_refresh: Arc<RwLock<Option<DateTime<Utc>>>>,
+    last_schedule_refresh: Arc<RwLock<Option<DateTime<Utc>>>>,
 }
 
 impl App {
@@ -50,6 +55,8 @@ impl App {
             initial_load_done: AtomicBool::new(false),
             auth_cancel_tx,
             auth_cancel_rx,
+            last_live_refresh: Arc::new(RwLock::new(None)),
+            last_schedule_refresh: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -133,41 +140,98 @@ impl App {
         let app = self.clone();
         let handle = app_handle.clone();
 
-        // Stream polling task
+        let poll_interval_secs = cfg.poll_interval_sec;
+        let notify_max_gap_secs = cfg.notify_max_gap_min * 60;
+
+        // Stream polling task - uses wall-clock time to handle sleep correctly
         tokio::spawn(async move {
-            let mut ticker = interval(Duration::from_secs(cfg.poll_interval_sec));
+            // Use a short tick interval to detect wake-from-sleep quickly
+            let tick_duration = Duration::from_secs(1);
 
             loop {
-                ticker.tick().await;
+                tokio::time::sleep(tick_duration).await;
 
                 if !app.state.is_authenticated().await {
                     continue;
                 }
 
-                app.refresh_followed_streams().await;
-                if let Err(e) = app.tray_manager.rebuild_menu(&handle).await {
-                    tracing::error!("Failed to rebuild menu: {}", e);
+                let now = Utc::now();
+                let last_refresh = *app.last_live_refresh.read().await;
+
+                let should_refresh = match last_refresh {
+                    None => true, // Never refreshed, do it now
+                    Some(last) => {
+                        let elapsed = (now - last).num_seconds();
+                        elapsed >= poll_interval_secs as i64
+                    }
+                };
+
+                if should_refresh {
+                    // Calculate if we should suppress notifications (gap too large)
+                    let suppress_notifications = match last_refresh {
+                        None => false, // First refresh, don't suppress
+                        Some(last) => {
+                            let elapsed = (now - last).num_seconds();
+                            elapsed > notify_max_gap_secs as i64
+                        }
+                    };
+
+                    if suppress_notifications {
+                        tracing::info!(
+                            "Suppressing notifications: refresh gap exceeded {} minutes",
+                            cfg.notify_max_gap_min
+                        );
+                    }
+
+                    app.refresh_followed_streams_with_options(suppress_notifications)
+                        .await;
+
+                    // Update last refresh time
+                    *app.last_live_refresh.write().await = Some(Utc::now());
+
+                    if let Err(e) = app.tray_manager.rebuild_menu(&handle).await {
+                        tracing::error!("Failed to rebuild menu: {}", e);
+                    }
                 }
             }
         });
 
-        // Schedule polling task
+        // Schedule polling task - uses wall-clock time to handle sleep correctly
         let app = self.clone();
         let handle = app_handle.clone();
+        let schedule_poll_secs = cfg.schedule_poll_min * 60;
 
         tokio::spawn(async move {
-            let mut ticker = interval(Duration::from_secs(cfg.schedule_poll_min * 60));
+            // Use a short tick interval to detect wake-from-sleep quickly
+            let tick_duration = Duration::from_secs(1);
 
             loop {
-                ticker.tick().await;
+                tokio::time::sleep(tick_duration).await;
 
                 if !app.state.is_authenticated().await {
                     continue;
                 }
 
-                app.refresh_scheduled_streams().await;
-                if let Err(e) = app.tray_manager.rebuild_menu(&handle).await {
-                    tracing::error!("Failed to rebuild menu: {}", e);
+                let now = Utc::now();
+                let last_refresh = *app.last_schedule_refresh.read().await;
+
+                let should_refresh = match last_refresh {
+                    None => true, // Never refreshed, do it now
+                    Some(last) => {
+                        let elapsed = (now - last).num_seconds();
+                        elapsed >= schedule_poll_secs as i64
+                    }
+                };
+
+                if should_refresh {
+                    app.refresh_scheduled_streams().await;
+
+                    // Update last refresh time
+                    *app.last_schedule_refresh.write().await = Some(Utc::now());
+
+                    if let Err(e) = app.tray_manager.rebuild_menu(&handle).await {
+                        tracing::error!("Failed to rebuild menu: {}", e);
+                    }
                 }
             }
         });
@@ -196,9 +260,18 @@ impl App {
         self.refresh_followed_streams().await;
         self.refresh_scheduled_streams().await;
         self.initial_load_done.store(true, Ordering::SeqCst);
+
+        // Set initial refresh times
+        let now = Utc::now();
+        *self.last_live_refresh.write().await = Some(now);
+        *self.last_schedule_refresh.write().await = Some(now);
     }
 
     async fn refresh_followed_streams(&self) {
+        self.refresh_followed_streams_with_options(false).await;
+    }
+
+    async fn refresh_followed_streams_with_options(&self, suppress_notifications: bool) {
         if self.client.get_user_id().await.is_none() {
             return;
         }
@@ -231,8 +304,8 @@ impl App {
 
         let result = self.state.set_followed_streams(streams).await;
 
-        // Notify for newly live streams (only after initial load)
-        if self.initial_load_done.load(Ordering::SeqCst) {
+        // Notify for newly live streams (only after initial load, and if not suppressed)
+        if self.initial_load_done.load(Ordering::SeqCst) && !suppress_notifications {
             for stream in &result.newly_live {
                 if let Err(e) = self.notifier.stream_live(stream) {
                     tracing::error!("Notification error: {}", e);
@@ -382,6 +455,8 @@ impl Clone for App {
             initial_load_done: AtomicBool::new(self.initial_load_done.load(Ordering::SeqCst)),
             auth_cancel_tx: self.auth_cancel_tx.clone(),
             auth_cancel_rx: self.auth_cancel_rx.clone(),
+            last_live_refresh: self.last_live_refresh.clone(),
+            last_schedule_refresh: self.last_schedule_refresh.clone(),
         }
     }
 }

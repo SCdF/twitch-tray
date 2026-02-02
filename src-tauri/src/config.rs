@@ -17,6 +17,11 @@ pub struct Config {
     pub notify_on_live: bool,
     #[serde(default = "default_notify_on_category")]
     pub notify_on_category: bool,
+    /// Maximum gap (in minutes) between refreshes to still send notifications.
+    /// If the app was asleep/suspended longer than this, notifications are suppressed
+    /// to avoid a flood of alerts on wake.
+    #[serde(default = "default_notify_max_gap")]
+    pub notify_max_gap_min: u64,
 }
 
 fn default_poll_interval() -> u64 {
@@ -35,6 +40,10 @@ fn default_notify_on_category() -> bool {
     true
 }
 
+fn default_notify_max_gap() -> u64 {
+    10
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -42,6 +51,7 @@ impl Default for Config {
             schedule_poll_min: default_schedule_poll(),
             notify_on_live: default_notify_on_live(),
             notify_on_category: default_notify_on_category(),
+            notify_max_gap_min: default_notify_max_gap(),
         }
     }
 }
@@ -118,6 +128,12 @@ mod tests {
         assert!(config.notify_on_category);
     }
 
+    #[test]
+    fn default_notify_max_gap_is_10() {
+        let config = Config::default();
+        assert_eq!(config.notify_max_gap_min, 10);
+    }
+
     // === Partial deserialization tests ===
 
     #[test]
@@ -129,6 +145,7 @@ mod tests {
         assert_eq!(config.schedule_poll_min, 5);
         assert!(config.notify_on_live);
         assert!(config.notify_on_category);
+        assert_eq!(config.notify_max_gap_min, 10);
     }
 
     #[test]
@@ -165,6 +182,7 @@ mod tests {
             schedule_poll_min: 15,
             notify_on_live: true,
             notify_on_category: false,
+            notify_max_gap_min: 15,
         };
 
         let json = serde_json::to_string(&original).unwrap();
@@ -174,6 +192,7 @@ mod tests {
         assert_eq!(deserialized.schedule_poll_min, original.schedule_poll_min);
         assert_eq!(deserialized.notify_on_live, original.notify_on_live);
         assert_eq!(deserialized.notify_on_category, original.notify_on_category);
+        assert_eq!(deserialized.notify_max_gap_min, original.notify_max_gap_min);
     }
 
     #[test]
