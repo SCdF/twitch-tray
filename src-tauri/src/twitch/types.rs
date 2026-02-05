@@ -325,9 +325,16 @@ mod tests {
 
     #[test]
     fn format_start_time_today() {
-        // Create a time that's definitely today (a few hours from now)
-        let start = Utc::now() + Duration::hours(3);
-        let scheduled = scheduled_at(start);
+        // Create a time that's definitely today (local noon)
+        let now = Local::now();
+        let today_noon = now.date_naive().and_hms_opt(12, 0, 0).unwrap();
+        let today_utc = Local
+            .from_local_datetime(&today_noon)
+            .single()
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let scheduled = scheduled_at(today_utc);
         let formatted = scheduled.format_start_time();
 
         assert!(

@@ -28,7 +28,6 @@ fn main() {
 
     // Build the Tauri application
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::save_config,
