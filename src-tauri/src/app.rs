@@ -460,7 +460,7 @@ impl App {
         let state = self.state.clone();
         let notifier_enabled = self.config.get().notify_on_live;
         let cancel_rx = self.auth_cancel_rx.clone();
-        let tray_manager = TrayManager::new(state.clone());
+        let tray_manager = self.tray_manager.clone();
 
         tokio::spawn(async move {
             match flow
@@ -549,7 +549,7 @@ impl Clone for App {
             store: TokenStore::new().expect("Failed to create token store"),
             client: self.client.clone(),
             notifier: DesktopNotifier::new(cfg.notify_on_live, cfg.notify_on_category),
-            tray_manager: TrayManager::new(self.state.clone()),
+            tray_manager: self.tray_manager.clone(),
             initial_load_done: AtomicBool::new(self.initial_load_done.load(Ordering::SeqCst)),
             auth_cancel_tx: self.auth_cancel_tx.clone(),
             auth_cancel_rx: self.auth_cancel_rx.clone(),

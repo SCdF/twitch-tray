@@ -6,6 +6,7 @@ use tauri::{
     tray::{TrayIcon, TrayIconBuilder},
     AppHandle, Emitter, Manager, WebviewWindowBuilder,
 };
+use tokio::sync::Mutex;
 
 use crate::config::FollowedCategory;
 use crate::state::AppState;
@@ -41,14 +42,21 @@ fn load_icon(bytes: &[u8]) -> tauri::Result<Image<'static>> {
 }
 
 /// Manages the system tray
+#[derive(Clone)]
 pub struct TrayManager {
     state: Arc<AppState>,
+    /// Mutex to serialize menu rebuilds - prevents concurrent GTK operations
+    /// which can crash libayatana-appindicator on Linux
+    rebuild_lock: Arc<Mutex<()>>,
 }
 
 impl TrayManager {
     /// Creates a new tray manager
     pub fn new(state: Arc<AppState>) -> Self {
-        Self { state }
+        Self {
+            state,
+            rebuild_lock: Arc::new(Mutex::new(())),
+        }
     }
 
     /// Creates the initial tray icon
@@ -71,42 +79,76 @@ impl TrayManager {
     }
 
     /// Rebuilds the menu with category data
+    ///
+    /// This method serializes all menu rebuilds through a mutex to prevent
+    /// concurrent GTK operations which can crash libayatana-appindicator on Linux.
     pub async fn rebuild_menu_with_categories(
         &self,
         app: &AppHandle,
         followed_categories: Vec<FollowedCategory>,
         category_streams: HashMap<String, Vec<Stream>>,
     ) -> tauri::Result<()> {
+        // Acquire lock to serialize menu rebuilds - this prevents crashes from
+        // concurrent GTK operations in libayatana-appindicator
+        let _guard = self.rebuild_lock.lock().await;
+
         let authenticated = self.state.is_authenticated().await;
         let streams = self.state.get_followed_streams().await;
         let scheduled = self.state.get_scheduled_streams().await;
         let schedules_loaded = self.state.schedules_loaded().await;
 
-        let menu = if authenticated {
-            build_authenticated_menu(
-                app,
-                streams,
-                scheduled,
-                schedules_loaded,
-                followed_categories,
-                category_streams,
-            )?
-        } else {
-            build_unauthenticated_menu(app)?
-        };
+        // Clone app handle for the closure
+        let app_handle = app.clone();
 
-        // Update the tray menu
-        if let Some(tray) = app.tray_by_id("main") {
-            tray.set_menu(Some(menu))?;
-
-            // Update icon based on auth state
-            let icon = if authenticated {
-                load_icon(ICON_BYTES)?
+        // Build and set menu on the main thread to avoid GTK threading issues
+        app.run_on_main_thread(move || {
+            let menu_result = if authenticated {
+                build_authenticated_menu(
+                    &app_handle,
+                    streams,
+                    scheduled,
+                    schedules_loaded,
+                    followed_categories,
+                    category_streams,
+                )
             } else {
-                load_icon(ICON_GREY_BYTES)?
+                build_unauthenticated_menu(&app_handle)
             };
-            tray.set_icon(Some(icon))?;
-        }
+
+            let menu = match menu_result {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::error!("Failed to build menu: {}", e);
+                    return;
+                }
+            };
+
+            // Update the tray menu
+            if let Some(tray) = app_handle.tray_by_id("main") {
+                if let Err(e) = tray.set_menu(Some(menu)) {
+                    tracing::error!("Failed to set tray menu: {}", e);
+                    return;
+                }
+
+                // Update icon based on auth state
+                let icon_result = if authenticated {
+                    load_icon(ICON_BYTES)
+                } else {
+                    load_icon(ICON_GREY_BYTES)
+                };
+
+                match icon_result {
+                    Ok(icon) => {
+                        if let Err(e) = tray.set_icon(Some(icon)) {
+                            tracing::error!("Failed to set tray icon: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to load icon: {}", e);
+                    }
+                }
+            }
+        })?;
 
         Ok(())
     }

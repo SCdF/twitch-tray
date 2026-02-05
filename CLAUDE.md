@@ -201,8 +201,45 @@ This triggers the release workflow which:
 - **State Management**: `Arc<AppState>` with `RwLock` and watch channels for change notification
 - **No Frontend**: This is a tray-only app - the `src/` directory contains only a placeholder HTML
 
+## Debugging Core Dumps
+
+This system uses `systemd-coredump`. When the app crashes with "Segmentation fault (core dumped)":
+
+**List recent crashes:**
+```bash
+coredumpctl list twitch-tray
+```
+
+**Get crash info and stack trace:**
+```bash
+coredumpctl info twitch-tray
+```
+
+**Full backtrace with gdb (install with `sudo pacman -S gdb` if needed):**
+```bash
+coredumpctl debug twitch-tray
+# In gdb: bt full
+# Or non-interactive: coredumpctl debug twitch-tray --debugger-arguments="-batch -ex 'bt full'"
+```
+
+**For a specific crash by PID:**
+```bash
+coredumpctl info <PID>
+```
+
+**Enable Rust backtraces on panic:**
+```bash
+RUST_BACKTRACE=1 make run
+```
+
 ## Known Issues / Future Work
 
 - Schedule fetching may fail silently for channels without schedules (404s are ignored)
 - EventSub could be added for real-time notifications (selective subscriptions to avoid rate limits)
-- Category change notifications not implemented (would need EventSub or more frequent polling)
+
+### Fixed: Menu rebuild crashes (Linux)
+
+`libayatana-appindicator3` was crashing (SIGSEGV/SIGABRT) when multiple async tasks called `tray.set_menu()` concurrently. Fixed by:
+1. Adding `Arc<Mutex<()>>` to `TrayManager` to serialize menu rebuilds
+2. Using `app.run_on_main_thread()` to dispatch GTK operations to the main thread
+3. Making `TrayManager` clonable so all instances share the same mutex
