@@ -230,6 +230,28 @@ impl<H: HttpClient> TwitchClient<H> {
     }
 }
 
+// Category-related methods
+impl<H: HttpClient> TwitchClient<H> {
+    /// Searches for categories/games by name
+    ///
+    /// Returns `ApiError::Unauthorized` if the token has expired.
+    pub async fn search_categories(&self, query: &str) -> Result<Vec<Category>, ApiError> {
+        let encoded_query = urlencoding::encode(query);
+        let endpoint = format!("/search/categories?query={}&first=10", encoded_query);
+        let response: SearchCategoriesResponse = self.get(&endpoint).await?;
+        Ok(response.data)
+    }
+
+    /// Gets top streams for a specific category/game
+    ///
+    /// Returns `ApiError::Unauthorized` if the token has expired.
+    pub async fn get_streams_by_category(&self, game_id: &str) -> Result<Vec<Stream>, ApiError> {
+        let endpoint = format!("/streams?game_id={}&first=10", game_id);
+        let response: StreamsResponse = self.get(&endpoint).await?;
+        Ok(response.data)
+    }
+}
+
 // Schedule-related methods
 impl<H: HttpClient> TwitchClient<H> {
     /// Gets scheduled streams for a broadcaster
@@ -475,5 +497,93 @@ mod tests {
 
         let client_id_header = requests[0].headers.get("Client-Id").unwrap();
         assert_eq!(client_id_header.to_str().unwrap(), "my_client_id");
+    }
+
+    // === search_categories tests ===
+
+    #[tokio::test]
+    async fn search_categories_returns_results() {
+        let response = SearchCategoriesResponse {
+            data: vec![
+                Category {
+                    id: "509658".to_string(),
+                    name: "Just Chatting".to_string(),
+                    box_art_url: "https://example.com/box.jpg".to_string(),
+                },
+                Category {
+                    id: "27471".to_string(),
+                    name: "Minecraft".to_string(),
+                    box_art_url: "https://example.com/mc.jpg".to_string(),
+                },
+            ],
+        };
+
+        let mock = MockHttpClient::new().on_get_json(
+            "https://api.twitch.tv/helix/search/categories?query=chat&first=10",
+            &response,
+        );
+
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+        client.set_access_token("test_token".to_string()).await;
+
+        let result = client.search_categories("chat").await.unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].id, "509658");
+        assert_eq!(result[0].name, "Just Chatting");
+    }
+
+    #[tokio::test]
+    async fn search_categories_encodes_query() {
+        let response = SearchCategoriesResponse { data: vec![] };
+
+        let mock = MockHttpClient::new().on_get_json(
+            "https://api.twitch.tv/helix/search/categories?query=just%20chatting&first=10",
+            &response,
+        );
+
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+        client.set_access_token("test_token".to_string()).await;
+
+        let result = client.search_categories("just chatting").await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    // === get_streams_by_category tests ===
+
+    #[tokio::test]
+    async fn get_streams_by_category_returns_streams() {
+        let streams = vec![
+            make_stream("1", "StreamerOne"),
+            make_stream("2", "StreamerTwo"),
+        ];
+
+        let mock = MockHttpClient::new().on_get_json(
+            "https://api.twitch.tv/helix/streams?game_id=509658&first=10",
+            &make_streams_response(streams, None),
+        );
+
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+        client.set_access_token("test_token".to_string()).await;
+
+        let result = client.get_streams_by_category("509658").await.unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].user_name, "StreamerOne");
+        assert_eq!(result[1].user_name, "StreamerTwo");
+    }
+
+    #[tokio::test]
+    async fn get_streams_by_category_empty() {
+        let mock = MockHttpClient::new().on_get_json(
+            "https://api.twitch.tv/helix/streams?game_id=999999&first=10",
+            &make_streams_response(vec![], None),
+        );
+
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+        client.set_access_token("test_token".to_string()).await;
+
+        let result = client.get_streams_by_category("999999").await.unwrap();
+        assert!(result.is_empty());
     }
 }

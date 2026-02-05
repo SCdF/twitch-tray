@@ -1,9 +1,78 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Twitch Tray</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Twitch Tray Settings</title>
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <!-- Tray-only application - no UI -->
+  <div class="container">
+    <nav class="tabs">
+      <button class="tab active" data-tab="general">General</button>
+      <button class="tab" data-tab="categories">Categories</button>
+    </nav>
+
+    <main class="content">
+      <!-- General Settings Pane -->
+      <section id="general" class="pane active">
+        <h2>General Settings</h2>
+
+        <div class="form-group">
+          <label for="poll_interval">Polling Interval (seconds)</label>
+          <input type="number" id="poll_interval" min="30" max="300" value="60">
+          <span class="help-text">How often to check for live streams (30-300 seconds)</span>
+        </div>
+
+        <div class="form-group">
+          <label for="schedule_poll">Schedule Polling (minutes)</label>
+          <input type="number" id="schedule_poll" min="1" max="60" value="5">
+          <span class="help-text">How often to check for scheduled streams (1-60 minutes)</span>
+        </div>
+
+        <div class="form-group">
+          <label for="notify_max_gap">Notification Suppression Gap (minutes)</label>
+          <input type="number" id="notify_max_gap" min="1" max="60" value="10">
+          <span class="help-text">After being away longer than this, notifications are suppressed</span>
+        </div>
+
+        <div class="form-group checkbox">
+          <label>
+            <input type="checkbox" id="notify_on_live" checked>
+            Notify when streams go live
+          </label>
+        </div>
+
+        <div class="form-group checkbox">
+          <label>
+            <input type="checkbox" id="notify_on_category" checked>
+            Notify on category changes
+          </label>
+        </div>
+      </section>
+
+      <!-- Categories Pane -->
+      <section id="categories" class="pane">
+        <h2>Followed Categories</h2>
+        <p class="help-text">Add categories to track top streams in each category.</p>
+
+        <div class="search-container">
+          <input type="text" id="category_search" placeholder="Search for a category...">
+          <div id="search_results" class="search-results"></div>
+        </div>
+
+        <div class="category-list" id="category_list">
+          <!-- Categories will be added here dynamically -->
+        </div>
+      </section>
+    </main>
+
+    <footer class="actions">
+      <button id="cancel_btn" class="btn btn-secondary">Cancel</button>
+      <button id="save_btn" class="btn btn-primary">Save</button>
+    </footer>
+  </div>
+
+  <script src="settings.js"></script>
 </body>
 </html>

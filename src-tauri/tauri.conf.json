@@ -9,7 +9,7 @@
     "frontendDist": "../src"
   },
   "app": {
-    "withGlobalTauri": false,
+    "withGlobalTauri": true,
     "trayIcon": {
       "iconPath": "icons/icon.png",
       "iconAsTemplate": true,

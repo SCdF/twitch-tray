@@ -176,7 +176,21 @@ impl App {
                     // based on last *successful* refresh time
                     app.refresh_followed_streams().await;
 
-                    if let Err(e) = app.tray_manager.rebuild_menu(&handle).await {
+                    // Also refresh category streams on the same schedule
+                    app.refresh_category_streams().await;
+
+                    // Rebuild menu with category data
+                    let cfg = app.config.get();
+                    let category_streams = app.state.get_category_streams().await;
+                    if let Err(e) = app
+                        .tray_manager
+                        .rebuild_menu_with_categories(
+                            &handle,
+                            cfg.followed_categories,
+                            category_streams,
+                        )
+                        .await
+                    {
                         tracing::error!("Failed to rebuild menu: {}", e);
                     }
                 }
@@ -216,7 +230,18 @@ impl App {
                     // Update last refresh time
                     *app.last_schedule_refresh.write().await = Some(Utc::now());
 
-                    if let Err(e) = app.tray_manager.rebuild_menu(&handle).await {
+                    // Rebuild menu with category data
+                    let cfg = app.config.get();
+                    let category_streams = app.state.get_category_streams().await;
+                    if let Err(e) = app
+                        .tray_manager
+                        .rebuild_menu_with_categories(
+                            &handle,
+                            cfg.followed_categories,
+                            category_streams,
+                        )
+                        .await
+                    {
                         tracing::error!("Failed to rebuild menu: {}", e);
                     }
                 }
@@ -234,7 +259,18 @@ impl App {
                 // Copy the value before awaiting to avoid holding the borrow across await
                 let has_change = rx.borrow().is_some();
                 if has_change {
-                    if let Err(e) = app.tray_manager.rebuild_menu(&handle).await {
+                    // Rebuild menu with category data
+                    let cfg = app.config.get();
+                    let category_streams = app.state.get_category_streams().await;
+                    if let Err(e) = app
+                        .tray_manager
+                        .rebuild_menu_with_categories(
+                            &handle,
+                            cfg.followed_categories,
+                            category_streams,
+                        )
+                        .await
+                    {
                         tracing::error!("Failed to rebuild menu on state change: {}", e);
                     }
                 }
@@ -246,6 +282,7 @@ impl App {
     pub async fn refresh_all_data(&self) {
         self.refresh_followed_streams().await;
         self.refresh_scheduled_streams().await;
+        self.refresh_category_streams().await;
         self.initial_load_done.store(true, Ordering::SeqCst);
 
         // Set initial refresh times
@@ -364,6 +401,50 @@ impl App {
         };
 
         self.state.set_scheduled_streams(scheduled).await;
+    }
+
+    /// Refreshes streams for all followed categories
+    pub async fn refresh_category_streams(&self) {
+        let categories = self.config.get().followed_categories;
+        if categories.is_empty() {
+            return;
+        }
+
+        for category in &categories {
+            let streams = match self.client.get_streams_by_category(&category.id).await {
+                Ok(streams) => streams,
+                Err(ApiError::Unauthorized) => {
+                    // Token expired - try to refresh and retry
+                    if let Err(e) = self.try_refresh_token().await {
+                        tracing::error!("Failed to refresh token: {}", e);
+                        continue;
+                    }
+                    // Retry the request with new token
+                    match self.client.get_streams_by_category(&category.id).await {
+                        Ok(streams) => streams,
+                        Err(e) => {
+                            tracing::error!(
+                                "Failed to get category streams after token refresh: {}",
+                                e
+                            );
+                            continue;
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to get category streams for {}: {}",
+                        category.name,
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            self.state
+                .set_category_streams(category.id.clone(), streams)
+                .await;
+        }
     }
 
     /// Handles login request

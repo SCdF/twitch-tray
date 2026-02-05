@@ -1,11 +1,13 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{
     image::Image,
     menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     tray::{TrayIcon, TrayIconBuilder},
-    AppHandle, Emitter,
+    AppHandle, Emitter, Manager, WebviewWindowBuilder,
 };
 
+use crate::config::FollowedCategory;
 use crate::state::AppState;
 use crate::twitch::{ScheduledStream, Stream};
 
@@ -17,8 +19,10 @@ mod ids {
     pub const LOGIN: &str = "login";
     pub const LOGOUT: &str = "logout";
     pub const QUIT: &str = "quit";
+    pub const SETTINGS: &str = "settings";
     pub const STREAM_PREFIX: &str = "stream_";
     pub const SCHEDULED_PREFIX: &str = "scheduled_";
+    pub const CATEGORY_STREAM_PREFIX: &str = "cat_stream_";
 }
 
 /// Loads an image from embedded PNG bytes
@@ -62,13 +66,31 @@ impl TrayManager {
 
     /// Rebuilds the menu based on current state
     pub async fn rebuild_menu(&self, app: &AppHandle) -> tauri::Result<()> {
+        self.rebuild_menu_with_categories(app, Vec::new(), HashMap::new())
+            .await
+    }
+
+    /// Rebuilds the menu with category data
+    pub async fn rebuild_menu_with_categories(
+        &self,
+        app: &AppHandle,
+        followed_categories: Vec<FollowedCategory>,
+        category_streams: HashMap<String, Vec<Stream>>,
+    ) -> tauri::Result<()> {
         let authenticated = self.state.is_authenticated().await;
         let streams = self.state.get_followed_streams().await;
         let scheduled = self.state.get_scheduled_streams().await;
         let schedules_loaded = self.state.schedules_loaded().await;
 
         let menu = if authenticated {
-            build_authenticated_menu(app, streams, scheduled, schedules_loaded)?
+            build_authenticated_menu(
+                app,
+                streams,
+                scheduled,
+                schedules_loaded,
+                followed_categories,
+                category_streams,
+            )?
         } else {
             build_unauthenticated_menu(app)?
         };
@@ -90,6 +112,27 @@ impl TrayManager {
     }
 }
 
+/// Opens the settings window
+pub fn open_settings_window(app: &AppHandle) {
+    // Check if window already exists
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.set_focus();
+        return;
+    }
+
+    // Create new settings window
+    match WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::App("index.html".into()))
+        .title("Twitch Tray Settings")
+        .inner_size(975.0, 975.0)
+        .resizable(true)
+        .center()
+        .build()
+    {
+        Ok(_) => tracing::info!("Settings window opened"),
+        Err(e) => tracing::error!("Failed to open settings window: {}", e),
+    }
+}
+
 fn build_unauthenticated_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let login = MenuItemBuilder::with_id(ids::LOGIN, "Login to Twitch").build(app)?;
     let quit = MenuItemBuilder::with_id(ids::QUIT, "Quit").build(app)?;
@@ -102,6 +145,8 @@ fn build_authenticated_menu(
     mut streams: Vec<Stream>,
     scheduled: Vec<ScheduledStream>,
     schedules_loaded: bool,
+    followed_categories: Vec<FollowedCategory>,
+    category_streams: HashMap<String, Vec<Stream>>,
 ) -> tauri::Result<Menu<tauri::Wry>> {
     let mut items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
 
@@ -156,6 +201,47 @@ fn build_authenticated_menu(
         }
     }
 
+    // === Category sections ===
+    // Only show header if there are categories with streams
+    let has_category_streams = followed_categories
+        .iter()
+        .any(|cat| category_streams.get(&cat.id).is_some_and(|s| !s.is_empty()));
+
+    if has_category_streams {
+        items.push(Box::new(
+            MenuItemBuilder::new("Categories")
+                .enabled(false)
+                .build(app)?,
+        ));
+
+        for category in &followed_categories {
+            if let Some(cat_streams) = category_streams.get(&category.id) {
+                if !cat_streams.is_empty() {
+                    // Sort by viewer count and take top 10
+                    let mut sorted_streams = cat_streams.clone();
+                    sorted_streams.sort_by(|a, b| b.viewer_count.cmp(&a.viewer_count));
+                    sorted_streams.truncate(10);
+
+                    // Sum total viewers from the streams we have
+                    let total_viewers: i64 = sorted_streams.iter().map(|s| s.viewer_count).sum();
+                    let label =
+                        format!("{} ({})", category.name, format_viewer_count(total_viewers));
+
+                    let mut cat_submenu = SubmenuBuilder::new(app, &label);
+
+                    for stream in &sorted_streams {
+                        let label = format_category_stream_label(stream);
+                        let id = format!("{}{}", ids::CATEGORY_STREAM_PREFIX, stream.user_login);
+                        let item = MenuItemBuilder::with_id(id, label).build(app)?;
+                        cat_submenu = cat_submenu.item(&item);
+                    }
+
+                    items.push(Box::new(cat_submenu.build()?));
+                }
+            }
+        }
+    }
+
     // === Scheduled section ===
     items.push(Box::new(
         MenuItemBuilder::new("Scheduled (Next 24h)")
@@ -204,7 +290,8 @@ fn build_authenticated_menu(
         }
     }
 
-    // === Logout and Quit ===
+    // === Settings, Logout and Quit ===
+    let settings = MenuItemBuilder::with_id(ids::SETTINGS, "Settings").build(app)?;
     let logout = MenuItemBuilder::with_id(ids::LOGOUT, "Logout").build(app)?;
     let quit = MenuItemBuilder::with_id(ids::QUIT, "Quit").build(app)?;
 
@@ -212,7 +299,7 @@ fn build_authenticated_menu(
     MenuBuilder::new(app)
         .items(&items.iter().map(|i| i.as_ref()).collect::<Vec<_>>())
         .separator()
-        .items(&[&logout, &quit])
+        .items(&[&settings, &logout, &quit])
         .build()
 }
 
@@ -225,6 +312,9 @@ pub fn handle_menu_event(app: &AppHandle, id: &str) {
         ids::LOGOUT => {
             app.emit("logout-requested", ()).ok();
         }
+        ids::SETTINGS => {
+            open_settings_window(app);
+        }
         ids::QUIT => {
             app.exit(0);
         }
@@ -234,6 +324,10 @@ pub fn handle_menu_event(app: &AppHandle, id: &str) {
         }
         _ if id.starts_with(ids::SCHEDULED_PREFIX) => {
             let user_login = &id[ids::SCHEDULED_PREFIX.len()..];
+            open_stream(user_login);
+        }
+        _ if id.starts_with(ids::CATEGORY_STREAM_PREFIX) => {
+            let user_login = &id[ids::CATEGORY_STREAM_PREFIX.len()..];
             open_stream(user_login);
         }
         _ => {}
@@ -264,6 +358,26 @@ pub(crate) fn format_stream_label(s: &Stream) -> String {
 /// Format: "StreamerName - Tomorrow 3:00 PM"
 pub(crate) fn format_scheduled_label(s: &ScheduledStream) -> String {
     format!("{} - {}", s.broadcaster_name, s.format_start_time())
+}
+
+/// Formats a stream for category submenu (no game name since it's implied)
+/// Format: "StreamerName (1.2k)"
+pub(crate) fn format_category_stream_label(s: &Stream) -> String {
+    format!("{} ({})", s.user_name, s.format_viewer_count())
+}
+
+/// Formats a viewer count with k suffix for thousands
+fn format_viewer_count(count: i64) -> String {
+    if count >= 1000 {
+        let k = count as f64 / 1000.0;
+        if k.fract() < 0.05 {
+            format!("{}k", k as i64)
+        } else {
+            format!("{:.1}k", k)
+        }
+    } else {
+        count.to_string()
+    }
 }
 
 /// Truncates a string to max length with ellipsis

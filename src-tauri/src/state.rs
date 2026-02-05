@@ -9,6 +9,7 @@ use crate::twitch::{ScheduledStream, Stream};
 pub enum ChangeType {
     FollowedStreams,
     ScheduledStreams,
+    CategoryStreams,
     Authentication,
 }
 
@@ -44,6 +45,9 @@ struct StateInner {
 
     // Track previous game per stream (by user_id) for category change detection
     stream_games: HashMap<String, (String, String)>, // user_id -> (game_id, game_name)
+
+    // Streams by followed category (category_id -> streams)
+    category_streams: HashMap<String, Vec<Stream>>,
 }
 
 /// Thread-safe application state manager
@@ -184,6 +188,20 @@ impl AppState {
     pub async fn set_followed_channel_ids(&self, ids: Vec<String>) {
         let mut state = self.inner.write().await;
         state.followed_channel_ids = ids;
+    }
+
+    /// Updates streams for a specific category
+    pub async fn set_category_streams(&self, category_id: String, streams: Vec<Stream>) {
+        let mut state = self.inner.write().await;
+        state.category_streams.insert(category_id, streams);
+        drop(state);
+
+        self.notify_change(ChangeType::CategoryStreams);
+    }
+
+    /// Returns all category streams
+    pub async fn get_category_streams(&self) -> HashMap<String, Vec<Stream>> {
+        self.inner.read().await.category_streams.clone()
     }
 
     /// Clears all state (used on logout)
@@ -482,5 +500,57 @@ mod tests {
 
         assert!(!state.is_authenticated().await);
         assert!(state.get_followed_streams().await.is_empty());
+    }
+
+    // === category streams tests ===
+
+    #[tokio::test]
+    async fn set_category_streams() {
+        let state = AppState::new();
+
+        let stream = make_stream_with_game("1", "game1", "Fortnite");
+        state
+            .set_category_streams("game1".to_string(), vec![stream])
+            .await;
+
+        let streams = state.get_category_streams().await;
+        assert_eq!(streams.len(), 1);
+        assert!(streams.contains_key("game1"));
+        assert_eq!(streams.get("game1").unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn set_multiple_category_streams() {
+        let state = AppState::new();
+
+        let stream1 = make_stream_with_game("1", "game1", "Fortnite");
+        let stream2 = make_stream_with_game("2", "game2", "Minecraft");
+
+        state
+            .set_category_streams("game1".to_string(), vec![stream1])
+            .await;
+        state
+            .set_category_streams("game2".to_string(), vec![stream2])
+            .await;
+
+        let streams = state.get_category_streams().await;
+        assert_eq!(streams.len(), 2);
+        assert!(streams.contains_key("game1"));
+        assert!(streams.contains_key("game2"));
+    }
+
+    #[tokio::test]
+    async fn category_streams_cleared_on_full_clear() {
+        let state = AppState::new();
+
+        let stream = make_stream_with_game("1", "game1", "Fortnite");
+        state
+            .set_category_streams("game1".to_string(), vec![stream])
+            .await;
+
+        state.clear().await;
+
+        let streams = state.get_category_streams().await;
+        assert!(streams.is_empty());
     }
 }

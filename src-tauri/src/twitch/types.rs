@@ -160,6 +160,21 @@ pub struct ScheduleResponse {
     pub data: ScheduleData,
 }
 
+/// Represents a Twitch category/game
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Category {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub box_art_url: String,
+}
+
+/// Response from search categories endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchCategoriesResponse {
+    pub data: Vec<Category>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

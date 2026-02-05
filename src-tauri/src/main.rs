@@ -3,6 +3,7 @@
 
 mod app;
 mod auth;
+mod commands;
 mod config;
 mod notify;
 mod state;
@@ -28,6 +29,12 @@ fn main() {
     // Build the Tauri application
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .invoke_handler(tauri::generate_handler![
+            commands::get_config,
+            commands::save_config,
+            commands::search_categories,
+            commands::get_followed_categories,
+        ])
         .setup(|app| {
             // Create the application state
             let application = Arc::new(App::new().expect("Failed to initialize application"));
@@ -83,14 +90,14 @@ fn main() {
             Ok(())
         })
         .on_window_event(|_window, _event| {
-            // No windows in this app, but handler required
+            // Let windows close normally - ExitRequested handler prevents app exit
         })
         .build(tauri::generate_context!())
         .expect("Failed to build Tauri application")
         .run(|app, event| {
-            // Handle application events
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                tracing::info!("Exit requested");
+            // Prevent app from exiting when all windows are closed (tray app)
+            if let tauri::RunEvent::ExitRequested { ref api, .. } = event {
+                api.prevent_exit();
             }
 
             // Handle custom events

@@ -6,6 +6,13 @@ use std::sync::RwLock;
 const APP_NAME: &str = "twitch-tray";
 const CONFIG_FILE: &str = "config.json";
 
+/// A followed category for category stream tracking
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FollowedCategory {
+    pub id: String,
+    pub name: String,
+}
+
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -22,6 +29,9 @@ pub struct Config {
     /// to avoid a flood of alerts on wake.
     #[serde(default = "default_notify_max_gap")]
     pub notify_max_gap_min: u64,
+    /// Categories to follow for category-based stream listings
+    #[serde(default)]
+    pub followed_categories: Vec<FollowedCategory>,
 }
 
 fn default_poll_interval() -> u64 {
@@ -52,6 +62,7 @@ impl Default for Config {
             notify_on_live: default_notify_on_live(),
             notify_on_category: default_notify_on_category(),
             notify_max_gap_min: default_notify_max_gap(),
+            followed_categories: Vec::new(),
         }
     }
 }
@@ -88,6 +99,20 @@ impl ConfigManager {
     /// Gets a copy of the current configuration
     pub fn get(&self) -> Config {
         self.config.read().unwrap().clone()
+    }
+
+    /// Updates and saves the configuration
+    pub fn save(&self, config: Config) -> Result<()> {
+        let config_dir = Self::config_dir()?;
+        let config_file = config_dir.join(CONFIG_FILE);
+
+        let json = serde_json::to_string_pretty(&config).context("Failed to serialize config")?;
+        std::fs::write(&config_file, json).context("Failed to write config file")?;
+
+        // Update in-memory config
+        *self.config.write().unwrap() = config;
+
+        Ok(())
     }
 
     /// Returns the config directory path
@@ -134,6 +159,12 @@ mod tests {
         assert_eq!(config.notify_max_gap_min, 10);
     }
 
+    #[test]
+    fn default_followed_categories_is_empty() {
+        let config = Config::default();
+        assert!(config.followed_categories.is_empty());
+    }
+
     // === Partial deserialization tests ===
 
     #[test]
@@ -146,6 +177,7 @@ mod tests {
         assert!(config.notify_on_live);
         assert!(config.notify_on_category);
         assert_eq!(config.notify_max_gap_min, 10);
+        assert!(config.followed_categories.is_empty());
     }
 
     #[test]
@@ -183,6 +215,10 @@ mod tests {
             notify_on_live: true,
             notify_on_category: false,
             notify_max_gap_min: 15,
+            followed_categories: vec![FollowedCategory {
+                id: "12345".to_string(),
+                name: "Just Chatting".to_string(),
+            }],
         };
 
         let json = serde_json::to_string(&original).unwrap();
@@ -193,6 +229,46 @@ mod tests {
         assert_eq!(deserialized.notify_on_live, original.notify_on_live);
         assert_eq!(deserialized.notify_on_category, original.notify_on_category);
         assert_eq!(deserialized.notify_max_gap_min, original.notify_max_gap_min);
+        assert_eq!(
+            deserialized.followed_categories,
+            original.followed_categories
+        );
+    }
+
+    #[test]
+    fn deserialize_with_categories() {
+        let json = r#"{
+            "followed_categories": [
+                {"id": "509658", "name": "Just Chatting"},
+                {"id": "27471", "name": "Minecraft"}
+            ]
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+
+        assert_eq!(config.followed_categories.len(), 2);
+        assert_eq!(config.followed_categories[0].id, "509658");
+        assert_eq!(config.followed_categories[0].name, "Just Chatting");
+        assert_eq!(config.followed_categories[1].id, "27471");
+        assert_eq!(config.followed_categories[1].name, "Minecraft");
+    }
+
+    #[test]
+    fn followed_category_equality() {
+        let cat1 = FollowedCategory {
+            id: "123".to_string(),
+            name: "Test".to_string(),
+        };
+        let cat2 = FollowedCategory {
+            id: "123".to_string(),
+            name: "Test".to_string(),
+        };
+        let cat3 = FollowedCategory {
+            id: "456".to_string(),
+            name: "Test".to_string(),
+        };
+
+        assert_eq!(cat1, cat2);
+        assert_ne!(cat1, cat3);
     }
 
     #[test]
