@@ -33,6 +33,7 @@ fn main() {
             commands::save_config,
             commands::search_categories,
             commands::get_followed_categories,
+            commands::get_followed_channels_list,
         ])
         .setup(|app| {
             // Create the application state

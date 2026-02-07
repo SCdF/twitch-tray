@@ -8,7 +8,7 @@ use tauri::{
 };
 use tokio::sync::Mutex;
 
-use crate::config::FollowedCategory;
+use crate::config::{FollowedCategory, StreamerImportance, StreamerSettings};
 use crate::state::AppState;
 use crate::twitch::{ScheduledStream, Stream};
 
@@ -74,7 +74,7 @@ impl TrayManager {
 
     /// Rebuilds the menu based on current state
     pub async fn rebuild_menu(&self, app: &AppHandle) -> tauri::Result<()> {
-        self.rebuild_menu_with_categories(app, Vec::new(), HashMap::new())
+        self.rebuild_menu_with_categories(app, Vec::new(), HashMap::new(), HashMap::new())
             .await
     }
 
@@ -87,6 +87,7 @@ impl TrayManager {
         app: &AppHandle,
         followed_categories: Vec<FollowedCategory>,
         category_streams: HashMap<String, Vec<Stream>>,
+        streamer_settings: HashMap<String, StreamerSettings>,
     ) -> tauri::Result<()> {
         // Acquire lock to serialize menu rebuilds - this prevents crashes from
         // concurrent GTK operations in libayatana-appindicator
@@ -110,6 +111,7 @@ impl TrayManager {
                     schedules_loaded,
                     followed_categories,
                     category_streams,
+                    streamer_settings,
                 )
             } else {
                 build_unauthenticated_menu(&app_handle)
@@ -182,6 +184,16 @@ fn build_unauthenticated_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>
     MenuBuilder::new(app).items(&[&login, &quit]).build()
 }
 
+fn get_importance(
+    user_login: &str,
+    streamer_settings: &HashMap<String, StreamerSettings>,
+) -> StreamerImportance {
+    streamer_settings
+        .get(user_login)
+        .map(|s| s.importance)
+        .unwrap_or_default()
+}
+
 fn build_authenticated_menu(
     app: &AppHandle,
     mut streams: Vec<Stream>,
@@ -189,8 +201,14 @@ fn build_authenticated_menu(
     schedules_loaded: bool,
     followed_categories: Vec<FollowedCategory>,
     category_streams: HashMap<String, Vec<Stream>>,
+    streamer_settings: HashMap<String, StreamerSettings>,
 ) -> tauri::Result<Menu<tauri::Wry>> {
     let mut items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
+
+    // Filter out Ignore streamers from live streams
+    streams.retain(|s| {
+        get_importance(&s.user_login, &streamer_settings) != StreamerImportance::Ignore
+    });
 
     // === Following Live section ===
     let title = if streams.is_empty() {
@@ -209,8 +227,14 @@ fn build_authenticated_menu(
                 .build(app)?,
         ));
     } else {
-        // Sort by viewer count (highest first)
-        streams.sort_by(|a, b| b.viewer_count.cmp(&a.viewer_count));
+        // Sort: Favourites first (by viewers), then rest by viewers
+        streams.sort_by(|a, b| {
+            let a_fav =
+                get_importance(&a.user_login, &streamer_settings) == StreamerImportance::Favourite;
+            let b_fav =
+                get_importance(&b.user_login, &streamer_settings) == StreamerImportance::Favourite;
+            b_fav.cmp(&a_fav).then(b.viewer_count.cmp(&a.viewer_count))
+        });
 
         // Show top 10 in main menu
         const MAIN_MENU_LIMIT: usize = 10;
@@ -222,7 +246,9 @@ fn build_authenticated_menu(
         };
 
         for stream in &show_in_main {
-            let label = format_stream_label(stream);
+            let is_fav = get_importance(&stream.user_login, &streamer_settings)
+                == StreamerImportance::Favourite;
+            let label = format_stream_label_with_star(stream, is_fav);
             let id = format!("{}{}", ids::STREAM_PREFIX, stream.user_login);
             items.push(Box::new(MenuItemBuilder::with_id(id, label).build(app)?));
         }
@@ -233,7 +259,9 @@ fn build_authenticated_menu(
             let mut more_submenu = SubmenuBuilder::new(app, more_label);
 
             for stream in &overflow {
-                let label = format_stream_label(stream);
+                let is_fav = get_importance(&stream.user_login, &streamer_settings)
+                    == StreamerImportance::Favourite;
+                let label = format_stream_label_with_star(stream, is_fav);
                 let id = format!("{}{}", ids::STREAM_PREFIX, stream.user_login);
                 let item = MenuItemBuilder::with_id(id, label).build(app)?;
                 more_submenu = more_submenu.item(&item);
@@ -285,6 +313,14 @@ fn build_authenticated_menu(
     }
 
     // === Scheduled section ===
+    // Filter out Ignore streamers from scheduled
+    let scheduled: Vec<_> = scheduled
+        .into_iter()
+        .filter(|s| {
+            get_importance(&s.broadcaster_login, &streamer_settings) != StreamerImportance::Ignore
+        })
+        .collect();
+
     items.push(Box::new(
         MenuItemBuilder::new("Scheduled (Next 24h)")
             .enabled(false)
@@ -311,7 +347,9 @@ fn build_authenticated_menu(
         };
 
         for sched in &show_in_main {
-            let label = format_scheduled_label(sched);
+            let is_fav = get_importance(&sched.broadcaster_login, &streamer_settings)
+                == StreamerImportance::Favourite;
+            let label = format_scheduled_label_with_star(sched, is_fav);
             let id = format!("{}{}", ids::SCHEDULED_PREFIX, sched.broadcaster_login);
             items.push(Box::new(MenuItemBuilder::with_id(id, label).build(app)?));
         }
@@ -322,7 +360,9 @@ fn build_authenticated_menu(
             let mut more_submenu = SubmenuBuilder::new(app, more_label);
 
             for sched in &overflow {
-                let label = format_scheduled_label(sched);
+                let is_fav = get_importance(&sched.broadcaster_login, &streamer_settings)
+                    == StreamerImportance::Favourite;
+                let label = format_scheduled_label_with_star(sched, is_fav);
                 let id = format!("{}{}", ids::SCHEDULED_PREFIX, sched.broadcaster_login);
                 let item = MenuItemBuilder::with_id(id, label).build(app)?;
                 more_submenu = more_submenu.item(&item);
@@ -384,11 +424,13 @@ fn open_stream(user_login: &str) {
     }
 }
 
-/// Formats a stream for the Following Live menu
-/// Format: "StreamerName - GameName (1.2k, 2h 15m)"
-pub(crate) fn format_stream_label(s: &Stream) -> String {
+/// Formats a stream for the Following Live menu with optional star prefix
+/// Format: "[star] StreamerName - GameName (1.2k, 2h 15m)"
+pub(crate) fn format_stream_label_with_star(s: &Stream, star: bool) -> String {
+    let prefix = if star { "\u{2605} " } else { "" };
     format!(
-        "{} - {} ({}, {})",
+        "{}{} - {} ({}, {})",
+        prefix,
         s.user_name,
         truncate(&s.game_name, 20),
         s.format_viewer_count(),
@@ -396,10 +438,16 @@ pub(crate) fn format_stream_label(s: &Stream) -> String {
     )
 }
 
-/// Formats a scheduled stream
-/// Format: "StreamerName - Tomorrow 3:00 PM"
-pub(crate) fn format_scheduled_label(s: &ScheduledStream) -> String {
-    format!("{} - {}", s.broadcaster_name, s.format_start_time())
+/// Formats a scheduled stream label with optional star prefix
+/// Format: "[star] StreamerName - Tomorrow 3:00 PM"
+pub(crate) fn format_scheduled_label_with_star(s: &ScheduledStream, star: bool) -> String {
+    let prefix = if star { "\u{2605} " } else { "" };
+    format!(
+        "{}{} - {}",
+        prefix,
+        s.broadcaster_name,
+        s.format_start_time()
+    )
 }
 
 /// Formats a stream for category submenu (no game name since it's implied)
@@ -516,7 +564,7 @@ mod tests {
     #[test]
     fn format_stream_label_basic() {
         let stream = make_stream("Ninja", "Fortnite", 5000, 2);
-        let label = format_stream_label(&stream);
+        let label = format_stream_label_with_star(&stream, false);
 
         assert!(
             label.contains("Ninja"),
@@ -535,7 +583,7 @@ mod tests {
             1000,
             1,
         );
-        let label = format_stream_label(&stream);
+        let label = format_stream_label_with_star(&stream, false);
 
         // Game name should be truncated to 20 chars
         assert!(
@@ -553,7 +601,7 @@ mod tests {
     #[test]
     fn format_stream_label_small_viewers() {
         let stream = make_stream("SmallStreamer", "Minecraft", 42, 0);
-        let label = format_stream_label(&stream);
+        let label = format_stream_label_with_star(&stream, false);
 
         assert!(
             label.contains("42"),
@@ -567,7 +615,7 @@ mod tests {
     #[test]
     fn format_scheduled_label_basic() {
         let scheduled = make_scheduled("StreamerName", 5);
-        let label = format_scheduled_label(&scheduled);
+        let label = format_scheduled_label_with_star(&scheduled, false);
 
         assert!(
             label.starts_with("StreamerName - "),
@@ -579,7 +627,7 @@ mod tests {
     #[test]
     fn format_scheduled_label_contains_time() {
         let scheduled = make_scheduled("TestStreamer", 2);
-        let label = format_scheduled_label(&scheduled);
+        let label = format_scheduled_label_with_star(&scheduled, false);
 
         // Should contain time-related text (Today, Tomorrow, or day name)
         let has_time_info = label.contains("Today")

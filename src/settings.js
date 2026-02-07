@@ -5,6 +5,9 @@ const { getCurrentWindow } = window.__TAURI__.window;
 // State
 let config = null;
 let searchTimeout = null;
+let followedChannels = [];
+let selectedStreamer = null;
+let streamerSearchTimeout = null;
 
 // DOM Elements
 const tabs = document.querySelectorAll('.tab');
@@ -17,21 +20,38 @@ const notifyOnCategoryInput = document.getElementById('notify_on_category');
 const categorySearchInput = document.getElementById('category_search');
 const searchResultsDiv = document.getElementById('search_results');
 const categoryListDiv = document.getElementById('category_list');
+const streamerSearchInput = document.getElementById('streamer_search');
+const streamerSearchResultsDiv = document.getElementById('streamer_search_results');
+const streamerListDiv = document.getElementById('streamer_list');
+const streamerDetailDiv = document.getElementById('streamer_detail');
 const saveBtn = document.getElementById('save_btn');
 const cancelBtn = document.getElementById('cancel_btn');
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
   await loadConfig();
+  await loadFollowedChannels();
   setupEventListeners();
 });
 
 async function loadConfig() {
   try {
     config = await invoke('get_config');
+    if (!config.streamer_settings) {
+      config.streamer_settings = {};
+    }
     populateForm();
   } catch (error) {
     console.error('Failed to load config:', error);
+  }
+}
+
+async function loadFollowedChannels() {
+  try {
+    followedChannels = await invoke('get_followed_channels_list');
+  } catch (error) {
+    console.error('Failed to load followed channels:', error);
+    followedChannels = [];
   }
 }
 
@@ -45,6 +65,7 @@ function populateForm() {
   notifyOnCategoryInput.checked = config.notify_on_category;
 
   renderCategoryList();
+  renderStreamerList();
 }
 
 function renderCategoryList() {
@@ -64,6 +85,136 @@ function renderCategoryList() {
       <button class="category-remove" onclick="removeCategory('${cat.id}')">Remove</button>
     </div>
   `).join('');
+}
+
+// === Streamer Settings ===
+
+function renderStreamerList() {
+  const settings = config?.streamer_settings || {};
+  const logins = Object.keys(settings).sort((a, b) =>
+    settings[a].display_name.localeCompare(settings[b].display_name)
+  );
+
+  if (logins.length === 0) {
+    streamerListDiv.innerHTML = '<div class="empty-state">No streamers configured</div>';
+    renderStreamerDetail();
+    return;
+  }
+
+  streamerListDiv.innerHTML = logins.map(login => {
+    const s = settings[login];
+    const selectedClass = selectedStreamer === login ? ' selected' : '';
+    return `
+      <div class="streamer-item${selectedClass}" data-login="${escapeHtml(login)}" onclick="selectStreamer('${escapeHtml(login)}')">
+        <span class="streamer-item-name">${escapeHtml(s.display_name)}</span>
+        <button class="streamer-item-remove" onclick="event.stopPropagation(); removeStreamer('${escapeHtml(login)}')">Remove</button>
+      </div>
+    `;
+  }).join('');
+
+  renderStreamerDetail();
+}
+
+function renderStreamerDetail() {
+  if (!selectedStreamer || !config.streamer_settings[selectedStreamer]) {
+    selectedStreamer = null;
+    streamerDetailDiv.innerHTML = '<div class="empty-detail-state">Select a streamer to configure</div>';
+    return;
+  }
+
+  const s = config.streamer_settings[selectedStreamer];
+  const importanceOptions = ['favourite', 'normal', 'silent', 'ignore'];
+  const importanceLabels = {
+    favourite: 'Favourite - Star prefix, sorted first',
+    normal: 'Normal - Default behavior',
+    silent: 'Silent - No notifications',
+    ignore: 'Ignore - Hidden from menu',
+  };
+
+  streamerDetailDiv.innerHTML = `
+    <div class="detail-header">${escapeHtml(s.display_name)}</div>
+    <div class="detail-field">
+      <label for="streamer_importance">Importance</label>
+      <select id="streamer_importance" onchange="updateStreamerImportance(this.value)">
+        ${importanceOptions.map(opt => `
+          <option value="${opt}" ${s.importance === opt ? 'selected' : ''}>${importanceLabels[opt]}</option>
+        `).join('')}
+      </select>
+    </div>
+  `;
+}
+
+function selectStreamer(login) {
+  selectedStreamer = login;
+  renderStreamerList();
+}
+
+function addStreamer(login, displayName) {
+  if (!config.streamer_settings) {
+    config.streamer_settings = {};
+  }
+
+  if (config.streamer_settings[login]) {
+    // Already exists, just select it
+    selectedStreamer = login;
+    renderStreamerList();
+    return;
+  }
+
+  config.streamer_settings[login] = {
+    display_name: displayName,
+    importance: 'normal'
+  };
+
+  selectedStreamer = login;
+  renderStreamerList();
+
+  // Clear search
+  streamerSearchInput.value = '';
+  streamerSearchResultsDiv.classList.remove('visible');
+}
+
+function removeStreamer(login) {
+  if (!config.streamer_settings) return;
+
+  delete config.streamer_settings[login];
+
+  if (selectedStreamer === login) {
+    selectedStreamer = null;
+  }
+
+  renderStreamerList();
+}
+
+function updateStreamerImportance(value) {
+  if (!selectedStreamer || !config.streamer_settings[selectedStreamer]) return;
+  config.streamer_settings[selectedStreamer].importance = value;
+}
+
+function searchStreamers(query) {
+  const lowerQuery = query.toLowerCase();
+  const configuredLogins = new Set(Object.keys(config?.streamer_settings || {}));
+
+  const results = followedChannels.filter(ch => {
+    if (configuredLogins.has(ch.broadcaster_login)) return false;
+    return ch.broadcaster_name.toLowerCase().includes(lowerQuery) ||
+           ch.broadcaster_login.toLowerCase().includes(lowerQuery);
+  });
+
+  if (results.length === 0) {
+    streamerSearchResultsDiv.innerHTML = '<div class="search-result-item">No results found</div>';
+    streamerSearchResultsDiv.classList.add('visible');
+    return;
+  }
+
+  // Limit to top 10
+  const shown = results.slice(0, 10);
+  streamerSearchResultsDiv.innerHTML = shown.map(ch => `
+    <div class="search-result-item" onclick="addStreamer('${escapeHtml(ch.broadcaster_login)}', '${escapeHtml(ch.broadcaster_name)}')">
+      ${escapeHtml(ch.broadcaster_name)}
+    </div>
+  `).join('');
+  streamerSearchResultsDiv.classList.add('visible');
 }
 
 function setupEventListeners() {
@@ -96,10 +247,27 @@ function setupEventListeners() {
     searchTimeout = setTimeout(() => searchCategories(query), 300);
   });
 
+  // Streamer search with debounce (client-side filtering)
+  streamerSearchInput.addEventListener('input', (e) => {
+    const query = e.target.value.trim();
+
+    if (streamerSearchTimeout) {
+      clearTimeout(streamerSearchTimeout);
+    }
+
+    if (query.length < 2) {
+      streamerSearchResultsDiv.classList.remove('visible');
+      return;
+    }
+
+    streamerSearchTimeout = setTimeout(() => searchStreamers(query), 150);
+  });
+
   // Close search results when clicking outside
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.search-container')) {
       searchResultsDiv.classList.remove('visible');
+      streamerSearchResultsDiv.classList.remove('visible');
     }
   });
 
@@ -182,7 +350,8 @@ async function saveConfig() {
       notify_max_gap_min: parseInt(notifyMaxGapInput.value, 10) || 10,
       notify_on_live: notifyOnLiveInput.checked,
       notify_on_category: notifyOnCategoryInput.checked,
-      followed_categories: config.followed_categories || []
+      followed_categories: config.followed_categories || [],
+      streamer_settings: config.streamer_settings || {}
     };
 
     // Validate
@@ -209,3 +378,7 @@ function escapeHtml(text) {
 // Make functions available globally for onclick handlers
 window.addCategory = addCategory;
 window.removeCategory = removeCategory;
+window.selectStreamer = selectStreamer;
+window.addStreamer = addStreamer;
+window.removeStreamer = removeStreamer;
+window.updateStreamerImportance = updateStreamerImportance;

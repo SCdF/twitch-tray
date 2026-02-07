@@ -11,6 +11,7 @@
     <nav class="tabs">
       <button class="tab active" data-tab="general">General</button>
       <button class="tab" data-tab="categories">Categories</button>
+      <button class="tab" data-tab="streamers">Streamers</button>
     </nav>
 
     <main class="content">
@@ -63,6 +64,27 @@
 
         <div class="category-list" id="category_list">
           <!-- Categories will be added here dynamically -->
+        </div>
+      </section>
+
+      <!-- Streamers Pane -->
+      <section id="streamers" class="pane">
+        <h2>Streamer Settings</h2>
+        <p class="help-text">Configure per-streamer importance to control notifications and tray menu display.</p>
+
+        <div class="streamers-layout">
+          <div class="streamers-left-panel">
+            <div class="search-container">
+              <input type="text" id="streamer_search" placeholder="Search followed channels...">
+              <div id="streamer_search_results" class="search-results"></div>
+            </div>
+            <div class="streamer-list" id="streamer_list">
+              <div class="empty-state">No streamers configured</div>
+            </div>
+          </div>
+          <div class="streamers-right-panel" id="streamer_detail">
+            <div class="empty-detail-state">Select a streamer to configure</div>
+          </div>
         </div>
       </section>
     </main>

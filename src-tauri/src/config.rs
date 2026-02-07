@@ -1,10 +1,30 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::RwLock;
 
 const APP_NAME: &str = "twitch-tray";
 const CONFIG_FILE: &str = "config.json";
+
+/// Importance level for a streamer, affecting display and notifications
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamerImportance {
+    Favourite,
+    #[default]
+    Normal,
+    Silent,
+    Ignore,
+}
+
+/// Per-streamer settings
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StreamerSettings {
+    pub display_name: String,
+    #[serde(default)]
+    pub importance: StreamerImportance,
+}
 
 /// A followed category for category stream tracking
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -32,6 +52,9 @@ pub struct Config {
     /// Categories to follow for category-based stream listings
     #[serde(default)]
     pub followed_categories: Vec<FollowedCategory>,
+    /// Per-streamer settings (keyed by user_login)
+    #[serde(default)]
+    pub streamer_settings: HashMap<String, StreamerSettings>,
 }
 
 fn default_poll_interval() -> u64 {
@@ -63,6 +86,7 @@ impl Default for Config {
             notify_on_category: default_notify_on_category(),
             notify_max_gap_min: default_notify_max_gap(),
             followed_categories: Vec::new(),
+            streamer_settings: HashMap::new(),
         }
     }
 }
@@ -165,6 +189,17 @@ mod tests {
         assert!(config.followed_categories.is_empty());
     }
 
+    #[test]
+    fn default_streamer_settings_is_empty() {
+        let config = Config::default();
+        assert!(config.streamer_settings.is_empty());
+    }
+
+    #[test]
+    fn default_streamer_importance_is_normal() {
+        assert_eq!(StreamerImportance::default(), StreamerImportance::Normal);
+    }
+
     // === Partial deserialization tests ===
 
     #[test]
@@ -178,6 +213,7 @@ mod tests {
         assert!(config.notify_on_category);
         assert_eq!(config.notify_max_gap_min, 10);
         assert!(config.followed_categories.is_empty());
+        assert!(config.streamer_settings.is_empty());
     }
 
     #[test]
@@ -209,6 +245,15 @@ mod tests {
 
     #[test]
     fn serialize_roundtrip() {
+        let mut streamer_settings = HashMap::new();
+        streamer_settings.insert(
+            "teststreamer".to_string(),
+            StreamerSettings {
+                display_name: "TestStreamer".to_string(),
+                importance: StreamerImportance::Favourite,
+            },
+        );
+
         let original = Config {
             poll_interval_sec: 90,
             schedule_poll_min: 15,
@@ -219,6 +264,7 @@ mod tests {
                 id: "12345".to_string(),
                 name: "Just Chatting".to_string(),
             }],
+            streamer_settings,
         };
 
         let json = serde_json::to_string(&original).unwrap();
@@ -233,6 +279,7 @@ mod tests {
             deserialized.followed_categories,
             original.followed_categories
         );
+        assert_eq!(deserialized.streamer_settings, original.streamer_settings);
     }
 
     #[test]
@@ -269,6 +316,42 @@ mod tests {
 
         assert_eq!(cat1, cat2);
         assert_ne!(cat1, cat3);
+    }
+
+    #[test]
+    fn deserialize_with_streamer_settings() {
+        let json = r#"{
+            "streamer_settings": {
+                "ninja": {"display_name": "Ninja", "importance": "favourite"},
+                "shroud": {"display_name": "Shroud", "importance": "silent"}
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+
+        assert_eq!(config.streamer_settings.len(), 2);
+        assert_eq!(
+            config.streamer_settings.get("ninja").unwrap().importance,
+            StreamerImportance::Favourite
+        );
+        assert_eq!(
+            config.streamer_settings.get("shroud").unwrap().importance,
+            StreamerImportance::Silent
+        );
+    }
+
+    #[test]
+    fn streamer_settings_default_importance() {
+        let json = r#"{
+            "streamer_settings": {
+                "ninja": {"display_name": "Ninja"}
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+
+        assert_eq!(
+            config.streamer_settings.get("ninja").unwrap().importance,
+            StreamerImportance::Normal
+        );
     }
 
     #[test]

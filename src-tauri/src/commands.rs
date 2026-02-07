@@ -4,7 +4,7 @@ use tauri::{AppHandle, State};
 
 use crate::app::App;
 use crate::config::{Config, FollowedCategory};
-use crate::twitch::Category;
+use crate::twitch::{Category, FollowedChannel};
 
 /// Gets the current configuration
 #[tauri::command]
@@ -28,7 +28,12 @@ pub async fn save_config(
     // Rebuild menu with updated data
     let category_streams = app.state.get_category_streams().await;
     app.tray_manager
-        .rebuild_menu_with_categories(&app_handle, config.followed_categories, category_streams)
+        .rebuild_menu_with_categories(
+            &app_handle,
+            config.followed_categories,
+            category_streams,
+            config.streamer_settings,
+        )
         .await
         .map_err(|e| e.to_string())?;
 
@@ -51,4 +56,12 @@ pub async fn search_categories(
 #[tauri::command]
 pub fn get_followed_categories(app: State<'_, Arc<App>>) -> Vec<FollowedCategory> {
     app.config.get().followed_categories
+}
+
+/// Gets the list of followed channels from state
+#[tauri::command]
+pub async fn get_followed_channels_list(
+    app: State<'_, Arc<App>>,
+) -> Result<Vec<FollowedChannel>, String> {
+    Ok(app.state.get_followed_channels().await)
 }

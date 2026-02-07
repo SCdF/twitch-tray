@@ -7,7 +7,7 @@ use tokio::sync::{mpsc, watch, Mutex, RwLock};
 use tokio::time::Duration;
 
 use crate::auth::{DeviceFlow, Token, TokenStore, CLIENT_ID};
-use crate::config::ConfigManager;
+use crate::config::{ConfigManager, StreamerImportance};
 use crate::notify::{DesktopNotifier, Notifier, SnoozeRequest};
 use crate::state::AppState;
 use crate::tray::TrayManager;
@@ -122,8 +122,7 @@ impl App {
 
     async fn load_followed_channels(&self) -> anyhow::Result<()> {
         let follows = self.client.get_all_followed_channels().await?;
-        let ids: Vec<String> = follows.into_iter().map(|f| f.broadcaster_id).collect();
-        self.state.set_followed_channel_ids(ids).await;
+        self.state.set_followed_channels(follows).await;
         Ok(())
     }
 
@@ -200,6 +199,7 @@ impl App {
                             &handle,
                             cfg.followed_categories,
                             category_streams,
+                            cfg.streamer_settings,
                         )
                         .await
                     {
@@ -251,6 +251,7 @@ impl App {
                             &handle,
                             cfg.followed_categories,
                             category_streams,
+                            cfg.streamer_settings,
                         )
                         .await
                     {
@@ -344,6 +345,7 @@ impl App {
                             &handle,
                             cfg.followed_categories,
                             category_streams,
+                            cfg.streamer_settings,
                         )
                         .await
                     {
@@ -427,12 +429,31 @@ impl App {
 
         // Notify for newly live streams (only after initial load, and if not suppressed)
         if self.initial_load_done.load(Ordering::SeqCst) && !suppress_notifications {
+            let streamer_settings = self.config.get().streamer_settings;
             for stream in &result.newly_live {
+                let importance = streamer_settings
+                    .get(&stream.user_login)
+                    .map(|s| s.importance)
+                    .unwrap_or_default();
+                if importance == StreamerImportance::Silent
+                    || importance == StreamerImportance::Ignore
+                {
+                    continue;
+                }
                 if let Err(e) = self.notifier.stream_live(stream) {
                     tracing::error!("Notification error: {}", e);
                 }
             }
             for change in &result.category_changes {
+                let importance = streamer_settings
+                    .get(&change.stream.user_login)
+                    .map(|s| s.importance)
+                    .unwrap_or_default();
+                if importance == StreamerImportance::Silent
+                    || importance == StreamerImportance::Ignore
+                {
+                    continue;
+                }
                 if let Err(e) = self
                     .notifier
                     .category_changed(&change.stream, &change.old_category)
@@ -567,9 +588,7 @@ impl App {
 
                     // Load followed channels
                     if let Ok(follows) = client.get_all_followed_channels().await {
-                        let ids: Vec<String> =
-                            follows.into_iter().map(|f| f.broadcaster_id).collect();
-                        state.set_followed_channel_ids(ids).await;
+                        state.set_followed_channels(follows).await;
                     }
 
                     // Initial data fetch

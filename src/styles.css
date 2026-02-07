@@ -124,9 +124,20 @@ h2 {
   margin-bottom: 20px;
 }
 
-#category_search {
+.search-container input[type="text"] {
   width: 100%;
-  padding: 12px;
+  padding: 10px 12px;
+  background-color: #0f3460;
+  border: 1px solid #16213e;
+  border-radius: 6px;
+  color: #e0e0e0;
+  font-size: 14px;
+}
+
+.search-container input[type="text"]:focus {
+  outline: none;
+  border-color: #9146ff;
+  box-shadow: 0 0 0 2px rgba(145, 70, 255, 0.2);
 }
 
 .search-results {
@@ -236,3 +247,119 @@ h2 {
 .btn-secondary:hover {
   background-color: rgba(255, 255, 255, 0.05);
 }
+
+/* Streamers Layout */
+.streamers-layout {
+  display: flex;
+  gap: 20px;
+  min-height: 400px;
+}
+
+.streamers-left-panel {
+  flex: 0 0 40%;
+  display: flex;
+  flex-direction: column;
+}
+
+.streamers-right-panel {
+  flex: 1;
+  padding: 16px;
+  background-color: #16213e;
+  border-radius: 6px;
+}
+
+.streamer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  max-height: 500px;
+}
+
+.streamer-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background-color: #0f3460;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  border-left: 3px solid transparent;
+}
+
+.streamer-item:hover {
+  background-color: rgba(145, 70, 255, 0.15);
+}
+
+.streamer-item.selected {
+  border-left-color: #9146ff;
+  background-color: rgba(145, 70, 255, 0.2);
+}
+
+.streamer-item-name {
+  font-size: 14px;
+}
+
+.streamer-item-remove {
+  background: none;
+  border: none;
+  color: #ff6b6b;
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 12px;
+  border-radius: 4px;
+  transition: background-color 0.2s ease;
+}
+
+.streamer-item-remove:hover {
+  background-color: rgba(255, 107, 107, 0.2);
+}
+
+.empty-detail-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #808080;
+  font-size: 14px;
+}
+
+.detail-header {
+  font-size: 16px;
+  font-weight: 500;
+  color: #ffffff;
+  margin-bottom: 20px;
+}
+
+.detail-field label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 14px;
+  color: #e0e0e0;
+}
+
+.detail-field select {
+  width: 100%;
+  padding: 10px 12px;
+  background-color: #0f3460;
+  border: 1px solid #16213e;
+  border-radius: 6px;
+  color: #e0e0e0;
+  font-size: 14px;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.detail-field select option {
+  background-color: #0f3460;
+  color: #e0e0e0;
+}
+
+.detail-field select:focus {
+  outline: none;
+  border-color: #9146ff;
+  box-shadow: 0 0 0 2px rgba(145, 70, 255, 0.2);
+}
+

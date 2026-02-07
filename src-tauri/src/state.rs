@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{watch, RwLock};
 
-use crate::twitch::{ScheduledStream, Stream};
+use crate::twitch::{FollowedChannel, ScheduledStream, Stream};
 
 /// Type of state change
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,7 +38,7 @@ struct StateInner {
     followed_streams: Vec<Stream>,
     scheduled_streams: Vec<ScheduledStream>,
     schedules_loaded: bool,
-    followed_channel_ids: Vec<String>,
+    followed_channels: Vec<FollowedChannel>,
 
     // Categories being tracked (from followed live streams)
     tracked_categories: HashMap<String, String>, // game_id -> game_name
@@ -184,10 +184,15 @@ impl AppState {
         self.inner.read().await.scheduled_streams.clone()
     }
 
-    /// Sets the list of followed channel IDs
-    pub async fn set_followed_channel_ids(&self, ids: Vec<String>) {
+    /// Sets the list of followed channels
+    pub async fn set_followed_channels(&self, channels: Vec<FollowedChannel>) {
         let mut state = self.inner.write().await;
-        state.followed_channel_ids = ids;
+        state.followed_channels = channels;
+    }
+
+    /// Returns the list of followed channels
+    pub async fn get_followed_channels(&self) -> Vec<FollowedChannel> {
+        self.inner.read().await.followed_channels.clone()
     }
 
     /// Updates streams for a specific category
