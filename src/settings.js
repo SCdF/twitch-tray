@@ -105,6 +105,15 @@ function renderCategoryList() {
 
 // === Streamer Settings ===
 
+function importanceIcon(importance) {
+  switch (importance) {
+    case 'favourite': return '\u2B50 ';
+    case 'silent': return '\uD83D\uDD15 ';
+    case 'ignore': return '\uD83D\uDEAB ';
+    default: return '';
+  }
+}
+
 function renderStreamerList() {
   const settings = config?.streamer_settings || {};
   const logins = Object.keys(settings).sort((a, b) =>
@@ -122,7 +131,7 @@ function renderStreamerList() {
     const selectedClass = selectedStreamer === login ? ' selected' : '';
     return `
       <div class="streamer-item${selectedClass}" data-login="${escapeHtml(login)}" onclick="selectStreamer('${escapeHtml(login)}')">
-        <span class="streamer-item-name">${escapeHtml(s.display_name)}</span>
+        <span class="streamer-item-name">${importanceIcon(s.importance)}${escapeHtml(s.display_name)}</span>
         <button class="streamer-item-remove" onclick="event.stopPropagation(); removeStreamer('${escapeHtml(login)}')">Remove</button>
       </div>
     `;
@@ -146,7 +155,7 @@ function renderStreamerDetailInto(container) {
   };
 
   container.innerHTML = `
-    <div class="detail-header">${escapeHtml(s.display_name)}</div>
+    <div class="detail-header">${importanceIcon(s.importance)}${escapeHtml(s.display_name)}</div>
     <div class="detail-field">
       <label for="streamer_importance">Importance</label>
       <select id="streamer_importance" onchange="updateStreamerImportance(this.value)">
@@ -240,6 +249,12 @@ function removeStreamer(login) {
 function updateStreamerImportance(value) {
   if (!selectedStreamer || !config.streamer_settings[selectedStreamer]) return;
   config.streamer_settings[selectedStreamer].importance = value;
+  if (streamerParam) {
+    const container = document.getElementById('streamer_detail_mode');
+    if (container) renderStreamerDetailInto(container);
+  } else {
+    renderStreamerList();
+  }
 }
 
 function searchStreamers(query) {
