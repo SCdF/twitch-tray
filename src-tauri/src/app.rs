@@ -8,7 +8,7 @@ use tokio::time::Duration;
 
 use crate::auth::{DeviceFlow, Token, TokenStore, CLIENT_ID};
 use crate::config::{ConfigManager, StreamerImportance};
-use crate::notify::{DesktopNotifier, Notifier, SnoozeRequest};
+use crate::notify::{DesktopNotifier, Notifier, SnoozeRequest, StreamerSettingsRequest};
 use crate::state::AppState;
 use crate::tray::TrayManager;
 use crate::twitch::{ApiError, TwitchClient};
@@ -40,6 +40,10 @@ pub struct App {
     // Snooze notification channel
     snooze_tx: mpsc::UnboundedSender<SnoozeRequest>,
     snooze_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<SnoozeRequest>>>>,
+
+    // Streamer settings notification channel
+    settings_tx: mpsc::UnboundedSender<StreamerSettingsRequest>,
+    settings_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<StreamerSettingsRequest>>>>,
 }
 
 impl App {
@@ -50,10 +54,12 @@ impl App {
         let state = AppState::new();
         let cfg = config.get();
         let (snooze_tx, snooze_rx) = mpsc::unbounded_channel();
+        let (settings_tx, settings_rx) = mpsc::unbounded_channel();
         let notifier = DesktopNotifier::new(
             cfg.notify_on_live,
             cfg.notify_on_category,
             snooze_tx.clone(),
+            settings_tx.clone(),
         );
         let client = TwitchClient::new(CLIENT_ID.to_string());
         let tray_manager = TrayManager::new(state.clone());
@@ -75,6 +81,8 @@ impl App {
             notify_max_gap_secs,
             snooze_tx,
             snooze_rx: Arc::new(Mutex::new(Some(snooze_rx))),
+            settings_tx,
+            settings_rx: Arc::new(Mutex::new(Some(settings_rx))),
         })
     }
 
@@ -322,6 +330,48 @@ impl App {
                 for user_id in to_remove {
                     snoozed.remove(&user_id);
                 }
+            }
+        });
+
+        // Streamer settings task
+        let app = self.clone();
+        let settings_app_handle = app_handle.clone();
+        tokio::spawn(async move {
+            let mut rx = match app.settings_rx.lock().await.take() {
+                Some(rx) => rx,
+                None => {
+                    tracing::warn!("Settings receiver already taken");
+                    return;
+                }
+            };
+
+            while let Some(request) = rx.recv().await {
+                tracing::info!(
+                    "Settings requested for {} ({})",
+                    request.display_name,
+                    request.user_login,
+                );
+
+                // Auto-add streamer to config if not already present
+                let mut cfg = app.config.get();
+                if !cfg.streamer_settings.contains_key(&request.user_login) {
+                    cfg.streamer_settings.insert(
+                        request.user_login.clone(),
+                        crate::config::StreamerSettings {
+                            display_name: request.display_name.clone(),
+                            importance: crate::config::StreamerImportance::Normal,
+                        },
+                    );
+                    if let Err(e) = app.config.save(cfg) {
+                        tracing::error!("Failed to save config with new streamer: {}", e);
+                    }
+                }
+
+                crate::tray::open_streamer_settings_window(
+                    &settings_app_handle,
+                    &request.user_login,
+                    &request.display_name,
+                );
             }
         });
 
@@ -610,7 +660,9 @@ impl App {
                 Err(e) => {
                     tracing::error!("Authentication failed: {}", e);
                     let (err_tx, _) = mpsc::unbounded_channel();
-                    let notifier = DesktopNotifier::new(notifier_enabled, false, err_tx);
+                    let (err_settings_tx, _) = mpsc::unbounded_channel();
+                    let notifier =
+                        DesktopNotifier::new(notifier_enabled, false, err_tx, err_settings_tx);
                     let _ = notifier.error(&format!("Authentication failed: {}", e));
                 }
             }
@@ -648,6 +700,7 @@ impl Clone for App {
                 cfg.notify_on_live,
                 cfg.notify_on_category,
                 self.snooze_tx.clone(),
+                self.settings_tx.clone(),
             ),
             tray_manager: self.tray_manager.clone(),
             initial_load_done: AtomicBool::new(self.initial_load_done.load(Ordering::SeqCst)),
@@ -658,6 +711,8 @@ impl Clone for App {
             notify_max_gap_secs: self.notify_max_gap_secs,
             snooze_tx: self.snooze_tx.clone(),
             snooze_rx: self.snooze_rx.clone(),
+            settings_tx: self.settings_tx.clone(),
+            settings_rx: self.settings_rx.clone(),
         }
     }
 }

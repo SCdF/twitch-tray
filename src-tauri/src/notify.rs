@@ -18,11 +18,25 @@ pub struct SnoozeRequest {
     pub remind_at: DateTime<Utc>,
 }
 
+/// A request to open per-streamer settings from a notification
+#[derive(Debug, Clone)]
+pub struct StreamerSettingsRequest {
+    pub user_login: String,
+    pub display_name: String,
+}
+
 /// Info needed to attach a snooze button to a notification
 struct SnoozeInfo {
     user_id: String,
     user_name: String,
     snooze_tx: mpsc::UnboundedSender<SnoozeRequest>,
+}
+
+/// Info needed to attach a settings button to a notification
+struct SettingsInfo {
+    user_login: String,
+    display_name: String,
+    settings_tx: mpsc::UnboundedSender<StreamerSettingsRequest>,
 }
 
 /// Trait for sending notifications
@@ -48,6 +62,7 @@ pub struct DesktopNotifier {
     notify_on_live: bool,
     notify_on_category: bool,
     snooze_tx: mpsc::UnboundedSender<SnoozeRequest>,
+    settings_tx: mpsc::UnboundedSender<StreamerSettingsRequest>,
 }
 
 impl DesktopNotifier {
@@ -56,12 +71,14 @@ impl DesktopNotifier {
         notify_on_live: bool,
         notify_on_category: bool,
         snooze_tx: mpsc::UnboundedSender<SnoozeRequest>,
+        settings_tx: mpsc::UnboundedSender<StreamerSettingsRequest>,
     ) -> Self {
         Self {
             enabled: true,
             notify_on_live,
             notify_on_category,
             snooze_tx,
+            settings_tx,
         }
     }
 
@@ -74,6 +91,7 @@ impl DesktopNotifier {
         url: Option<&str>,
         category: Option<&str>,
         snooze_info: Option<SnoozeInfo>,
+        settings_info: Option<SettingsInfo>,
     ) -> anyhow::Result<()> {
         use notify_rust::{Hint, Notification};
 
@@ -95,6 +113,9 @@ impl DesktopNotifier {
             if snooze_info.is_some() {
                 notification.action("snooze_10", "Snooze 10m");
             }
+            if settings_info.is_some() {
+                notification.action("streamer-settings", "\u{2699}\u{fe0f}");
+            }
             let handle = notification.show()?;
             let url = url.to_string();
             std::thread::spawn(move || {
@@ -110,6 +131,15 @@ impl DesktopNotifier {
                                 remind_at: Utc::now() + Duration::minutes(10),
                             };
                             let _ = info.snooze_tx.send(request);
+                        }
+                    }
+                    "streamer-settings" => {
+                        if let Some(info) = &settings_info {
+                            let request = StreamerSettingsRequest {
+                                user_login: info.user_login.clone(),
+                                display_name: info.display_name.clone(),
+                            };
+                            let _ = info.settings_tx.send(request);
                         }
                     }
                     _ => {}
@@ -130,6 +160,7 @@ impl DesktopNotifier {
         url: Option<&str>,
         _category: Option<&str>,
         _snooze_info: Option<SnoozeInfo>,
+        _settings_info: Option<SettingsInfo>,
     ) -> anyhow::Result<()> {
         // On macOS and Windows, we'll use a simple approach
         // In a full implementation, you might want to use native APIs
@@ -187,6 +218,14 @@ impl DesktopNotifier {
             snooze_tx: self.snooze_tx.clone(),
         })
     }
+
+    fn make_settings_info(&self, stream: &Stream) -> Option<SettingsInfo> {
+        Some(SettingsInfo {
+            user_login: stream.user_login.clone(),
+            display_name: stream.user_name.clone(),
+            settings_tx: self.settings_tx.clone(),
+        })
+    }
 }
 
 impl Notifier for DesktopNotifier {
@@ -204,12 +243,14 @@ impl Notifier for DesktopNotifier {
 
         let url = format!("https://twitch.tv/{}", stream.user_login);
         let snooze = self.make_snooze_info(stream);
+        let settings = self.make_settings_info(stream);
         self.send_notification(
             &title,
             &message,
             Some(&url),
             Some(categories::STREAM_LIVE),
             snooze,
+            settings,
         )
     }
 
@@ -227,12 +268,14 @@ impl Notifier for DesktopNotifier {
 
         let url = format!("https://twitch.tv/{}", stream.user_login);
         let snooze = self.make_snooze_info(stream);
+        let settings = self.make_settings_info(stream);
         self.send_notification(
             &title,
             &message,
             Some(&url),
             Some(categories::STREAM_LIVE),
             snooze,
+            settings,
         )
     }
 
@@ -245,17 +288,19 @@ impl Notifier for DesktopNotifier {
         let message = format!("{} → {}", old_category, stream.game_name);
 
         let url = format!("https://twitch.tv/{}", stream.user_login);
+        let settings = self.make_settings_info(stream);
         self.send_notification(
             &title,
             &message,
             Some(&url),
             Some(categories::CATEGORY_CHANGE),
             None,
+            settings,
         )
     }
 
     fn error(&self, message: &str) -> anyhow::Result<()> {
-        self.send_notification(APP_NAME, message, None, None, None)
+        self.send_notification(APP_NAME, message, None, None, None, None)
     }
 }
 
@@ -524,8 +569,9 @@ mod tests {
 
     #[test]
     fn desktop_notifier_respects_notify_on_live_flag() {
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let notifier = DesktopNotifier::new(false, false, tx);
+        let (snooze_tx, _rx) = mpsc::unbounded_channel();
+        let (settings_tx, _rx2) = mpsc::unbounded_channel();
+        let notifier = DesktopNotifier::new(false, false, snooze_tx, settings_tx);
 
         let stream = make_stream("Test", "Game", "Title");
         // This should not send a notification (and not error)
@@ -534,8 +580,9 @@ mod tests {
 
     #[test]
     fn desktop_notifier_respects_notify_on_category_flag() {
-        let (tx, _rx) = mpsc::unbounded_channel();
-        let notifier = DesktopNotifier::new(true, false, tx);
+        let (snooze_tx, _rx) = mpsc::unbounded_channel();
+        let (settings_tx, _rx2) = mpsc::unbounded_channel();
+        let notifier = DesktopNotifier::new(true, false, snooze_tx, settings_tx);
 
         let stream = make_stream("Test", "Game", "Title");
         // This should not send a notification (and not error)

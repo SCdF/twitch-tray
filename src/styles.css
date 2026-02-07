@@ -363,3 +363,14 @@ h2 {
   box-shadow: 0 0 0 2px rgba(145, 70, 255, 0.2);
 }
 
+/* Streamer mode (notification settings popup) */
+.streamer-mode-container {
+  padding: 20px;
+}
+
+.streamer-mode-detail {
+  padding: 16px;
+  background-color: #16213e;
+  border-radius: 6px;
+}
+

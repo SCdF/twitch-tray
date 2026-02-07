@@ -177,6 +177,31 @@ pub fn open_settings_window(app: &AppHandle) {
     }
 }
 
+/// Opens a small settings window for a specific streamer
+pub fn open_streamer_settings_window(app: &AppHandle, user_login: &str, display_name: &str) {
+    let window_id = format!("streamer-settings-{}", user_login);
+
+    // Focus existing window if already open
+    if let Some(window) = app.get_webview_window(&window_id) {
+        let _ = window.set_focus();
+        return;
+    }
+
+    let url = format!("index.html?streamer={}", user_login);
+    let title = format!("{} - Settings", display_name);
+
+    match WebviewWindowBuilder::new(app, &window_id, tauri::WebviewUrl::App(url.into()))
+        .title(&title)
+        .inner_size(975.0, 975.0)
+        .resizable(true)
+        .center()
+        .build()
+    {
+        Ok(_) => tracing::info!("Streamer settings window opened for {}", user_login),
+        Err(e) => tracing::error!("Failed to open streamer settings window: {}", e),
+    }
+}
+
 fn build_unauthenticated_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let login = MenuItemBuilder::with_id(ids::LOGIN, "Login to Twitch").build(app)?;
     let quit = MenuItemBuilder::with_id(ids::QUIT, "Quit").build(app)?;

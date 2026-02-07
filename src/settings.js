@@ -2,6 +2,10 @@
 const { invoke } = window.__TAURI__.core;
 const { getCurrentWindow } = window.__TAURI__.window;
 
+// Streamer mode detection
+const urlParams = new URLSearchParams(window.location.search);
+const streamerParam = urlParams.get('streamer');
+
 // State
 let config = null;
 let searchTimeout = null;
@@ -30,8 +34,20 @@ const cancelBtn = document.getElementById('cancel_btn');
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
   await loadConfig();
-  await loadFollowedChannels();
-  setupEventListeners();
+
+  if (streamerParam) {
+    enterStreamerMode(streamerParam);
+  } else {
+    await loadFollowedChannels();
+    setupEventListeners();
+    return;
+  }
+
+  // Save/cancel for streamer mode
+  saveBtn.addEventListener('click', saveConfig);
+  cancelBtn.addEventListener('click', async () => {
+    await getCurrentWindow().close();
+  });
 });
 
 async function loadConfig() {
@@ -115,11 +131,9 @@ function renderStreamerList() {
   renderStreamerDetail();
 }
 
-function renderStreamerDetail() {
+function renderStreamerDetailInto(container) {
   if (!selectedStreamer || !config.streamer_settings[selectedStreamer]) {
-    selectedStreamer = null;
-    streamerDetailDiv.innerHTML = '<div class="empty-detail-state">Select a streamer to configure</div>';
-    return;
+    return false;
   }
 
   const s = config.streamer_settings[selectedStreamer];
@@ -131,7 +145,7 @@ function renderStreamerDetail() {
     ignore: 'Ignore - Hidden from menu',
   };
 
-  streamerDetailDiv.innerHTML = `
+  container.innerHTML = `
     <div class="detail-header">${escapeHtml(s.display_name)}</div>
     <div class="detail-field">
       <label for="streamer_importance">Importance</label>
@@ -142,6 +156,43 @@ function renderStreamerDetail() {
       </select>
     </div>
   `;
+  return true;
+}
+
+function renderStreamerDetail() {
+  if (!selectedStreamer || !config.streamer_settings[selectedStreamer]) {
+    selectedStreamer = null;
+    streamerDetailDiv.innerHTML = '<div class="empty-detail-state">Select a streamer to configure</div>';
+    return;
+  }
+
+  renderStreamerDetailInto(streamerDetailDiv);
+}
+
+function enterStreamerMode(login) {
+  // Hide tabs nav
+  const tabsEl = document.querySelector('.tabs');
+  if (tabsEl) tabsEl.style.display = 'none';
+
+  // Replace content with streamer-mode container
+  const contentEl = document.querySelector('.content');
+  contentEl.innerHTML = `
+    <div class="streamer-mode-container">
+      <div class="streamer-mode-detail" id="streamer_detail_mode"></div>
+    </div>
+  `;
+
+  // Auto-add streamer if missing (safety net)
+  if (!config.streamer_settings[login]) {
+    config.streamer_settings[login] = {
+      display_name: login,
+      importance: 'normal'
+    };
+  }
+
+  selectedStreamer = login;
+  const container = document.getElementById('streamer_detail_mode');
+  renderStreamerDetailInto(container);
 }
 
 function selectStreamer(login) {
@@ -343,23 +394,33 @@ function removeCategory(id) {
 
 async function saveConfig() {
   try {
-    // Build config from form
-    const newConfig = {
-      poll_interval_sec: parseInt(pollIntervalInput.value, 10) || 60,
-      schedule_poll_min: parseInt(schedulePollInput.value, 10) || 5,
-      notify_max_gap_min: parseInt(notifyMaxGapInput.value, 10) || 10,
-      notify_on_live: notifyOnLiveInput.checked,
-      notify_on_category: notifyOnCategoryInput.checked,
-      followed_categories: config.followed_categories || [],
-      streamer_settings: config.streamer_settings || {}
-    };
+    if (streamerParam) {
+      // Streamer mode: re-fetch current config and merge only this streamer's settings
+      const currentConfig = await invoke('get_config');
+      if (!currentConfig.streamer_settings) {
+        currentConfig.streamer_settings = {};
+      }
+      currentConfig.streamer_settings[streamerParam] = config.streamer_settings[streamerParam];
+      await invoke('save_config', { config: currentConfig });
+    } else {
+      // Full settings mode
+      const newConfig = {
+        poll_interval_sec: parseInt(pollIntervalInput.value, 10) || 60,
+        schedule_poll_min: parseInt(schedulePollInput.value, 10) || 5,
+        notify_max_gap_min: parseInt(notifyMaxGapInput.value, 10) || 10,
+        notify_on_live: notifyOnLiveInput.checked,
+        notify_on_category: notifyOnCategoryInput.checked,
+        followed_categories: config.followed_categories || [],
+        streamer_settings: config.streamer_settings || {}
+      };
 
-    // Validate
-    newConfig.poll_interval_sec = Math.max(30, Math.min(300, newConfig.poll_interval_sec));
-    newConfig.schedule_poll_min = Math.max(1, Math.min(60, newConfig.schedule_poll_min));
-    newConfig.notify_max_gap_min = Math.max(1, Math.min(60, newConfig.notify_max_gap_min));
+      // Validate
+      newConfig.poll_interval_sec = Math.max(30, Math.min(300, newConfig.poll_interval_sec));
+      newConfig.schedule_poll_min = Math.max(1, Math.min(60, newConfig.schedule_poll_min));
+      newConfig.notify_max_gap_min = Math.max(1, Math.min(60, newConfig.notify_max_gap_min));
 
-    await invoke('save_config', { config: newConfig });
+      await invoke('save_config', { config: newConfig });
+    }
 
     // Close window after successful save
     await getCurrentWindow().close();
