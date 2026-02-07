@@ -463,13 +463,15 @@ pub(crate) fn format_stream_label_with_star(s: &Stream, star: bool) -> String {
     )
 }
 
-/// Formats a scheduled stream label with optional star prefix
-/// Format: "[star] StreamerName - Tomorrow 3:00 PM"
+/// Formats a scheduled stream label with optional sparkle/star prefix
+/// Format: "[sparkle][star] StreamerName - Tomorrow 3:00 PM"
 pub(crate) fn format_scheduled_label_with_star(s: &ScheduledStream, star: bool) -> String {
-    let prefix = if star { "\u{2605} " } else { "" };
+    let sparkle = if s.is_inferred { "\u{2728} " } else { "" };
+    let star_str = if star { "\u{2605} " } else { "" };
     format!(
-        "{}{} - {}",
-        prefix,
+        "{}{}{} - {}",
+        sparkle,
+        star_str,
         s.broadcaster_name,
         s.format_start_time()
     )
@@ -541,6 +543,7 @@ mod tests {
             category: Some("Gaming".to_string()),
             category_id: Some("123".to_string()),
             is_recurring: false,
+            is_inferred: false,
         }
     }
 

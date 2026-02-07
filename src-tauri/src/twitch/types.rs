@@ -68,6 +68,8 @@ pub struct ScheduledStream {
     #[serde(default)]
     pub category_id: Option<String>,
     pub is_recurring: bool,
+    #[serde(default)]
+    pub is_inferred: bool,
 }
 
 impl ScheduledStream {
@@ -227,6 +229,7 @@ mod tests {
             category: Some("Gaming".to_string()),
             category_id: Some("123".to_string()),
             is_recurring: false,
+            is_inferred: false,
         }
     }
 

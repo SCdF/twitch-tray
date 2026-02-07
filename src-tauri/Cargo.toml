@@ -26,6 +26,7 @@ open = "5"
 urlencoding = "2"
 png = "0.17"
 async-trait = "0.1"
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 notify-rust = "4"

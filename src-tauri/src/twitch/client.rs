@@ -308,6 +308,7 @@ impl<H: HttpClient> TwitchClient<H> {
                     category: segment.category.as_ref().map(|c| c.name.clone()),
                     category_id: segment.category.map(|c| c.id),
                     is_recurring: segment.is_recurring,
+                    is_inferred: false,
                 };
 
                 all_scheduled.push(scheduled);

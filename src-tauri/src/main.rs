@@ -5,6 +5,7 @@ mod app;
 mod auth;
 mod commands;
 mod config;
+mod history;
 mod notify;
 mod state;
 mod tray;

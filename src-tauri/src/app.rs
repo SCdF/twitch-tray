@@ -8,6 +8,7 @@ use tokio::time::Duration;
 
 use crate::auth::{DeviceFlow, Token, TokenStore, CLIENT_ID};
 use crate::config::{ConfigManager, StreamerImportance};
+use crate::history::StreamHistoryDb;
 use crate::notify::{DesktopNotifier, Notifier, SnoozeRequest, StreamerSettingsRequest};
 use crate::state::AppState;
 use crate::tray::TrayManager;
@@ -21,6 +22,7 @@ pub struct App {
     pub client: TwitchClient,
     pub notifier: DesktopNotifier,
     pub tray_manager: TrayManager,
+    pub history: StreamHistoryDb,
 
     // Tracks if initial load is complete (don't notify until then)
     initial_load_done: AtomicBool,
@@ -63,6 +65,7 @@ impl App {
         );
         let client = TwitchClient::new(CLIENT_ID.to_string());
         let tray_manager = TrayManager::new(state.clone());
+        let history = StreamHistoryDb::new(ConfigManager::config_dir()?.join("history.db"))?;
         let (auth_cancel_tx, auth_cancel_rx) = watch::channel(false);
         let notify_max_gap_secs = cfg.notify_max_gap_min * 60;
 
@@ -73,6 +76,7 @@ impl App {
             client,
             notifier,
             tray_manager,
+            history,
             initial_load_done: AtomicBool::new(false),
             auth_cancel_tx,
             auth_cancel_rx,
@@ -450,6 +454,11 @@ impl App {
             }
         };
 
+        // Record stream history for schedule inference
+        if let Err(e) = self.history.record_streams(&streams) {
+            tracing::error!("Failed to record stream history: {}", e);
+        }
+
         // SUCCESS: We have stream data. Now determine if we should send notifications
         // based on the gap since the last *successful* refresh.
         let now = Utc::now();
@@ -547,7 +556,31 @@ impl App {
             }
         };
 
-        self.state.set_scheduled_streams(scheduled).await;
+        // Infer schedules from stream history and merge with API schedules
+        let mut combined = scheduled;
+        let channels = self.state.get_followed_channels().await;
+        let channel_lookup: HashMap<String, _> = channels
+            .into_iter()
+            .map(|c| (c.broadcaster_id.clone(), c))
+            .collect();
+
+        match self
+            .history
+            .infer_schedules(&channel_lookup, &combined, Utc::now())
+        {
+            Ok(inferred) => {
+                if !inferred.is_empty() {
+                    tracing::debug!("Inferred {} schedule(s) from history", inferred.len());
+                    combined.extend(inferred);
+                    combined.sort_by_key(|s| s.start_time);
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to infer schedules: {}", e);
+            }
+        }
+
+        self.state.set_scheduled_streams(combined).await;
     }
 
     /// Refreshes streams for all followed categories
@@ -703,6 +736,7 @@ impl Clone for App {
                 self.settings_tx.clone(),
             ),
             tray_manager: self.tray_manager.clone(),
+            history: self.history.clone(),
             initial_load_done: AtomicBool::new(self.initial_load_done.load(Ordering::SeqCst)),
             auth_cancel_tx: self.auth_cancel_tx.clone(),
             auth_cancel_rx: self.auth_cancel_rx.clone(),

@@ -37,6 +37,7 @@ pub fn make_scheduled(
         category: Some("Gaming".to_string()),
         category_id: Some("123".to_string()),
         is_recurring: false,
+        is_inferred: false,
     }
 }
 
