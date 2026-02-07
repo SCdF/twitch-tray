@@ -96,9 +96,12 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("Failed to build Tauri application")
         .run(|app, event| {
-            // Prevent app from exiting when all windows are closed (tray app)
-            if let tauri::RunEvent::ExitRequested { ref api, .. } = event {
-                api.prevent_exit();
+            // Prevent app from exiting when all windows are closed (tray app),
+            // but allow programmatic exit (e.g. Quit button calls app.exit(0))
+            if let tauri::RunEvent::ExitRequested { ref api, code, .. } = event {
+                if code.is_none() {
+                    api.prevent_exit();
+                }
             }
 
             // Handle custom events
