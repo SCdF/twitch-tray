@@ -3,9 +3,27 @@
 //! This module provides notification functionality with a trait-based
 //! abstraction for testability.
 
+use chrono::{DateTime, Duration, Utc};
+use tokio::sync::mpsc;
+
 use crate::twitch::Stream;
 
 const APP_NAME: &str = "Twitch Tray";
+
+/// A request to snooze a stream notification and re-notify after a delay
+#[derive(Debug, Clone)]
+pub struct SnoozeRequest {
+    pub user_id: String,
+    pub user_name: String,
+    pub remind_at: DateTime<Utc>,
+}
+
+/// Info needed to attach a snooze button to a notification
+struct SnoozeInfo {
+    user_id: String,
+    user_name: String,
+    snooze_tx: mpsc::UnboundedSender<SnoozeRequest>,
+}
 
 /// Trait for sending notifications
 ///
@@ -13,6 +31,9 @@ const APP_NAME: &str = "Twitch Tray";
 pub trait Notifier: Send + Sync {
     /// Sends a notification when a streamer goes live
     fn stream_live(&self, stream: &Stream) -> anyhow::Result<()>;
+
+    /// Sends a reminder notification for a snoozed stream
+    fn stream_reminder(&self, stream: &Stream) -> anyhow::Result<()>;
 
     /// Sends a notification when a streamer changes category
     fn category_changed(&self, stream: &Stream, old_category: &str) -> anyhow::Result<()>;
@@ -26,15 +47,21 @@ pub struct DesktopNotifier {
     enabled: bool,
     notify_on_live: bool,
     notify_on_category: bool,
+    snooze_tx: mpsc::UnboundedSender<SnoozeRequest>,
 }
 
 impl DesktopNotifier {
     /// Creates a new notifier
-    pub fn new(notify_on_live: bool, notify_on_category: bool) -> Self {
+    pub fn new(
+        notify_on_live: bool,
+        notify_on_category: bool,
+        snooze_tx: mpsc::UnboundedSender<SnoozeRequest>,
+    ) -> Self {
         Self {
             enabled: true,
             notify_on_live,
             notify_on_category,
+            snooze_tx,
         }
     }
 
@@ -46,6 +73,7 @@ impl DesktopNotifier {
         message: &str,
         url: Option<&str>,
         category: Option<&str>,
+        snooze_info: Option<SnoozeInfo>,
     ) -> anyhow::Result<()> {
         use notify_rust::{Hint, Notification};
 
@@ -64,13 +92,27 @@ impl DesktopNotifier {
 
         if let Some(url) = url {
             notification.action("default", "Open Stream");
+            if snooze_info.is_some() {
+                notification.action("snooze_10", "Snooze 10m");
+            }
             let handle = notification.show()?;
             let url = url.to_string();
             std::thread::spawn(move || {
-                handle.wait_for_action(|action| {
-                    if action == "default" {
+                handle.wait_for_action(|action| match action {
+                    "default" => {
                         let _ = open::that(&url);
                     }
+                    "snooze_10" => {
+                        if let Some(info) = &snooze_info {
+                            let request = SnoozeRequest {
+                                user_id: info.user_id.clone(),
+                                user_name: info.user_name.clone(),
+                                remind_at: Utc::now() + Duration::minutes(10),
+                            };
+                            let _ = info.snooze_tx.send(request);
+                        }
+                    }
+                    _ => {}
                 });
             });
         } else {
@@ -87,6 +129,7 @@ impl DesktopNotifier {
         message: &str,
         url: Option<&str>,
         _category: Option<&str>,
+        _snooze_info: Option<SnoozeInfo>,
     ) -> anyhow::Result<()> {
         // On macOS and Windows, we'll use a simple approach
         // In a full implementation, you might want to use native APIs
@@ -136,6 +179,16 @@ mod categories {
     pub const CATEGORY_CHANGE: &str = "category.changed";
 }
 
+impl DesktopNotifier {
+    fn make_snooze_info(&self, stream: &Stream) -> Option<SnoozeInfo> {
+        Some(SnoozeInfo {
+            user_id: stream.user_id.clone(),
+            user_name: stream.user_name.clone(),
+            snooze_tx: self.snooze_tx.clone(),
+        })
+    }
+}
+
 impl Notifier for DesktopNotifier {
     fn stream_live(&self, stream: &Stream) -> anyhow::Result<()> {
         if !self.enabled || !self.notify_on_live {
@@ -150,7 +203,37 @@ impl Notifier for DesktopNotifier {
         };
 
         let url = format!("https://twitch.tv/{}", stream.user_login);
-        self.send_notification(&title, &message, Some(&url), Some(categories::STREAM_LIVE))
+        let snooze = self.make_snooze_info(stream);
+        self.send_notification(
+            &title,
+            &message,
+            Some(&url),
+            Some(categories::STREAM_LIVE),
+            snooze,
+        )
+    }
+
+    fn stream_reminder(&self, stream: &Stream) -> anyhow::Result<()> {
+        if !self.enabled || !self.notify_on_live {
+            return Ok(());
+        }
+
+        let title = format!("{} live for {}", stream.user_name, stream.format_duration());
+        let message = if !stream.title.is_empty() {
+            format!("{} - {}", stream.game_name, truncate(&stream.title, 50))
+        } else {
+            stream.game_name.clone()
+        };
+
+        let url = format!("https://twitch.tv/{}", stream.user_login);
+        let snooze = self.make_snooze_info(stream);
+        self.send_notification(
+            &title,
+            &message,
+            Some(&url),
+            Some(categories::STREAM_LIVE),
+            snooze,
+        )
     }
 
     fn category_changed(&self, stream: &Stream, old_category: &str) -> anyhow::Result<()> {
@@ -167,11 +250,12 @@ impl Notifier for DesktopNotifier {
             &message,
             Some(&url),
             Some(categories::CATEGORY_CHANGE),
+            None,
         )
     }
 
     fn error(&self, message: &str) -> anyhow::Result<()> {
-        self.send_notification(APP_NAME, message, None, None)
+        self.send_notification(APP_NAME, message, None, None, None)
     }
 }
 
@@ -206,6 +290,7 @@ pub mod mock {
     #[derive(Debug, Clone, PartialEq)]
     pub enum NotificationType {
         StreamLive,
+        StreamReminder,
         CategoryChange,
         Error,
     }
@@ -273,6 +358,26 @@ pub mod mock {
             Ok(())
         }
 
+        fn stream_reminder(&self, stream: &Stream) -> anyhow::Result<()> {
+            let title = format!("{} live for {}", stream.user_name, stream.format_duration());
+            let message = if !stream.title.is_empty() {
+                format!("{} - {}", stream.game_name, stream.title)
+            } else {
+                stream.game_name.clone()
+            };
+
+            self.notifications
+                .write()
+                .unwrap()
+                .push(RecordedNotification {
+                    notification_type: NotificationType::StreamReminder,
+                    title,
+                    message,
+                });
+
+            Ok(())
+        }
+
         fn category_changed(&self, stream: &Stream, old_category: &str) -> anyhow::Result<()> {
             let title = format!("{} changed category", stream.user_name);
             let message = format!("{} → {}", old_category, stream.game_name);
@@ -308,7 +413,7 @@ pub mod mock {
 mod tests {
     use super::mock::{NotificationType, RecordingNotifier};
     use super::*;
-    use chrono::{Duration, Utc};
+    use chrono::Utc;
 
     fn make_stream(user_name: &str, game_name: &str, title: &str) -> Stream {
         Stream {
@@ -320,7 +425,7 @@ mod tests {
             game_name: game_name.to_string(),
             title: title.to_string(),
             viewer_count: 1000,
-            started_at: Utc::now() - Duration::hours(1),
+            started_at: Utc::now() - chrono::Duration::hours(1),
             thumbnail_url: "https://example.com/thumb.jpg".to_string(),
             tags: vec![],
         }
@@ -419,7 +524,8 @@ mod tests {
 
     #[test]
     fn desktop_notifier_respects_notify_on_live_flag() {
-        let notifier = DesktopNotifier::new(false, false);
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let notifier = DesktopNotifier::new(false, false, tx);
 
         let stream = make_stream("Test", "Game", "Title");
         // This should not send a notification (and not error)
@@ -428,7 +534,8 @@ mod tests {
 
     #[test]
     fn desktop_notifier_respects_notify_on_category_flag() {
-        let notifier = DesktopNotifier::new(true, false);
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let notifier = DesktopNotifier::new(true, false, tx);
 
         let stream = make_stream("Test", "Game", "Title");
         // This should not send a notification (and not error)

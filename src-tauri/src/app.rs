@@ -1,13 +1,14 @@
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::AppHandle;
-use tokio::sync::{watch, RwLock};
+use tokio::sync::{mpsc, watch, Mutex, RwLock};
 use tokio::time::Duration;
 
 use crate::auth::{DeviceFlow, Token, TokenStore, CLIENT_ID};
 use crate::config::ConfigManager;
-use crate::notify::{DesktopNotifier, Notifier};
+use crate::notify::{DesktopNotifier, Notifier, SnoozeRequest};
 use crate::state::AppState;
 use crate::tray::TrayManager;
 use crate::twitch::{ApiError, TwitchClient};
@@ -35,6 +36,10 @@ pub struct App {
 
     // Maximum gap between successful refreshes before suppressing notifications (in seconds)
     notify_max_gap_secs: u64,
+
+    // Snooze notification channel
+    snooze_tx: mpsc::UnboundedSender<SnoozeRequest>,
+    snooze_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<SnoozeRequest>>>>,
 }
 
 impl App {
@@ -44,7 +49,12 @@ impl App {
         let store = TokenStore::new()?;
         let state = AppState::new();
         let cfg = config.get();
-        let notifier = DesktopNotifier::new(cfg.notify_on_live, cfg.notify_on_category);
+        let (snooze_tx, snooze_rx) = mpsc::unbounded_channel();
+        let notifier = DesktopNotifier::new(
+            cfg.notify_on_live,
+            cfg.notify_on_category,
+            snooze_tx.clone(),
+        );
         let client = TwitchClient::new(CLIENT_ID.to_string());
         let tray_manager = TrayManager::new(state.clone());
         let (auth_cancel_tx, auth_cancel_rx) = watch::channel(false);
@@ -63,6 +73,8 @@ impl App {
             last_live_refresh: Arc::new(RwLock::new(None)),
             last_schedule_refresh: Arc::new(RwLock::new(None)),
             notify_max_gap_secs,
+            snooze_tx,
+            snooze_rx: Arc::new(Mutex::new(Some(snooze_rx))),
         })
     }
 
@@ -244,6 +256,70 @@ impl App {
                     {
                         tracing::error!("Failed to rebuild menu: {}", e);
                     }
+                }
+            }
+        });
+
+        // Snooze notification task
+        let app = self.clone();
+        tokio::spawn(async move {
+            // Take the receiver out of the Arc<Mutex<Option<...>>>
+            let mut rx = match app.snooze_rx.lock().await.take() {
+                Some(rx) => rx,
+                None => {
+                    tracing::warn!("Snooze receiver already taken");
+                    return;
+                }
+            };
+
+            let mut snoozed: HashMap<String, (SnoozeRequest, crate::twitch::Stream)> =
+                HashMap::new();
+
+            loop {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+
+                // Drain new snooze requests
+                while let Ok(request) = rx.try_recv() {
+                    tracing::info!(
+                        "Snooze registered for {} (remind at {})",
+                        request.user_name,
+                        request.remind_at
+                    );
+                    // Look up the current stream data to store with the snooze
+                    let streams = app.state.get_followed_streams().await;
+                    if let Some(stream) = streams.iter().find(|s| s.user_id == request.user_id) {
+                        snoozed.insert(request.user_id.clone(), (request, stream.clone()));
+                    }
+                }
+
+                if snoozed.is_empty() {
+                    continue;
+                }
+
+                let now = Utc::now();
+                let live_streams = app.state.get_followed_streams().await;
+
+                let mut to_remove = Vec::new();
+                for (user_id, (request, stream)) in &snoozed {
+                    let still_live = live_streams.iter().any(|s| s.user_id == *user_id);
+                    if !still_live {
+                        tracing::debug!("Snooze cancelled for {} (stream offline)", user_id);
+                        to_remove.push(user_id.clone());
+                    } else if now >= request.remind_at {
+                        // Update stream data with latest info
+                        let current_stream = live_streams
+                            .iter()
+                            .find(|s| s.user_id == *user_id)
+                            .unwrap_or(stream);
+                        if let Err(e) = app.notifier.stream_reminder(current_stream) {
+                            tracing::error!("Snooze reminder notification error: {}", e);
+                        }
+                        to_remove.push(user_id.clone());
+                    }
+                }
+
+                for user_id in to_remove {
+                    snoozed.remove(&user_id);
                 }
             }
         });
@@ -514,7 +590,8 @@ impl App {
                 }
                 Err(e) => {
                     tracing::error!("Authentication failed: {}", e);
-                    let notifier = DesktopNotifier::new(notifier_enabled, false);
+                    let (err_tx, _) = mpsc::unbounded_channel();
+                    let notifier = DesktopNotifier::new(notifier_enabled, false, err_tx);
                     let _ = notifier.error(&format!("Authentication failed: {}", e));
                 }
             }
@@ -548,7 +625,11 @@ impl Clone for App {
             config: ConfigManager::new().expect("Failed to create config manager"),
             store: TokenStore::new().expect("Failed to create token store"),
             client: self.client.clone(),
-            notifier: DesktopNotifier::new(cfg.notify_on_live, cfg.notify_on_category),
+            notifier: DesktopNotifier::new(
+                cfg.notify_on_live,
+                cfg.notify_on_category,
+                self.snooze_tx.clone(),
+            ),
             tray_manager: self.tray_manager.clone(),
             initial_load_done: AtomicBool::new(self.initial_load_done.load(Ordering::SeqCst)),
             auth_cancel_tx: self.auth_cancel_tx.clone(),
@@ -556,6 +637,8 @@ impl Clone for App {
             last_live_refresh: self.last_live_refresh.clone(),
             last_schedule_refresh: self.last_schedule_refresh.clone(),
             notify_max_gap_secs: self.notify_max_gap_secs,
+            snooze_tx: self.snooze_tx.clone(),
+            snooze_rx: self.snooze_rx.clone(),
         }
     }
 }
