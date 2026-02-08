@@ -28,26 +28,22 @@ const streamerSearchInput = document.getElementById('streamer_search');
 const streamerSearchResultsDiv = document.getElementById('streamer_search_results');
 const streamerListDiv = document.getElementById('streamer_list');
 const streamerDetailDiv = document.getElementById('streamer_detail');
-const saveBtn = document.getElementById('save_btn');
-const cancelBtn = document.getElementById('cancel_btn');
+const closeBtn = document.getElementById('close_btn');
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
   await loadConfig();
+
+  closeBtn.addEventListener('click', async () => {
+    await getCurrentWindow().close();
+  });
 
   if (streamerParam) {
     enterStreamerMode(streamerParam);
   } else {
     await loadFollowedChannels();
     setupEventListeners();
-    return;
   }
-
-  // Save/cancel for streamer mode
-  saveBtn.addEventListener('click', saveConfig);
-  cancelBtn.addEventListener('click', async () => {
-    await getCurrentWindow().close();
-  });
 });
 
 async function loadConfig() {
@@ -228,6 +224,7 @@ function addStreamer(login, displayName) {
 
   selectedStreamer = login;
   renderStreamerList();
+  autoSave();
 
   // Clear search
   streamerSearchInput.value = '';
@@ -244,6 +241,7 @@ function removeStreamer(login) {
   }
 
   renderStreamerList();
+  autoSave();
 }
 
 function updateStreamerImportance(value) {
@@ -255,6 +253,7 @@ function updateStreamerImportance(value) {
   } else {
     renderStreamerList();
   }
+  autoSave();
 }
 
 function searchStreamers(query) {
@@ -337,12 +336,12 @@ function setupEventListeners() {
     }
   });
 
-  // Save button
-  saveBtn.addEventListener('click', saveConfig);
-
-  // Cancel button
-  cancelBtn.addEventListener('click', async () => {
-    await getCurrentWindow().close();
+  // Auto-save on general settings changes
+  [pollIntervalInput, schedulePollInput, notifyMaxGapInput].forEach(input => {
+    input.addEventListener('change', () => autoSave());
+  });
+  [notifyOnLiveInput, notifyOnCategoryInput].forEach(input => {
+    input.addEventListener('change', () => autoSave());
   });
 }
 
@@ -394,6 +393,7 @@ function addCategory(id, name) {
 
   config.followed_categories.push({ id, name });
   renderCategoryList();
+  autoSave();
 
   // Clear search
   categorySearchInput.value = '';
@@ -405,9 +405,10 @@ function removeCategory(id) {
 
   config.followed_categories = config.followed_categories.filter(c => c.id !== id);
   renderCategoryList();
+  autoSave();
 }
 
-async function saveConfig() {
+async function autoSave() {
   try {
     if (streamerParam) {
       // Streamer mode: re-fetch current config and merge only this streamer's settings
@@ -436,12 +437,8 @@ async function saveConfig() {
 
       await invoke('save_config', { config: newConfig });
     }
-
-    // Close window after successful save
-    await getCurrentWindow().close();
   } catch (error) {
-    console.error('Failed to save config:', error);
-    alert('Failed to save settings: ' + error);
+    console.error('Failed to auto-save config:', error);
   }
 }
 
