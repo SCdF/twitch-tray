@@ -304,14 +304,15 @@ impl Notifier for DesktopNotifier {
     }
 }
 
-/// Truncates a string to max length with ellipsis
-fn truncate(s: &str, max: usize) -> String {
+/// Truncates a string to max byte length with ellipsis, respecting char boundaries
+pub(crate) fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else if max <= 3 {
-        s[..max].to_string()
+        s[..s.floor_char_boundary(max)].to_string()
     } else {
-        format!("{}...", &s[..max - 3])
+        let end = s.floor_char_boundary(max - 3);
+        format!("{}...", &s[..end])
     }
 }
 
@@ -607,5 +608,35 @@ mod tests {
     #[test]
     fn truncate_exact_length() {
         assert_eq!(truncate("Hello", 5), "Hello");
+    }
+
+    #[test]
+    fn truncate_max_3() {
+        assert_eq!(truncate("Hello", 3), "Hel");
+    }
+
+    #[test]
+    fn truncate_max_4() {
+        assert_eq!(truncate("Hello", 4), "H...");
+    }
+
+    #[test]
+    fn truncate_empty_string() {
+        assert_eq!(truncate("", 10), "");
+    }
+
+    #[test]
+    fn truncate_game_name_realistic() {
+        let long_game = "Counter-Strike: Global Offensive";
+        assert_eq!(truncate(long_game, 20), "Counter-Strike: G...");
+    }
+
+    #[test]
+    fn truncate_multibyte_emoji() {
+        let s = "🚨GOOD TAKES🚨";
+        // Should not panic on multi-byte characters
+        let result = truncate(s, 10);
+        assert!(result.len() <= 10);
+        assert!(result.ends_with("..."));
     }
 }

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "A cross-platform system tray application for Twitch viewers"
 authors = [""]
 edition = "2021"
-rust-version = "1.70"
+rust-version = "1.91"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

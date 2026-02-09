@@ -9,6 +9,7 @@ use tauri::{
 use tokio::sync::Mutex;
 
 use crate::config::{FollowedCategory, StreamerImportance, StreamerSettings};
+use crate::notify::truncate;
 use crate::state::AppState;
 use crate::twitch::{ScheduledStream, Stream};
 
@@ -497,17 +498,6 @@ fn format_viewer_count(count: i64) -> String {
     }
 }
 
-/// Truncates a string to max length with ellipsis
-pub(crate) fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else if max <= 3 {
-        s[..max].to_string()
-    } else {
-        format!("{}...", &s[..max - 3])
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -545,46 +535,6 @@ mod tests {
             is_recurring: false,
             is_inferred: false,
         }
-    }
-
-    // === truncate tests ===
-
-    #[test]
-    fn truncate_short_string() {
-        assert_eq!(truncate("Hello", 10), "Hello");
-    }
-
-    #[test]
-    fn truncate_exact_length() {
-        assert_eq!(truncate("Hello", 5), "Hello");
-    }
-
-    #[test]
-    fn truncate_long_string() {
-        assert_eq!(truncate("Hello World", 8), "Hello...");
-    }
-
-    #[test]
-    fn truncate_max_3() {
-        // When max <= 3, we just take first max chars without ellipsis
-        assert_eq!(truncate("Hello", 3), "Hel");
-    }
-
-    #[test]
-    fn truncate_max_4() {
-        // max=4 means we show 1 char + "..."
-        assert_eq!(truncate("Hello", 4), "H...");
-    }
-
-    #[test]
-    fn truncate_empty_string() {
-        assert_eq!(truncate("", 10), "");
-    }
-
-    #[test]
-    fn truncate_game_name_realistic() {
-        let long_game = "Counter-Strike: Global Offensive";
-        assert_eq!(truncate(long_game, 20), "Counter-Strike: G...");
     }
 
     // === format_stream_label tests ===
