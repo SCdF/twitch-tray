@@ -8,7 +8,7 @@ use tokio::time::Duration;
 
 use crate::auth::{DeviceFlow, Token, TokenStore, CLIENT_ID};
 use crate::config::{ConfigManager, StreamerImportance};
-use crate::history::StreamHistoryDb;
+use crate::db::Database;
 use crate::notify::{DesktopNotifier, Notifier, SnoozeRequest, StreamerSettingsRequest};
 use crate::state::AppState;
 use crate::tray::TrayManager;
@@ -22,7 +22,7 @@ pub struct App {
     pub client: TwitchClient,
     pub notifier: DesktopNotifier,
     pub tray_manager: TrayManager,
-    pub history: StreamHistoryDb,
+    pub db: Database,
 
     // Tracks if initial load is complete (don't notify until then)
     initial_load_done: Arc<AtomicBool>,
@@ -31,10 +31,9 @@ pub struct App {
     auth_cancel_tx: watch::Sender<bool>,
     auth_cancel_rx: watch::Receiver<bool>,
 
-    // Last SUCCESSFUL refresh times for sleep-aware polling
+    // Last SUCCESSFUL refresh time for sleep-aware polling
     // Only updated when API calls succeed, used to determine notification suppression
     last_live_refresh: Arc<RwLock<Option<DateTime<Utc>>>>,
-    last_schedule_refresh: Arc<RwLock<Option<DateTime<Utc>>>>,
 
     // Maximum gap between successful refreshes before suppressing notifications (in seconds)
     notify_max_gap_secs: u64,
@@ -65,7 +64,7 @@ impl App {
         );
         let client = TwitchClient::new(CLIENT_ID.to_string());
         let tray_manager = TrayManager::new(state.clone());
-        let history = StreamHistoryDb::new(ConfigManager::config_dir()?.join("history.db"))?;
+        let db = Database::new(ConfigManager::config_dir()?.join("data.db"))?;
         let (auth_cancel_tx, auth_cancel_rx) = watch::channel(false);
         let notify_max_gap_secs = cfg.notify_max_gap_min * 60;
 
@@ -76,12 +75,11 @@ impl App {
             client,
             notifier,
             tray_manager,
-            history,
+            db,
             initial_load_done: Arc::new(AtomicBool::new(false)),
             auth_cancel_tx,
             auth_cancel_rx,
             last_live_refresh: Arc::new(RwLock::new(None)),
-            last_schedule_refresh: Arc::new(RwLock::new(None)),
             notify_max_gap_secs,
             snooze_tx,
             snooze_rx: Arc::new(Mutex::new(Some(snooze_rx))),
@@ -134,6 +132,12 @@ impl App {
 
     async fn load_followed_channels(&self) -> anyhow::Result<()> {
         let follows = self.client.get_all_followed_channels().await?;
+
+        // Persist to DB and seed the schedule queue
+        self.db.sync_followed(&follows)?;
+        let ids = self.db.get_followed_ids()?;
+        self.db.ensure_schedule_queue_entries(&ids)?;
+
         self.state.set_followed_channels(follows).await;
         Ok(())
     }
@@ -216,12 +220,70 @@ impl App {
             }
         });
 
-        // Schedule polling task - uses wall-clock time to handle sleep correctly
+        // Schedule queue walker — checks one broadcaster at a time
         let app = self.clone();
-        let schedule_poll_secs = cfg.schedule_poll_min * 60;
+        let schedule_check_interval = cfg.schedule_check_interval_sec;
+        let schedule_stale_hours = cfg.schedule_stale_hours;
 
         tokio::spawn(async move {
-            // Use a short tick interval to detect wake-from-sleep quickly
+            let tick_duration = Duration::from_secs(schedule_check_interval);
+
+            loop {
+                tokio::time::sleep(tick_duration).await;
+
+                if !app.state.is_authenticated().await {
+                    continue;
+                }
+
+                let stale_threshold = (schedule_stale_hours * 3600) as i64;
+                let broadcaster = match app.db.get_next_stale_broadcaster(stale_threshold) {
+                    Ok(Some(b)) => b,
+                    Ok(None) => continue, // All are fresh
+                    Err(e) => {
+                        tracing::error!("Failed to query schedule queue: {}", e);
+                        continue;
+                    }
+                };
+
+                let (bid, blogin, bname) = broadcaster;
+                let bid_str = bid.to_string();
+                tracing::debug!("Checking schedule for {} ({})", bname, bid);
+
+                match app.with_retry(|| app.client.get_schedule(&bid_str)).await {
+                    Ok(Some(data)) => {
+                        let segments = convert_schedule_segments(&data);
+                        if let Err(e) = app.db.replace_future_schedules(bid, &segments) {
+                            tracing::error!("Failed to store schedules for {}: {}", blogin, e);
+                        }
+                        if let Err(e) = app.db.update_last_checked(bid) {
+                            tracing::error!("Failed to update last_checked for {}: {}", blogin, e);
+                        }
+                        app.refresh_schedules_from_db().await;
+                    }
+                    Ok(None) => {
+                        // No schedule (404) — clear future entries for this broadcaster
+                        if let Err(e) = app.db.replace_future_schedules(bid, &[]) {
+                            tracing::error!("Failed to clear schedules for {}: {}", blogin, e);
+                        }
+                        if let Err(e) = app.db.update_last_checked(bid) {
+                            tracing::error!("Failed to update last_checked for {}: {}", blogin, e);
+                        }
+                        app.refresh_schedules_from_db().await;
+                    }
+                    Err(e) => {
+                        // Don't update last_checked — will retry next cycle
+                        tracing::warn!("Failed to fetch schedule for {}: {}", blogin, e);
+                    }
+                }
+            }
+        });
+
+        // Followed channels refresh task
+        let app = self.clone();
+        let followed_refresh_secs = cfg.followed_refresh_min * 60;
+        let last_followed_refresh: Arc<RwLock<Option<DateTime<Utc>>>> = Arc::new(RwLock::new(None));
+
+        tokio::spawn(async move {
             let tick_duration = Duration::from_secs(1);
 
             loop {
@@ -232,21 +294,22 @@ impl App {
                 }
 
                 let now = Utc::now();
-                let last_refresh = *app.last_schedule_refresh.read().await;
+                let last_refresh = *last_followed_refresh.read().await;
 
                 let should_refresh = match last_refresh {
-                    None => true, // Never refreshed, do it now
+                    None => true,
                     Some(last) => {
                         let elapsed = (now - last).num_seconds();
-                        elapsed >= schedule_poll_secs as i64
+                        elapsed >= followed_refresh_secs as i64
                     }
                 };
 
                 if should_refresh {
-                    app.refresh_scheduled_streams().await;
-
-                    // Update last refresh time
-                    *app.last_schedule_refresh.write().await = Some(Utc::now());
+                    if let Err(e) = app.load_followed_channels().await {
+                        tracing::warn!("Failed to refresh followed channels: {}", e);
+                    } else {
+                        *last_followed_refresh.write().await = Some(Utc::now());
+                    }
                 }
             }
         });
@@ -478,7 +541,7 @@ impl App {
             loop {
                 match rx.recv().await {
                     Ok(event) => {
-                        if let Err(e) = app.history.record_streams(&event.streams) {
+                        if let Err(e) = app.db.record_streams(&event.streams) {
                             tracing::error!("Failed to record stream history: {}", e);
                         }
                     }
@@ -496,14 +559,12 @@ impl App {
     /// Performs initial data refresh
     pub async fn refresh_all_data(&self) {
         self.refresh_followed_streams().await;
-        self.refresh_scheduled_streams().await;
+        self.refresh_schedules_from_db().await;
         self.refresh_category_streams().await;
         self.initial_load_done.store(true, Ordering::SeqCst);
 
-        // Set initial refresh times
-        let now = Utc::now();
-        *self.last_live_refresh.write().await = Some(now);
-        *self.last_schedule_refresh.write().await = Some(now);
+        // Set initial refresh time
+        *self.last_live_refresh.write().await = Some(Utc::now());
     }
 
     async fn refresh_followed_streams(&self) {
@@ -526,34 +587,26 @@ impl App {
         self.state.set_followed_streams(streams).await;
     }
 
-    async fn refresh_scheduled_streams(&self) {
-        if self.client.get_user_id().await.is_none() {
-            return;
-        }
-
-        tracing::debug!("Fetching scheduled streams...");
-
-        let scheduled = match self
-            .with_retry(|| self.client.get_scheduled_streams_for_followed())
-            .await
-        {
-            Ok(scheduled) => scheduled,
+    /// Reads upcoming schedules from DB, merges with inferred schedules, and updates state.
+    async fn refresh_schedules_from_db(&self) {
+        let db_schedules = match self.db.get_upcoming_schedules(24 * 3600) {
+            Ok(s) => s,
             Err(e) => {
-                tracing::error!("Failed to get scheduled streams: {}", e);
+                tracing::error!("Failed to read schedules from DB: {}", e);
                 return;
             }
         };
 
-        // Infer schedules from stream history and merge with API schedules
-        let mut combined = scheduled;
+        // Infer schedules from stream history
         let channels = self.state.get_followed_channels().await;
         let channel_lookup: HashMap<String, _> = channels
             .into_iter()
             .map(|c| (c.broadcaster_id.clone(), c))
             .collect();
 
+        let mut combined = db_schedules;
         match self
-            .history
+            .db
             .infer_schedules(&channel_lookup, &combined, Utc::now())
         {
             Ok(inferred) => {
@@ -611,6 +664,7 @@ impl App {
         let store = TokenStore::new().expect("Failed to create token store");
         let client = self.client.clone();
         let state = self.state.clone();
+        let db = self.db.clone();
         let notifier_enabled = self.config.get().notify_on_live;
         let cancel_rx = self.auth_cancel_rx.clone();
         let initial_load_done = self.initial_load_done.clone();
@@ -643,8 +697,16 @@ impl App {
                         .set_authenticated(true, token.user_id.clone(), token.user_login.clone())
                         .await;
 
-                    // Load followed channels
+                    // Load followed channels and persist to DB
                     if let Ok(follows) = client.get_all_followed_channels().await {
+                        if let Err(e) = db.sync_followed(&follows) {
+                            tracing::error!("Failed to sync followed to DB: {}", e);
+                        }
+                        if let Ok(ids) = db.get_followed_ids() {
+                            if let Err(e) = db.ensure_schedule_queue_entries(&ids) {
+                                tracing::error!("Failed to seed schedule queue: {}", e);
+                            }
+                        }
                         state.set_followed_channels(follows).await;
                     }
 
@@ -653,8 +715,9 @@ impl App {
                         state.set_followed_streams(streams).await;
                     }
 
-                    if let Ok(scheduled) = client.get_scheduled_streams_for_followed().await {
-                        state.set_scheduled_streams(scheduled).await;
+                    // Show cached schedules from DB immediately
+                    if let Ok(db_schedules) = db.get_upcoming_schedules(24 * 3600) {
+                        state.set_scheduled_streams(db_schedules).await;
                     }
 
                     // Mark initial load done so notification listener starts firing
@@ -691,6 +754,34 @@ impl App {
     }
 }
 
+/// Converts raw API schedule segments into `ScheduledStream` structs.
+/// Skips canceled segments. Does NOT filter by time horizon (stores all future segments).
+fn convert_schedule_segments(
+    data: &crate::twitch::ScheduleData,
+) -> Vec<crate::twitch::ScheduledStream> {
+    let Some(segments) = &data.segments else {
+        return Vec::new();
+    };
+
+    segments
+        .iter()
+        .filter(|seg| seg.canceled_until.is_none())
+        .map(|seg| crate::twitch::ScheduledStream {
+            id: seg.id.clone(),
+            broadcaster_id: data.broadcaster_id.clone(),
+            broadcaster_name: data.broadcaster_name.clone(),
+            broadcaster_login: data.broadcaster_login.clone(),
+            title: seg.title.clone(),
+            start_time: seg.start_time,
+            end_time: seg.end_time,
+            category: seg.category.as_ref().map(|c| c.name.clone()),
+            category_id: seg.category.as_ref().map(|c| c.id.clone()),
+            is_recurring: seg.is_recurring,
+            is_inferred: false,
+        })
+        .collect()
+}
+
 impl Clone for App {
     fn clone(&self) -> Self {
         let cfg = self.config.get();
@@ -706,12 +797,11 @@ impl Clone for App {
                 self.settings_tx.clone(),
             ),
             tray_manager: self.tray_manager.clone(),
-            history: self.history.clone(),
+            db: self.db.clone(),
             initial_load_done: self.initial_load_done.clone(),
             auth_cancel_tx: self.auth_cancel_tx.clone(),
             auth_cancel_rx: self.auth_cancel_rx.clone(),
             last_live_refresh: self.last_live_refresh.clone(),
-            last_schedule_refresh: self.last_schedule_refresh.clone(),
             notify_max_gap_secs: self.notify_max_gap_secs,
             snooze_tx: self.snooze_tx.clone(),
             snooze_rx: self.snooze_rx.clone(),

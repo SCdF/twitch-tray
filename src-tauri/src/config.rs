@@ -38,8 +38,6 @@ pub struct FollowedCategory {
 pub struct Config {
     #[serde(default = "default_poll_interval")]
     pub poll_interval_sec: u64,
-    #[serde(default = "default_schedule_poll")]
-    pub schedule_poll_min: u64,
     #[serde(default = "default_notify_on_live")]
     pub notify_on_live: bool,
     #[serde(default = "default_notify_on_category")]
@@ -49,6 +47,15 @@ pub struct Config {
     /// to avoid a flood of alerts on wake.
     #[serde(default = "default_notify_max_gap")]
     pub notify_max_gap_min: u64,
+    /// How many hours before a schedule entry is considered stale and re-fetched
+    #[serde(default = "default_schedule_stale_hours")]
+    pub schedule_stale_hours: u64,
+    /// How often (in seconds) the schedule queue walker checks the next broadcaster
+    #[serde(default = "default_schedule_check_interval")]
+    pub schedule_check_interval_sec: u64,
+    /// How often (in minutes) to refresh the followed channels list from the API
+    #[serde(default = "default_followed_refresh")]
+    pub followed_refresh_min: u64,
     /// Categories to follow for category-based stream listings
     #[serde(default)]
     pub followed_categories: Vec<FollowedCategory>,
@@ -59,10 +66,6 @@ pub struct Config {
 
 fn default_poll_interval() -> u64 {
     60
-}
-
-fn default_schedule_poll() -> u64 {
-    5
 }
 
 fn default_notify_on_live() -> bool {
@@ -77,14 +80,28 @@ fn default_notify_max_gap() -> u64 {
     10
 }
 
+fn default_schedule_stale_hours() -> u64 {
+    24
+}
+
+fn default_schedule_check_interval() -> u64 {
+    10
+}
+
+fn default_followed_refresh() -> u64 {
+    15
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             poll_interval_sec: default_poll_interval(),
-            schedule_poll_min: default_schedule_poll(),
             notify_on_live: default_notify_on_live(),
             notify_on_category: default_notify_on_category(),
             notify_max_gap_min: default_notify_max_gap(),
+            schedule_stale_hours: default_schedule_stale_hours(),
+            schedule_check_interval_sec: default_schedule_check_interval(),
+            followed_refresh_min: default_followed_refresh(),
             followed_categories: Vec::new(),
             streamer_settings: HashMap::new(),
         }
@@ -160,9 +177,21 @@ mod tests {
     }
 
     #[test]
-    fn default_schedule_poll_is_5() {
+    fn default_schedule_stale_hours_is_24() {
         let config = Config::default();
-        assert_eq!(config.schedule_poll_min, 5);
+        assert_eq!(config.schedule_stale_hours, 24);
+    }
+
+    #[test]
+    fn default_schedule_check_interval_is_10() {
+        let config = Config::default();
+        assert_eq!(config.schedule_check_interval_sec, 10);
+    }
+
+    #[test]
+    fn default_followed_refresh_is_15() {
+        let config = Config::default();
+        assert_eq!(config.followed_refresh_min, 15);
     }
 
     #[test]
@@ -208,10 +237,12 @@ mod tests {
         let config: Config = serde_json::from_str(json).unwrap();
 
         assert_eq!(config.poll_interval_sec, 60);
-        assert_eq!(config.schedule_poll_min, 5);
         assert!(config.notify_on_live);
         assert!(config.notify_on_category);
         assert_eq!(config.notify_max_gap_min, 10);
+        assert_eq!(config.schedule_stale_hours, 24);
+        assert_eq!(config.schedule_check_interval_sec, 10);
+        assert_eq!(config.followed_refresh_min, 15);
         assert!(config.followed_categories.is_empty());
         assert!(config.streamer_settings.is_empty());
     }
@@ -222,7 +253,6 @@ mod tests {
         let config: Config = serde_json::from_str(json).unwrap();
 
         assert_eq!(config.poll_interval_sec, 30); // Overridden
-        assert_eq!(config.schedule_poll_min, 5); // Default
         assert!(config.notify_on_live); // Default
         assert!(config.notify_on_category); // Default
     }
@@ -231,16 +261,20 @@ mod tests {
     fn deserialize_full_config() {
         let json = r#"{
             "poll_interval_sec": 120,
-            "schedule_poll_min": 10,
             "notify_on_live": false,
-            "notify_on_category": false
+            "notify_on_category": false,
+            "schedule_stale_hours": 48,
+            "schedule_check_interval_sec": 30,
+            "followed_refresh_min": 30
         }"#;
         let config: Config = serde_json::from_str(json).unwrap();
 
         assert_eq!(config.poll_interval_sec, 120);
-        assert_eq!(config.schedule_poll_min, 10);
         assert!(!config.notify_on_live);
         assert!(!config.notify_on_category);
+        assert_eq!(config.schedule_stale_hours, 48);
+        assert_eq!(config.schedule_check_interval_sec, 30);
+        assert_eq!(config.followed_refresh_min, 30);
     }
 
     #[test]
@@ -256,10 +290,12 @@ mod tests {
 
         let original = Config {
             poll_interval_sec: 90,
-            schedule_poll_min: 15,
             notify_on_live: true,
             notify_on_category: false,
             notify_max_gap_min: 15,
+            schedule_stale_hours: 48,
+            schedule_check_interval_sec: 20,
+            followed_refresh_min: 30,
             followed_categories: vec![FollowedCategory {
                 id: "12345".to_string(),
                 name: "Just Chatting".to_string(),
@@ -271,10 +307,21 @@ mod tests {
         let deserialized: Config = serde_json::from_str(&json).unwrap();
 
         assert_eq!(deserialized.poll_interval_sec, original.poll_interval_sec);
-        assert_eq!(deserialized.schedule_poll_min, original.schedule_poll_min);
         assert_eq!(deserialized.notify_on_live, original.notify_on_live);
         assert_eq!(deserialized.notify_on_category, original.notify_on_category);
         assert_eq!(deserialized.notify_max_gap_min, original.notify_max_gap_min);
+        assert_eq!(
+            deserialized.schedule_stale_hours,
+            original.schedule_stale_hours
+        );
+        assert_eq!(
+            deserialized.schedule_check_interval_sec,
+            original.schedule_check_interval_sec
+        );
+        assert_eq!(
+            deserialized.followed_refresh_min,
+            original.followed_refresh_min
+        );
         assert_eq!(
             deserialized.followed_categories,
             original.followed_categories

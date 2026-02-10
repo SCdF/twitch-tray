@@ -257,100 +257,15 @@ impl<H: HttpClient> TwitchClient<H> {
     /// Gets scheduled streams for a broadcaster
     ///
     /// Returns `ApiError::Unauthorized` if the token has expired.
-    async fn get_schedule(&self, broadcaster_id: &str) -> Result<Option<ScheduleData>, ApiError> {
+    /// Returns `Ok(None)` if the broadcaster has no schedule (404).
+    pub async fn get_schedule(
+        &self,
+        broadcaster_id: &str,
+    ) -> Result<Option<ScheduleData>, ApiError> {
         let endpoint = format!("/schedule?broadcaster_id={}&first=10", broadcaster_id);
 
         let response: Option<ScheduleResponse> = self.get_optional(&endpoint).await?;
         Ok(response.map(|r| r.data))
-    }
-
-    /// Gets scheduled streams for multiple broadcasters (next 24 hours)
-    ///
-    /// Returns `ApiError::Unauthorized` if the token has expired.
-    pub async fn get_scheduled_streams(
-        &self,
-        broadcaster_ids: &[String],
-    ) -> Result<Vec<ScheduledStream>, ApiError> {
-        use chrono::Utc;
-
-        let now = Utc::now();
-        let cutoff = now + chrono::Duration::hours(24);
-        let mut all_scheduled = Vec::new();
-
-        for broadcaster_id in broadcaster_ids {
-            let Some(schedule) = self.get_schedule(broadcaster_id).await? else {
-                continue;
-            };
-
-            let Some(segments) = schedule.segments else {
-                continue;
-            };
-
-            for segment in segments {
-                // Skip if already started or past our 24h window
-                if segment.start_time < now || segment.start_time > cutoff {
-                    continue;
-                }
-
-                // Skip canceled segments
-                if segment.canceled_until.is_some() {
-                    continue;
-                }
-
-                let scheduled = ScheduledStream {
-                    id: segment.id,
-                    broadcaster_id: schedule.broadcaster_id.clone(),
-                    broadcaster_name: schedule.broadcaster_name.clone(),
-                    broadcaster_login: schedule.broadcaster_login.clone(),
-                    title: segment.title,
-                    start_time: segment.start_time,
-                    end_time: segment.end_time,
-                    category: segment.category.as_ref().map(|c| c.name.clone()),
-                    category_id: segment.category.map(|c| c.id),
-                    is_recurring: segment.is_recurring,
-                    is_inferred: false,
-                };
-
-                all_scheduled.push(scheduled);
-            }
-        }
-
-        // Sort by start time
-        all_scheduled.sort_by(|a, b| a.start_time.cmp(&b.start_time));
-
-        tracing::debug!(
-            "Returning {} scheduled streams within next 24h",
-            all_scheduled.len()
-        );
-
-        Ok(all_scheduled)
-    }
-
-    /// Gets scheduled streams for all followed channels
-    ///
-    /// Returns `ApiError::Unauthorized` if the token has expired.
-    pub async fn get_scheduled_streams_for_followed(
-        &self,
-    ) -> Result<Vec<ScheduledStream>, ApiError> {
-        // First get all followed channels
-        let follows = self.get_all_followed_channels().await?;
-        tracing::debug!(
-            "Got {} followed channels for schedule lookup",
-            follows.len()
-        );
-
-        // Extract broadcaster IDs (limit to avoid too many API calls)
-        let max_broadcasters = 50;
-        let broadcaster_ids: Vec<String> = follows
-            .into_iter()
-            .take(max_broadcasters)
-            .map(|f| f.broadcaster_id)
-            .collect();
-
-        let scheduled = self.get_scheduled_streams(&broadcaster_ids).await?;
-        tracing::debug!("Found {} scheduled streams", scheduled.len());
-
-        Ok(scheduled)
     }
 }
 

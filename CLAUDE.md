@@ -73,19 +73,23 @@ Config file: `~/.config/twitch-tray/config.json`
 ```json
 {
   "poll_interval_sec": 60,
-  "schedule_poll_min": 5,
   "notify_on_live": true,
   "notify_on_category": true,
-  "notify_max_gap_min": 10
+  "notify_max_gap_min": 10,
+  "schedule_stale_hours": 24,
+  "schedule_check_interval_sec": 10,
+  "followed_refresh_min": 15
 }
 ```
 
 **Settings:**
 - `poll_interval_sec`: How often to check for live streams (default: 60 seconds)
-- `schedule_poll_min`: How often to check for scheduled streams (default: 5 minutes)
 - `notify_on_live`: Send desktop notifications when streams go live (default: true)
 - `notify_on_category`: Send notifications on category changes (default: true)
 - `notify_max_gap_min`: Maximum gap between refreshes to still send notifications (default: 10 minutes). If the app was asleep/suspended longer than this, notifications are suppressed to avoid a flood of alerts on wake.
+- `schedule_stale_hours`: How many hours before a channel's schedule is re-fetched (default: 24)
+- `schedule_check_interval_sec`: How often the schedule queue walker checks the next channel (default: 10 seconds)
+- `followed_refresh_min`: How often to refresh the followed channels list from the API (default: 15 minutes)
 
 **Note**: Client ID is hardcoded in `src/auth/mod.rs`. No user configuration needed.
 
@@ -134,9 +138,15 @@ Required scope: `user:read:follows`
 ## Data Flow
 
 ```
-Polling (60s) → GetFollowedStreams  → state.set_followed_streams() → tray.rebuild_menu()
-Polling (5m)  → GetScheduledStreams → state.set_scheduled_streams() → tray.rebuild_menu()
+Polling (60s)         → GetFollowedStreams  → state.set_followed_streams() → tray.rebuild_menu()
+Queue walker (10s)    → GetSchedule(1 ch)   → db.replace_future_schedules() → refresh_schedules_from_db()
+Followed refresh (15m)→ GetAllFollowedChannels → db.sync_followed() → state.set_followed_channels()
 ```
+
+Schedule fetching uses a queue-based approach: instead of bulk-fetching all channels at once,
+the walker picks the most-stale broadcaster every 10 seconds and checks one at a time. This
+ensures ALL followed channels eventually get checked, not just the first 50. Results are stored
+in SQLite (`data.db`) and read back for display.
 
 Notifications only fire for streams that go live AFTER initial load (no startup spam).
 

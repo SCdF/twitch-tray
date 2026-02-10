@@ -17,7 +17,6 @@ let streamerSearchTimeout = null;
 const tabs = document.querySelectorAll('.tab');
 const panes = document.querySelectorAll('.pane');
 const pollIntervalInput = document.getElementById('poll_interval');
-const schedulePollInput = document.getElementById('schedule_poll');
 const notifyMaxGapInput = document.getElementById('notify_max_gap');
 const notifyOnLiveInput = document.getElementById('notify_on_live');
 const notifyOnCategoryInput = document.getElementById('notify_on_category');
@@ -71,7 +70,6 @@ function populateForm() {
   if (!config) return;
 
   pollIntervalInput.value = config.poll_interval_sec;
-  schedulePollInput.value = config.schedule_poll_min;
   notifyMaxGapInput.value = config.notify_max_gap_min;
   notifyOnLiveInput.checked = config.notify_on_live;
   notifyOnCategoryInput.checked = config.notify_on_category;
@@ -337,7 +335,7 @@ function setupEventListeners() {
   });
 
   // Auto-save on general settings changes
-  [pollIntervalInput, schedulePollInput, notifyMaxGapInput].forEach(input => {
+  [pollIntervalInput, notifyMaxGapInput].forEach(input => {
     input.addEventListener('change', () => autoSave());
   });
   [notifyOnLiveInput, notifyOnCategoryInput].forEach(input => {
@@ -422,7 +420,6 @@ async function autoSave() {
       // Full settings mode
       const newConfig = {
         poll_interval_sec: parseInt(pollIntervalInput.value, 10) || 60,
-        schedule_poll_min: parseInt(schedulePollInput.value, 10) || 5,
         notify_max_gap_min: parseInt(notifyMaxGapInput.value, 10) || 10,
         notify_on_live: notifyOnLiveInput.checked,
         notify_on_category: notifyOnCategoryInput.checked,
@@ -432,7 +429,6 @@ async function autoSave() {
 
       // Validate
       newConfig.poll_interval_sec = Math.max(30, Math.min(300, newConfig.poll_interval_sec));
-      newConfig.schedule_poll_min = Math.max(1, Math.min(60, newConfig.schedule_poll_min));
       newConfig.notify_max_gap_min = Math.max(1, Math.min(60, newConfig.notify_max_gap_min));
 
       await invoke('save_config', { config: newConfig });

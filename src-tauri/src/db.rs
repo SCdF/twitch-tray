@@ -3,20 +3,32 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Duration, Utc};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::twitch::{FollowedChannel, ScheduledStream, Stream};
 
-/// Database for recording stream history and inferring schedules.
+/// Database for recording stream history, followed channels, and schedules.
 #[derive(Clone)]
-pub struct StreamHistoryDb {
+pub struct Database {
     conn: Arc<Mutex<Connection>>,
 }
 
-impl StreamHistoryDb {
-    /// Opens or creates the history database at the given path.
+impl Database {
+    /// Opens or creates the database at the given path.
+    ///
+    /// If `history.db` exists in the same directory and `data.db` does not,
+    /// renames it first (one-time migration).
     pub fn new(db_path: PathBuf) -> anyhow::Result<Self> {
-        let conn = Connection::open(db_path)?;
+        // Migrate history.db → data.db if needed
+        if let Some(parent) = db_path.parent() {
+            let old_path = parent.join("history.db");
+            if old_path.exists() && !db_path.exists() {
+                tracing::info!("Migrating {:?} → {:?}", old_path, db_path);
+                std::fs::rename(&old_path, &db_path)?;
+            }
+        }
+
+        let conn = Connection::open(&db_path)?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS stream_history (
                 user_id INTEGER NOT NULL,
@@ -24,7 +36,35 @@ impl StreamHistoryDb {
                 UNIQUE(user_id, started_at)
             );
             CREATE INDEX IF NOT EXISTS idx_stream_history_user_id
-                ON stream_history(user_id);",
+                ON stream_history(user_id);
+
+            CREATE TABLE IF NOT EXISTS followed (
+                broadcaster_id INTEGER PRIMARY KEY,
+                broadcaster_login TEXT NOT NULL,
+                broadcaster_name TEXT NOT NULL,
+                followed_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS schedule_last_checked (
+                broadcaster_id INTEGER PRIMARY KEY,
+                last_checked_at INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS scheduled_streams (
+                id TEXT NOT NULL,
+                broadcaster_id INTEGER NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                start_time INTEGER NOT NULL,
+                end_time INTEGER,
+                category_name TEXT,
+                category_id INTEGER,
+                is_recurring INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (id, broadcaster_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_scheduled_streams_start
+                ON scheduled_streams(start_time);
+            CREATE INDEX IF NOT EXISTS idx_scheduled_streams_broadcaster
+                ON scheduled_streams(broadcaster_id);",
         )?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -104,6 +144,188 @@ impl StreamHistoryDb {
             }
         }
         Ok(result)
+    }
+
+    // === Followed channels ===
+
+    /// Replaces the `followed` table with the current list of followed channels.
+    pub fn sync_followed(&self, channels: &[FollowedChannel]) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM followed", [])?;
+        let mut stmt = tx.prepare(
+            "INSERT INTO followed (broadcaster_id, broadcaster_login, broadcaster_name, followed_at)
+             VALUES (?1, ?2, ?3, ?4)",
+        )?;
+        for ch in channels {
+            let id: i64 = ch.broadcaster_id.parse()?;
+            stmt.execute(rusqlite::params![
+                id,
+                ch.broadcaster_login,
+                ch.broadcaster_name,
+                ch.followed_at.timestamp()
+            ])?;
+        }
+        drop(stmt);
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Returns all broadcaster IDs from the `followed` table.
+    pub fn get_followed_ids(&self) -> anyhow::Result<Vec<i64>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT broadcaster_id FROM followed")?;
+        let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
+        let mut ids = Vec::new();
+        for row in rows {
+            ids.push(row?);
+        }
+        Ok(ids)
+    }
+
+    // === Schedule queue ===
+
+    /// Ensures every broadcaster in the list has an entry in `schedule_last_checked`.
+    /// New entries get `last_checked_at = 0` (immediately stale). Existing entries are untouched.
+    pub fn ensure_schedule_queue_entries(&self, broadcaster_ids: &[i64]) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "INSERT OR IGNORE INTO schedule_last_checked (broadcaster_id, last_checked_at) VALUES (?1, 0)",
+        )?;
+        for &id in broadcaster_ids {
+            stmt.execute(rusqlite::params![id])?;
+        }
+        Ok(())
+    }
+
+    /// Returns the most-stale currently-followed broadcaster whose schedule
+    /// hasn't been checked within `stale_threshold_secs` seconds.
+    pub fn get_next_stale_broadcaster(
+        &self,
+        stale_threshold_secs: i64,
+    ) -> anyhow::Result<Option<(i64, String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let threshold = Utc::now().timestamp() - stale_threshold_secs;
+        let mut stmt = conn.prepare(
+            "SELECT f.broadcaster_id, f.broadcaster_login, f.broadcaster_name
+             FROM followed f
+             JOIN schedule_last_checked s ON f.broadcaster_id = s.broadcaster_id
+             WHERE s.last_checked_at < ?1
+             ORDER BY s.last_checked_at ASC
+             LIMIT 1",
+        )?;
+        let result = stmt
+            .query_row(rusqlite::params![threshold], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .optional()?;
+        Ok(result)
+    }
+
+    /// Marks a broadcaster's schedule as just-checked.
+    pub fn update_last_checked(&self, broadcaster_id: i64) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "UPDATE schedule_last_checked SET last_checked_at = ?1 WHERE broadcaster_id = ?2",
+            rusqlite::params![now, broadcaster_id],
+        )?;
+        Ok(())
+    }
+
+    // === Scheduled streams ===
+
+    /// Replaces future scheduled streams for a broadcaster.
+    /// Past streams (start_time < now) are preserved.
+    pub fn replace_future_schedules(
+        &self,
+        broadcaster_id: i64,
+        streams: &[ScheduledStream],
+    ) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM scheduled_streams WHERE broadcaster_id = ?1 AND start_time >= ?2",
+            rusqlite::params![broadcaster_id, now],
+        )?;
+        let mut stmt = tx.prepare(
+            "INSERT OR REPLACE INTO scheduled_streams
+             (id, broadcaster_id, title, start_time, end_time, category_name, category_id, is_recurring)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )?;
+        for s in streams {
+            let cat_id: Option<i64> = s.category_id.as_ref().and_then(|id| id.parse().ok());
+            stmt.execute(rusqlite::params![
+                s.id,
+                broadcaster_id,
+                s.title,
+                s.start_time.timestamp(),
+                s.end_time.map(|t| t.timestamp()),
+                s.category,
+                cat_id,
+                s.is_recurring as i64,
+            ])?;
+        }
+        drop(stmt);
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Returns scheduled streams starting within `horizon_secs` from now,
+    /// filtered to only currently-followed broadcasters via JOIN.
+    pub fn get_upcoming_schedules(
+        &self,
+        horizon_secs: i64,
+    ) -> anyhow::Result<Vec<ScheduledStream>> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        let end = now + horizon_secs;
+        let mut stmt = conn.prepare(
+            "SELECT ss.id, ss.broadcaster_id, f.broadcaster_login, f.broadcaster_name,
+                    ss.title, ss.start_time, ss.end_time, ss.category_name, ss.category_id,
+                    ss.is_recurring
+             FROM scheduled_streams ss
+             JOIN followed f ON ss.broadcaster_id = f.broadcaster_id
+             WHERE ss.start_time BETWEEN ?1 AND ?2
+             ORDER BY ss.start_time",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![now, end], |row| {
+            Ok((
+                row.get::<_, String>(0)?,         // id
+                row.get::<_, i64>(1)?,            // broadcaster_id
+                row.get::<_, String>(2)?,         // broadcaster_login
+                row.get::<_, String>(3)?,         // broadcaster_name
+                row.get::<_, String>(4)?,         // title
+                row.get::<_, i64>(5)?,            // start_time
+                row.get::<_, Option<i64>>(6)?,    // end_time
+                row.get::<_, Option<String>>(7)?, // category_name
+                row.get::<_, Option<i64>>(8)?,    // category_id
+                row.get::<_, i64>(9)?,            // is_recurring
+            ))
+        })?;
+        let mut schedules = Vec::new();
+        for row in rows {
+            let (id, bid, login, name, title, start, end, cat, cat_id, recurring) = row?;
+            schedules.push(ScheduledStream {
+                id,
+                broadcaster_id: bid.to_string(),
+                broadcaster_login: login,
+                broadcaster_name: name,
+                title,
+                start_time: DateTime::from_timestamp(start, 0).unwrap_or_else(Utc::now),
+                end_time: end.and_then(|t| DateTime::from_timestamp(t, 0)),
+                category: cat,
+                category_id: cat_id.map(|c| c.to_string()),
+                is_recurring: recurring != 0,
+                is_inferred: false,
+            });
+        }
+        Ok(schedules)
     }
 
     /// Infers future schedules from historical stream data.
@@ -349,7 +571,7 @@ mod tests {
         }
     }
 
-    fn in_memory_db() -> StreamHistoryDb {
+    fn in_memory_db() -> Database {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS stream_history (
@@ -358,10 +580,38 @@ mod tests {
                 UNIQUE(user_id, started_at)
             );
             CREATE INDEX IF NOT EXISTS idx_stream_history_user_id
-                ON stream_history(user_id);",
+                ON stream_history(user_id);
+
+            CREATE TABLE IF NOT EXISTS followed (
+                broadcaster_id INTEGER PRIMARY KEY,
+                broadcaster_login TEXT NOT NULL,
+                broadcaster_name TEXT NOT NULL,
+                followed_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS schedule_last_checked (
+                broadcaster_id INTEGER PRIMARY KEY,
+                last_checked_at INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS scheduled_streams (
+                id TEXT NOT NULL,
+                broadcaster_id INTEGER NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                start_time INTEGER NOT NULL,
+                end_time INTEGER,
+                category_name TEXT,
+                category_id INTEGER,
+                is_recurring INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (id, broadcaster_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_scheduled_streams_start
+                ON scheduled_streams(start_time);
+            CREATE INDEX IF NOT EXISTS idx_scheduled_streams_broadcaster
+                ON scheduled_streams(broadcaster_id);",
         )
         .unwrap();
-        StreamHistoryDb {
+        Database {
             conn: Arc::new(Mutex::new(conn)),
         }
     }
@@ -372,7 +622,7 @@ mod tests {
     fn table_creation_succeeds() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test_history.db");
-        let _db = StreamHistoryDb::new(db_path).unwrap();
+        let _db = Database::new(db_path).unwrap();
     }
 
     #[test]
@@ -846,6 +1096,234 @@ mod tests {
             "Single-linkage should chain A-B-C into one cluster"
         );
         assert_eq!(result[0].len(), 3);
+    }
+
+    // === sync_followed tests ===
+
+    #[test]
+    fn sync_followed_inserts_channels() {
+        let db = in_memory_db();
+        let channels = vec![
+            make_channel("100", "StreamerA"),
+            make_channel("200", "StreamerB"),
+        ];
+        db.sync_followed(&channels).unwrap();
+
+        let ids = db.get_followed_ids().unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&100));
+        assert!(ids.contains(&200));
+    }
+
+    #[test]
+    fn sync_followed_replaces_previous() {
+        let db = in_memory_db();
+
+        // First sync
+        db.sync_followed(&[make_channel("100", "StreamerA")])
+            .unwrap();
+        assert_eq!(db.get_followed_ids().unwrap().len(), 1);
+
+        // Second sync with different channels
+        db.sync_followed(&[
+            make_channel("200", "StreamerB"),
+            make_channel("300", "StreamerC"),
+        ])
+        .unwrap();
+        let ids = db.get_followed_ids().unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(!ids.contains(&100));
+        assert!(ids.contains(&200));
+        assert!(ids.contains(&300));
+    }
+
+    // === ensure_schedule_queue_entries tests ===
+
+    #[test]
+    fn ensure_queue_entries_creates_with_zero() {
+        let db = in_memory_db();
+        db.sync_followed(&[
+            make_channel("100", "StreamerA"),
+            make_channel("200", "StreamerB"),
+        ])
+        .unwrap();
+        db.ensure_schedule_queue_entries(&[100, 200]).unwrap();
+
+        // Both should be stale (last_checked_at = 0)
+        let result = db.get_next_stale_broadcaster(1).unwrap();
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn ensure_queue_entries_does_not_overwrite() {
+        let db = in_memory_db();
+        db.sync_followed(&[make_channel("100", "StreamerA")])
+            .unwrap();
+        db.ensure_schedule_queue_entries(&[100]).unwrap();
+        db.update_last_checked(100).unwrap();
+
+        // Re-ensure should not reset the timestamp
+        db.ensure_schedule_queue_entries(&[100]).unwrap();
+
+        // Should NOT be stale (was just checked)
+        let result = db.get_next_stale_broadcaster(1).unwrap();
+        assert!(result.is_none());
+    }
+
+    // === get_next_stale_broadcaster tests ===
+
+    #[test]
+    fn stale_broadcaster_returns_most_stale() {
+        let db = in_memory_db();
+        db.sync_followed(&[
+            make_channel("100", "StreamerA"),
+            make_channel("200", "StreamerB"),
+        ])
+        .unwrap();
+        db.ensure_schedule_queue_entries(&[100, 200]).unwrap();
+
+        // Both have last_checked_at = 0, so the most stale is returned
+        let result = db.get_next_stale_broadcaster(24 * 3600).unwrap().unwrap();
+        // Should return one of them (both are at 0)
+        assert!(result.0 == 100 || result.0 == 200);
+    }
+
+    #[test]
+    fn no_stale_broadcaster_when_all_fresh() {
+        let db = in_memory_db();
+        db.sync_followed(&[make_channel("100", "StreamerA")])
+            .unwrap();
+        db.ensure_schedule_queue_entries(&[100]).unwrap();
+        db.update_last_checked(100).unwrap();
+
+        // Threshold of 24h — just checked, so nothing stale
+        let result = db.get_next_stale_broadcaster(24 * 3600).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn stale_broadcaster_only_returns_followed() {
+        let db = in_memory_db();
+        // Add queue entry for 100 but don't add to followed
+        db.ensure_schedule_queue_entries(&[100]).unwrap();
+
+        // Should return None since 100 is not in the followed table
+        let result = db.get_next_stale_broadcaster(24 * 3600).unwrap();
+        assert!(result.is_none());
+    }
+
+    // === replace_future_schedules + get_upcoming_schedules tests ===
+
+    fn make_scheduled_stream(
+        id: &str,
+        broadcaster_id: &str,
+        hours_from_now: i64,
+    ) -> ScheduledStream {
+        ScheduledStream {
+            id: id.to_string(),
+            broadcaster_id: broadcaster_id.to_string(),
+            broadcaster_name: format!("Streamer{}", broadcaster_id),
+            broadcaster_login: format!("streamer{}", broadcaster_id),
+            title: "Test Schedule".to_string(),
+            start_time: Utc::now() + Duration::hours(hours_from_now),
+            end_time: None,
+            category: Some("Gaming".to_string()),
+            category_id: Some("123".to_string()),
+            is_recurring: false,
+            is_inferred: false,
+        }
+    }
+
+    #[test]
+    fn replace_and_get_schedules() {
+        let db = in_memory_db();
+        db.sync_followed(&[make_channel("100", "StreamerA")])
+            .unwrap();
+
+        let schedules = vec![
+            make_scheduled_stream("s1", "100", 2),
+            make_scheduled_stream("s2", "100", 5),
+        ];
+        db.replace_future_schedules(100, &schedules).unwrap();
+
+        let upcoming = db.get_upcoming_schedules(24 * 3600).unwrap();
+        assert_eq!(upcoming.len(), 2);
+        assert_eq!(upcoming[0].broadcaster_id, "100");
+        assert!(!upcoming[0].is_inferred);
+    }
+
+    #[test]
+    fn replace_schedules_clears_old_future() {
+        let db = in_memory_db();
+        db.sync_followed(&[make_channel("100", "StreamerA")])
+            .unwrap();
+
+        // First batch
+        db.replace_future_schedules(100, &[make_scheduled_stream("s1", "100", 2)])
+            .unwrap();
+        assert_eq!(db.get_upcoming_schedules(24 * 3600).unwrap().len(), 1);
+
+        // Replace with different schedule
+        db.replace_future_schedules(100, &[make_scheduled_stream("s2", "100", 3)])
+            .unwrap();
+        let upcoming = db.get_upcoming_schedules(24 * 3600).unwrap();
+        assert_eq!(upcoming.len(), 1);
+        assert_eq!(upcoming[0].id, "s2");
+    }
+
+    #[test]
+    fn get_upcoming_filters_by_horizon() {
+        let db = in_memory_db();
+        db.sync_followed(&[make_channel("100", "StreamerA")])
+            .unwrap();
+
+        let schedules = vec![
+            make_scheduled_stream("s1", "100", 2), // 2h from now — within 24h
+            make_scheduled_stream("s2", "100", 30), // 30h from now — outside 24h
+        ];
+        db.replace_future_schedules(100, &schedules).unwrap();
+
+        let upcoming = db.get_upcoming_schedules(24 * 3600).unwrap();
+        assert_eq!(upcoming.len(), 1);
+        assert_eq!(upcoming[0].id, "s1");
+    }
+
+    #[test]
+    fn get_upcoming_filters_unfollowed() {
+        let db = in_memory_db();
+        // Only follow channel 100, not 200
+        db.sync_followed(&[make_channel("100", "StreamerA")])
+            .unwrap();
+
+        db.replace_future_schedules(100, &[make_scheduled_stream("s1", "100", 2)])
+            .unwrap();
+        db.replace_future_schedules(200, &[make_scheduled_stream("s2", "200", 2)])
+            .unwrap();
+
+        let upcoming = db.get_upcoming_schedules(24 * 3600).unwrap();
+        assert_eq!(upcoming.len(), 1);
+        assert_eq!(upcoming[0].broadcaster_id, "100");
+    }
+
+    #[test]
+    fn migration_renames_history_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let old_path = dir.path().join("history.db");
+        let new_path = dir.path().join("data.db");
+
+        // Create a real SQLite database at the old path
+        let conn = Connection::open(&old_path).unwrap();
+        conn.execute_batch("CREATE TABLE test (id INTEGER)")
+            .unwrap();
+        drop(conn);
+
+        assert!(old_path.exists());
+        assert!(!new_path.exists());
+
+        let _db = Database::new(new_path.clone()).unwrap();
+
+        assert!(!old_path.exists());
+        assert!(new_path.exists());
     }
 
     use chrono::Timelike;
