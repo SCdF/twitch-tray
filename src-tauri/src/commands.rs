@@ -18,8 +18,9 @@ pub async fn save_config(app: State<'_, Arc<App>>, config: Config) -> Result<(),
     // Save the config
     app.config.save(config).map_err(|e| e.to_string())?;
 
-    // Refresh category streams — state changes trigger menu rebuild via listener
+    // Refresh data — state changes trigger menu rebuild via listener
     app.refresh_category_streams().await;
+    app.refresh_schedules_from_db().await;
 
     Ok(())
 }

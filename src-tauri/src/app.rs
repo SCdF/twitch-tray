@@ -631,7 +631,7 @@ impl App {
     }
 
     /// Reads upcoming schedules from DB, merges with inferred schedules, and updates state.
-    async fn refresh_schedules_from_db(&self) {
+    pub async fn refresh_schedules_from_db(&self) {
         let lookahead_secs = self.config.get().schedule_lookahead_hours * 3600;
         let db_schedules = match self.db.get_upcoming_schedules(lookahead_secs as i64) {
             Ok(s) => s,
