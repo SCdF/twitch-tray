@@ -44,6 +44,11 @@ impl<H: HttpClient> TwitchClient<H> {
         *guard = Some(user_id);
     }
 
+    /// Gets the current access token
+    pub async fn get_access_token(&self) -> Option<String> {
+        self.access_token.read().await.clone()
+    }
+
     /// Gets the authenticated user's ID
     pub async fn get_user_id(&self) -> Option<String> {
         self.user_id.read().await.clone()

@@ -38,6 +38,10 @@ pub struct App {
     // Maximum gap between successful refreshes before suppressing notifications (in seconds)
     notify_max_gap_secs: u64,
 
+    // Serializes token refresh attempts so only one task refreshes at a time.
+    // Twitch refresh tokens are single-use: concurrent refreshes cause 400 errors.
+    refresh_mutex: Arc<Mutex<()>>,
+
     // Snooze notification channel
     snooze_tx: mpsc::UnboundedSender<SnoozeRequest>,
     snooze_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<SnoozeRequest>>>>,
@@ -81,6 +85,7 @@ impl App {
             auth_cancel_rx,
             last_live_refresh: Arc::new(RwLock::new(None)),
             notify_max_gap_secs,
+            refresh_mutex: Arc::new(Mutex::new(())),
             snooze_tx,
             snooze_rx: Arc::new(Mutex::new(Some(snooze_rx))),
             settings_tx,
@@ -91,14 +96,26 @@ impl App {
     /// Tries to restore a session from stored token
     pub async fn restore_session(&self) -> anyhow::Result<()> {
         let mut token = self.store.load_token()?;
+        let flow = DeviceFlow::new(CLIENT_ID.to_string());
 
-        // If token is expired, try to refresh it
-        if token.is_expired() {
+        // If token is expired locally, refresh immediately
+        let needs_refresh = if token.is_expired() {
             tracing::info!("Token expired, attempting refresh...");
-            let flow = DeviceFlow::new(CLIENT_ID.to_string());
-            token = flow.refresh_token(&token.refresh_token).await?;
+            true
+        } else {
+            // Token looks valid locally — validate with Twitch in case it was
+            // revoked server-side (e.g., after sleep or token rotation)
+            match flow.validate_token(&token.access_token).await {
+                Ok(_) => false,
+                Err(_) => {
+                    tracing::info!("Token rejected by Twitch, attempting refresh...");
+                    true
+                }
+            }
+        };
 
-            // Save the refreshed token
+        if needs_refresh {
+            token = flow.refresh_token(&token.refresh_token).await?;
             self.store.save_token(&token)?;
             tracing::info!("Token refreshed successfully");
         }
@@ -131,7 +148,9 @@ impl App {
     }
 
     async fn load_followed_channels(&self) -> anyhow::Result<()> {
-        let follows = self.client.get_all_followed_channels().await?;
+        let follows = self
+            .with_retry(|| self.client.get_all_followed_channels())
+            .await?;
 
         // Persist to DB and seed the schedule queue
         self.db.sync_followed(&follows)?;
@@ -161,8 +180,21 @@ impl App {
     /// Attempts to refresh the OAuth token
     ///
     /// Called when API calls return 401 Unauthorized, indicating the token
-    /// has expired (e.g., after laptop sleep).
+    /// has expired (e.g., after laptop sleep). Serialized via mutex because
+    /// Twitch refresh tokens are single-use — concurrent refreshes would
+    /// invalidate each other.
     async fn try_refresh_token(&self) -> anyhow::Result<()> {
+        // Snapshot the token that's currently failing, before waiting on the mutex
+        let failing_token = self.client.get_access_token().await;
+
+        let _guard = self.refresh_mutex.lock().await;
+
+        // If the client's token changed while we waited, another task already refreshed
+        if self.client.get_access_token().await != failing_token {
+            tracing::debug!("Token already refreshed by another task");
+            return Ok(());
+        }
+
         tracing::info!("Token expired during API call, attempting refresh...");
 
         let token = self.store.load_token()?;
@@ -803,6 +835,7 @@ impl Clone for App {
             auth_cancel_rx: self.auth_cancel_rx.clone(),
             last_live_refresh: self.last_live_refresh.clone(),
             notify_max_gap_secs: self.notify_max_gap_secs,
+            refresh_mutex: self.refresh_mutex.clone(),
             snooze_tx: self.snooze_tx.clone(),
             snooze_rx: self.snooze_rx.clone(),
             settings_tx: self.settings_tx.clone(),
