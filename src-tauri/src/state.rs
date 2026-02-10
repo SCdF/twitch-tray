@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::{watch, RwLock};
+use tokio::sync::{broadcast, watch, RwLock};
 
 use crate::twitch::{FollowedChannel, ScheduledStream, Stream};
 
@@ -20,8 +20,10 @@ pub struct CategoryChange {
     pub old_category: String,
 }
 
-/// Result of updating followed streams
-pub struct StreamUpdateResult {
+/// Event sent when followed streams are updated
+#[derive(Debug, Clone)]
+pub struct StreamsUpdated {
+    pub streams: Vec<Stream>,
     pub newly_live: Vec<Stream>,
     pub category_changes: Vec<CategoryChange>,
 }
@@ -55,22 +57,30 @@ pub struct AppState {
     inner: RwLock<StateInner>,
     change_tx: watch::Sender<Option<ChangeType>>,
     change_rx: watch::Receiver<Option<ChangeType>>,
+    streams_tx: broadcast::Sender<StreamsUpdated>,
 }
 
 impl AppState {
     /// Creates a new state manager
     pub fn new() -> Arc<Self> {
         let (change_tx, change_rx) = watch::channel(None);
+        let (streams_tx, _) = broadcast::channel(16);
         Arc::new(Self {
             inner: RwLock::new(StateInner::default()),
             change_tx,
             change_rx,
+            streams_tx,
         })
     }
 
     /// Returns a receiver for state change notifications
     pub fn subscribe(&self) -> watch::Receiver<Option<ChangeType>> {
         self.change_rx.clone()
+    }
+
+    /// Returns a receiver for stream update events
+    pub fn subscribe_streams(&self) -> broadcast::Receiver<StreamsUpdated> {
+        self.streams_tx.subscribe()
     }
 
     fn notify_change(&self, change_type: ChangeType) {
@@ -101,8 +111,8 @@ impl AppState {
         self.inner.read().await.authenticated
     }
 
-    /// Updates the followed live streams and returns changes
-    pub async fn set_followed_streams(&self, streams: Vec<Stream>) -> StreamUpdateResult {
+    /// Updates the followed live streams and broadcasts changes
+    pub async fn set_followed_streams(&self, streams: Vec<Stream>) {
         let mut state = self.inner.write().await;
 
         // Build set for comparison
@@ -148,15 +158,17 @@ impl AppState {
             );
         }
 
-        state.followed_streams = streams;
+        state.followed_streams = streams.clone();
         drop(state);
 
         self.notify_change(ChangeType::FollowedStreams);
 
-        StreamUpdateResult {
+        // Broadcast the event (ignore error if no receivers)
+        let _ = self.streams_tx.send(StreamsUpdated {
+            streams,
             newly_live,
             category_changes,
-        }
+        });
     }
 
     /// Returns the current followed live streams
@@ -222,10 +234,12 @@ impl AppState {
 impl Default for AppState {
     fn default() -> Self {
         let (change_tx, change_rx) = watch::channel(None);
+        let (streams_tx, _) = broadcast::channel(16);
         Self {
             inner: RwLock::new(StateInner::default()),
             change_tx,
             change_rx,
+            streams_tx,
         }
     }
 }
@@ -274,22 +288,26 @@ mod tests {
     #[tokio::test]
     async fn newly_live_detected() {
         let state = AppState::new();
+        let mut rx = state.subscribe_streams();
 
         // Initial state: stream A is live
         let stream_a = make_stream("a", "StreamerA");
         state.set_followed_streams(vec![stream_a.clone()]).await;
+        let _ = rx.recv().await; // consume initial event
 
         // Update: both A and B are live
         let stream_b = make_stream("b", "StreamerB");
-        let result = state.set_followed_streams(vec![stream_a, stream_b]).await;
+        state.set_followed_streams(vec![stream_a, stream_b]).await;
+        let event = rx.recv().await.unwrap();
 
-        assert_eq!(result.newly_live.len(), 1);
-        assert_eq!(result.newly_live[0].user_id, "b");
+        assert_eq!(event.newly_live.len(), 1);
+        assert_eq!(event.newly_live[0].user_id, "b");
     }
 
     #[tokio::test]
     async fn no_change_when_same_streams() {
         let state = AppState::new();
+        let mut rx = state.subscribe_streams();
 
         let stream_a = make_stream("a", "StreamerA");
         let stream_b = make_stream("b", "StreamerB");
@@ -298,37 +316,44 @@ mod tests {
         state
             .set_followed_streams(vec![stream_a.clone(), stream_b.clone()])
             .await;
+        let _ = rx.recv().await;
 
         // Set same streams again
-        let result = state.set_followed_streams(vec![stream_a, stream_b]).await;
+        state.set_followed_streams(vec![stream_a, stream_b]).await;
+        let event = rx.recv().await.unwrap();
 
-        assert!(result.newly_live.is_empty());
+        assert!(event.newly_live.is_empty());
     }
 
     #[tokio::test]
     async fn initial_load_all_newly_live() {
         let state = AppState::new();
+        let mut rx = state.subscribe_streams();
 
         let stream_a = make_stream("a", "StreamerA");
         let stream_b = make_stream("b", "StreamerB");
 
         // First load - all streams are "newly live"
-        let result = state.set_followed_streams(vec![stream_a, stream_b]).await;
+        state.set_followed_streams(vec![stream_a, stream_b]).await;
+        let event = rx.recv().await.unwrap();
 
-        assert_eq!(result.newly_live.len(), 2);
+        assert_eq!(event.newly_live.len(), 2);
     }
 
     #[tokio::test]
     async fn empty_to_streams() {
         let state = AppState::new();
+        let mut rx = state.subscribe_streams();
 
         // Explicitly set empty first
         state.set_followed_streams(vec![]).await;
+        let _ = rx.recv().await;
 
         let stream_a = make_stream("a", "StreamerA");
-        let result = state.set_followed_streams(vec![stream_a]).await;
+        state.set_followed_streams(vec![stream_a]).await;
+        let event = rx.recv().await.unwrap();
 
-        assert_eq!(result.newly_live.len(), 1);
+        assert_eq!(event.newly_live.len(), 1);
     }
 
     // === tracked_categories tests ===
@@ -394,83 +419,98 @@ mod tests {
     #[tokio::test]
     async fn category_change_detected() {
         let state = AppState::new();
+        let mut rx = state.subscribe_streams();
 
         // Initial: streamer is playing Fortnite
         let stream1 = make_stream_with_game("1", "game1", "Fortnite");
         state.set_followed_streams(vec![stream1]).await;
+        let _ = rx.recv().await;
 
         // Update: streamer switched to Minecraft
         let stream2 = make_stream_with_game("1", "game2", "Minecraft");
-        let result = state.set_followed_streams(vec![stream2]).await;
+        state.set_followed_streams(vec![stream2]).await;
+        let event = rx.recv().await.unwrap();
 
-        assert_eq!(result.category_changes.len(), 1);
-        assert_eq!(result.category_changes[0].old_category, "Fortnite");
-        assert_eq!(result.category_changes[0].stream.game_name, "Minecraft");
+        assert_eq!(event.category_changes.len(), 1);
+        assert_eq!(event.category_changes[0].old_category, "Fortnite");
+        assert_eq!(event.category_changes[0].stream.game_name, "Minecraft");
     }
 
     #[tokio::test]
     async fn no_category_change_when_same_game() {
         let state = AppState::new();
+        let mut rx = state.subscribe_streams();
 
         let stream1 = make_stream_with_game("1", "game1", "Fortnite");
         state.set_followed_streams(vec![stream1.clone()]).await;
+        let _ = rx.recv().await;
 
         // Same game
-        let result = state.set_followed_streams(vec![stream1]).await;
+        state.set_followed_streams(vec![stream1]).await;
+        let event = rx.recv().await.unwrap();
 
-        assert!(result.category_changes.is_empty());
+        assert!(event.category_changes.is_empty());
     }
 
     #[tokio::test]
     async fn no_category_change_for_newly_live() {
         let state = AppState::new();
+        let mut rx = state.subscribe_streams();
 
         // Initial: nobody live
         state.set_followed_streams(vec![]).await;
+        let _ = rx.recv().await;
 
         // New stream comes online
         let stream = make_stream_with_game("1", "game1", "Fortnite");
-        let result = state.set_followed_streams(vec![stream]).await;
+        state.set_followed_streams(vec![stream]).await;
+        let event = rx.recv().await.unwrap();
 
         // Should be newly_live, not a category change
-        assert_eq!(result.newly_live.len(), 1);
-        assert!(result.category_changes.is_empty());
+        assert_eq!(event.newly_live.len(), 1);
+        assert!(event.category_changes.is_empty());
     }
 
     #[tokio::test]
     async fn no_category_change_from_empty_game() {
         let state = AppState::new();
+        let mut rx = state.subscribe_streams();
 
         // Initial: stream with no game (empty game_id)
         let mut stream1 = make_stream_with_game("1", "", "");
         stream1.game_name = "".to_string();
         state.set_followed_streams(vec![stream1]).await;
+        let _ = rx.recv().await;
 
         // Update: now has a game
         let stream2 = make_stream_with_game("1", "game1", "Fortnite");
-        let result = state.set_followed_streams(vec![stream2]).await;
+        state.set_followed_streams(vec![stream2]).await;
+        let event = rx.recv().await.unwrap();
 
         // Not counted as a category change (was empty before)
-        assert!(result.category_changes.is_empty());
+        assert!(event.category_changes.is_empty());
     }
 
     #[tokio::test]
     async fn multiple_category_changes() {
         let state = AppState::new();
+        let mut rx = state.subscribe_streams();
 
         // Initial: two streams
         let stream1 = make_stream_with_game("1", "game1", "Fortnite");
         let stream2 = make_stream_with_game("2", "game2", "Minecraft");
         state.set_followed_streams(vec![stream1, stream2]).await;
+        let _ = rx.recv().await;
 
         // Both change categories
         let stream1_new = make_stream_with_game("1", "game3", "Valorant");
         let stream2_new = make_stream_with_game("2", "game4", "Apex Legends");
-        let result = state
+        state
             .set_followed_streams(vec![stream1_new, stream2_new])
             .await;
+        let event = rx.recv().await.unwrap();
 
-        assert_eq!(result.category_changes.len(), 2);
+        assert_eq!(event.category_changes.len(), 2);
     }
 
     // === authentication state tests ===

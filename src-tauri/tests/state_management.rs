@@ -7,22 +7,26 @@ use twitch_tray::state::AppState;
 #[tokio::test]
 async fn state_tracks_newly_live_streams() {
     let state = AppState::new();
+    let mut rx = state.subscribe_streams();
 
     // Initial load
     let stream_a = common::make_stream("a", "StreamerA", 1000);
     state.set_followed_streams(vec![stream_a.clone()]).await;
+    let _ = rx.recv().await;
 
     // New stream goes live
     let stream_b = common::make_stream("b", "StreamerB", 2000);
-    let result = state.set_followed_streams(vec![stream_a, stream_b]).await;
+    state.set_followed_streams(vec![stream_a, stream_b]).await;
+    let event = rx.recv().await.unwrap();
 
-    assert_eq!(result.newly_live.len(), 1);
-    assert_eq!(result.newly_live[0].user_id, "b");
+    assert_eq!(event.newly_live.len(), 1);
+    assert_eq!(event.newly_live[0].user_id, "b");
 }
 
 #[tokio::test]
 async fn state_tracks_no_new_streams_when_unchanged() {
     let state = AppState::new();
+    let mut rx = state.subscribe_streams();
 
     // Both streams live
     let stream_a = common::make_stream("a", "StreamerA", 1000);
@@ -30,11 +34,13 @@ async fn state_tracks_no_new_streams_when_unchanged() {
     state
         .set_followed_streams(vec![stream_a.clone(), stream_b.clone()])
         .await;
+    let _ = rx.recv().await;
 
     // Same streams again
-    let result = state.set_followed_streams(vec![stream_a, stream_b]).await;
+    state.set_followed_streams(vec![stream_a, stream_b]).await;
+    let event = rx.recv().await.unwrap();
 
-    assert!(result.newly_live.is_empty());
+    assert!(event.newly_live.is_empty());
 }
 
 #[tokio::test]

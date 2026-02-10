@@ -25,7 +25,7 @@ pub struct App {
     pub history: StreamHistoryDb,
 
     // Tracks if initial load is complete (don't notify until then)
-    initial_load_done: AtomicBool,
+    initial_load_done: Arc<AtomicBool>,
 
     // Cancellation for auth flow
     auth_cancel_tx: watch::Sender<bool>,
@@ -77,7 +77,7 @@ impl App {
             notifier,
             tray_manager,
             history,
-            initial_load_done: AtomicBool::new(false),
+            initial_load_done: Arc::new(AtomicBool::new(false)),
             auth_cancel_tx,
             auth_cancel_rx,
             last_live_refresh: Arc::new(RwLock::new(None)),
@@ -138,6 +138,22 @@ impl App {
         Ok(())
     }
 
+    /// Calls `f()`, and on `ApiError::Unauthorized` refreshes the token and retries once.
+    async fn with_retry<F, Fut, T>(&self, f: F) -> Result<T, ApiError>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<T, ApiError>>,
+    {
+        match f().await {
+            Ok(val) => Ok(val),
+            Err(ApiError::Unauthorized) => {
+                self.try_refresh_token().await.map_err(ApiError::Other)?;
+                f().await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Attempts to refresh the OAuth token
     ///
     /// Called when API calls return 401 Unauthorized, indicating the token
@@ -167,7 +183,6 @@ impl App {
 
         // Clone self for the async tasks
         let app = self.clone();
-        let handle = app_handle.clone();
 
         let poll_interval_secs = cfg.poll_interval_sec;
 
@@ -195,35 +210,14 @@ impl App {
                 };
 
                 if should_refresh {
-                    // Notification suppression is handled inside refresh_followed_streams
-                    // based on last *successful* refresh time
                     app.refresh_followed_streams().await;
-
-                    // Also refresh category streams on the same schedule
                     app.refresh_category_streams().await;
-
-                    // Rebuild menu with category data
-                    let cfg = app.config.get();
-                    let category_streams = app.state.get_category_streams().await;
-                    if let Err(e) = app
-                        .tray_manager
-                        .rebuild_menu_with_categories(
-                            &handle,
-                            cfg.followed_categories,
-                            category_streams,
-                            cfg.streamer_settings,
-                        )
-                        .await
-                    {
-                        tracing::error!("Failed to rebuild menu: {}", e);
-                    }
                 }
             }
         });
 
         // Schedule polling task - uses wall-clock time to handle sleep correctly
         let app = self.clone();
-        let handle = app_handle.clone();
         let schedule_poll_secs = cfg.schedule_poll_min * 60;
 
         tokio::spawn(async move {
@@ -253,22 +247,6 @@ impl App {
 
                     // Update last refresh time
                     *app.last_schedule_refresh.write().await = Some(Utc::now());
-
-                    // Rebuild menu with category data
-                    let cfg = app.config.get();
-                    let category_streams = app.state.get_category_streams().await;
-                    if let Err(e) = app
-                        .tray_manager
-                        .rebuild_menu_with_categories(
-                            &handle,
-                            cfg.followed_categories,
-                            category_streams,
-                            cfg.streamer_settings,
-                        )
-                        .await
-                    {
-                        tracing::error!("Failed to rebuild menu: {}", e);
-                    }
                 }
             }
         });
@@ -379,9 +357,9 @@ impl App {
             }
         });
 
-        // State change listener task
+        // State change listener task — rebuilds menu on any state change
         let app = self.clone();
-        let handle = app_handle;
+        let handle = app_handle.clone();
 
         tokio::spawn(async move {
             let mut rx = app.state.subscribe();
@@ -408,6 +386,111 @@ impl App {
                 }
             }
         });
+
+        // Notification listener task — reacts to stream update events
+        let app = self.clone();
+        tokio::spawn(async move {
+            let mut rx = app.state.subscribe_streams();
+            let mut last_event_time: Option<DateTime<Utc>> = None;
+
+            loop {
+                match rx.recv().await {
+                    Ok(event) => {
+                        // Skip notifications during initial load (baseline)
+                        if !app.initial_load_done.load(Ordering::SeqCst) {
+                            last_event_time = Some(Utc::now());
+                            continue;
+                        }
+
+                        let now = Utc::now();
+
+                        // Check if we should suppress due to sleep/suspension gap
+                        let suppress = match last_event_time {
+                            None => false,
+                            Some(last) => {
+                                let elapsed = (now - last).num_seconds();
+                                let should_suppress = elapsed > app.notify_max_gap_secs as i64;
+                                if should_suppress {
+                                    tracing::info!(
+                                        "Suppressing notifications: gap of {}s exceeds max of {}s",
+                                        elapsed,
+                                        app.notify_max_gap_secs
+                                    );
+                                }
+                                should_suppress
+                            }
+                        };
+
+                        last_event_time = Some(now);
+
+                        if suppress {
+                            continue;
+                        }
+
+                        let streamer_settings = app.config.get().streamer_settings;
+                        for stream in &event.newly_live {
+                            let importance = streamer_settings
+                                .get(&stream.user_login)
+                                .map(|s| s.importance)
+                                .unwrap_or_default();
+                            if importance == StreamerImportance::Silent
+                                || importance == StreamerImportance::Ignore
+                            {
+                                continue;
+                            }
+                            if let Err(e) = app.notifier.stream_live(stream) {
+                                tracing::error!("Notification error: {}", e);
+                            }
+                        }
+                        for change in &event.category_changes {
+                            let importance = streamer_settings
+                                .get(&change.stream.user_login)
+                                .map(|s| s.importance)
+                                .unwrap_or_default();
+                            if importance == StreamerImportance::Silent
+                                || importance == StreamerImportance::Ignore
+                            {
+                                continue;
+                            }
+                            if let Err(e) = app
+                                .notifier
+                                .category_changed(&change.stream, &change.old_category)
+                            {
+                                tracing::error!("Notification error: {}", e);
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("Notification listener lagged by {} events", n);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        break;
+                    }
+                }
+            }
+        });
+
+        // History recording listener task — records stream data on every update
+        let app = self.clone();
+        tokio::spawn(async move {
+            let mut rx = app.state.subscribe_streams();
+
+            loop {
+                match rx.recv().await {
+                    Ok(event) => {
+                        if let Err(e) = app.history.record_streams(&event.streams) {
+                            tracing::error!("Failed to record stream history: {}", e);
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("History listener lagged by {} events", n);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        break;
+                    }
+                }
+            }
+        });
     }
 
     /// Performs initial data refresh
@@ -428,99 +511,19 @@ impl App {
             return;
         }
 
-        let streams = match self.client.get_followed_streams().await {
+        let streams = match self.with_retry(|| self.client.get_followed_streams()).await {
             Ok(streams) => streams,
-            Err(ApiError::Unauthorized) => {
-                // Token expired - try to refresh and retry
-                if let Err(e) = self.try_refresh_token().await {
-                    tracing::error!("Failed to refresh token: {}", e);
-                    return;
-                }
-                // Retry the request with new token
-                match self.client.get_followed_streams().await {
-                    Ok(streams) => streams,
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to get followed streams after token refresh: {}",
-                            e
-                        );
-                        return;
-                    }
-                }
-            }
             Err(e) => {
                 tracing::error!("Failed to get followed streams: {}", e);
                 return;
             }
         };
 
-        // Record stream history for schedule inference
-        if let Err(e) = self.history.record_streams(&streams) {
-            tracing::error!("Failed to record stream history: {}", e);
-        }
+        // Update last successful refresh time
+        *self.last_live_refresh.write().await = Some(Utc::now());
 
-        // SUCCESS: We have stream data. Now determine if we should send notifications
-        // based on the gap since the last *successful* refresh.
-        let now = Utc::now();
-        let last_successful = *self.last_live_refresh.read().await;
-
-        let suppress_notifications = match last_successful {
-            None => false, // First successful refresh, don't suppress
-            Some(last) => {
-                let elapsed = (now - last).num_seconds();
-                let should_suppress = elapsed > self.notify_max_gap_secs as i64;
-                if should_suppress {
-                    tracing::info!(
-                        "Suppressing notifications: gap of {}s exceeds max of {}s",
-                        elapsed,
-                        self.notify_max_gap_secs
-                    );
-                }
-                should_suppress
-            }
-        };
-
-        // Update last successful refresh time BEFORE processing notifications
-        // This ensures the timestamp reflects when we got valid data
-        *self.last_live_refresh.write().await = Some(now);
-
-        let result = self.state.set_followed_streams(streams).await;
-
-        // Notify for newly live streams (only after initial load, and if not suppressed)
-        if self.initial_load_done.load(Ordering::SeqCst) && !suppress_notifications {
-            let streamer_settings = self.config.get().streamer_settings;
-            for stream in &result.newly_live {
-                let importance = streamer_settings
-                    .get(&stream.user_login)
-                    .map(|s| s.importance)
-                    .unwrap_or_default();
-                if importance == StreamerImportance::Silent
-                    || importance == StreamerImportance::Ignore
-                {
-                    continue;
-                }
-                if let Err(e) = self.notifier.stream_live(stream) {
-                    tracing::error!("Notification error: {}", e);
-                }
-            }
-            for change in &result.category_changes {
-                let importance = streamer_settings
-                    .get(&change.stream.user_login)
-                    .map(|s| s.importance)
-                    .unwrap_or_default();
-                if importance == StreamerImportance::Silent
-                    || importance == StreamerImportance::Ignore
-                {
-                    continue;
-                }
-                if let Err(e) = self
-                    .notifier
-                    .category_changed(&change.stream, &change.old_category)
-                {
-                    tracing::error!("Notification error: {}", e);
-                }
-            }
-        }
+        // Write to state — this broadcasts the StreamsUpdated event
+        self.state.set_followed_streams(streams).await;
     }
 
     async fn refresh_scheduled_streams(&self) {
@@ -530,26 +533,11 @@ impl App {
 
         tracing::debug!("Fetching scheduled streams...");
 
-        let scheduled = match self.client.get_scheduled_streams_for_followed().await {
+        let scheduled = match self
+            .with_retry(|| self.client.get_scheduled_streams_for_followed())
+            .await
+        {
             Ok(scheduled) => scheduled,
-            Err(ApiError::Unauthorized) => {
-                // Token expired - try to refresh and retry
-                if let Err(e) = self.try_refresh_token().await {
-                    tracing::error!("Failed to refresh token: {}", e);
-                    return;
-                }
-                // Retry the request with new token
-                match self.client.get_scheduled_streams_for_followed().await {
-                    Ok(scheduled) => scheduled,
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to get scheduled streams after token refresh: {}",
-                            e
-                        );
-                        return;
-                    }
-                }
-            }
             Err(e) => {
                 tracing::error!("Failed to get scheduled streams: {}", e);
                 return;
@@ -591,26 +579,12 @@ impl App {
         }
 
         for category in &categories {
-            let streams = match self.client.get_streams_by_category(&category.id).await {
+            let cat_id = category.id.clone();
+            let streams = match self
+                .with_retry(|| self.client.get_streams_by_category(&cat_id))
+                .await
+            {
                 Ok(streams) => streams,
-                Err(ApiError::Unauthorized) => {
-                    // Token expired - try to refresh and retry
-                    if let Err(e) = self.try_refresh_token().await {
-                        tracing::error!("Failed to refresh token: {}", e);
-                        continue;
-                    }
-                    // Retry the request with new token
-                    match self.client.get_streams_by_category(&category.id).await {
-                        Ok(streams) => streams,
-                        Err(e) => {
-                            tracing::error!(
-                                "Failed to get category streams after token refresh: {}",
-                                e
-                            );
-                            continue;
-                        }
-                    }
-                }
                 Err(e) => {
                     tracing::error!(
                         "Failed to get category streams for {}: {}",
@@ -628,19 +602,19 @@ impl App {
     }
 
     /// Handles login request
-    pub async fn handle_login(&self, app_handle: &AppHandle) {
+    pub async fn handle_login(&self) {
         let flow = DeviceFlow::new(CLIENT_ID.to_string());
 
         // Reset cancellation
         let _ = self.auth_cancel_tx.send(false);
 
-        let app_handle = app_handle.clone();
         let store = TokenStore::new().expect("Failed to create token store");
         let client = self.client.clone();
         let state = self.state.clone();
         let notifier_enabled = self.config.get().notify_on_live;
         let cancel_rx = self.auth_cancel_rx.clone();
-        let tray_manager = self.tray_manager.clone();
+        let initial_load_done = self.initial_load_done.clone();
+        let last_live_refresh = self.last_live_refresh.clone();
 
         tokio::spawn(async move {
             match flow
@@ -683,10 +657,11 @@ impl App {
                         state.set_scheduled_streams(scheduled).await;
                     }
 
-                    // Rebuild menu
-                    if let Err(e) = tray_manager.rebuild_menu(&app_handle).await {
-                        tracing::error!("Failed to rebuild menu: {}", e);
-                    }
+                    // Mark initial load done so notification listener starts firing
+                    initial_load_done.store(true, Ordering::SeqCst);
+
+                    // Set initial refresh time so polling knows when to next refresh
+                    *last_live_refresh.write().await = Some(Utc::now());
 
                     tracing::info!("Logged in as {}", token.user_login);
                 }
@@ -703,21 +678,16 @@ impl App {
     }
 
     /// Handles logout request
-    pub async fn handle_logout(&self, app_handle: &AppHandle) {
+    pub async fn handle_logout(&self) {
         // Clear stored token
         if let Err(e) = self.store.delete_token() {
             tracing::error!("Failed to delete token: {}", e);
         }
 
-        // Clear state
+        // Clear state — triggers menu rebuild via state change listener
         self.state.clear().await;
         self.client.clear_auth().await;
         self.initial_load_done.store(false, Ordering::SeqCst);
-
-        // Rebuild menu
-        if let Err(e) = self.tray_manager.rebuild_menu(app_handle).await {
-            tracing::error!("Failed to rebuild menu: {}", e);
-        }
     }
 }
 
@@ -737,7 +707,7 @@ impl Clone for App {
             ),
             tray_manager: self.tray_manager.clone(),
             history: self.history.clone(),
-            initial_load_done: AtomicBool::new(self.initial_load_done.load(Ordering::SeqCst)),
+            initial_load_done: self.initial_load_done.clone(),
             auth_cancel_tx: self.auth_cancel_tx.clone(),
             auth_cancel_rx: self.auth_cancel_rx.clone(),
             last_live_refresh: self.last_live_refresh.clone(),

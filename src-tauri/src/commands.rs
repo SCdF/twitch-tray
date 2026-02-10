@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tauri::{AppHandle, State};
+use tauri::State;
 
 use crate::app::App;
 use crate::config::{Config, FollowedCategory};
@@ -14,28 +14,12 @@ pub fn get_config(app: State<'_, Arc<App>>) -> Config {
 
 /// Saves the configuration and triggers an immediate refresh
 #[tauri::command]
-pub async fn save_config(
-    app_handle: AppHandle,
-    app: State<'_, Arc<App>>,
-    config: Config,
-) -> Result<(), String> {
+pub async fn save_config(app: State<'_, Arc<App>>, config: Config) -> Result<(), String> {
     // Save the config
-    app.config.save(config.clone()).map_err(|e| e.to_string())?;
+    app.config.save(config).map_err(|e| e.to_string())?;
 
-    // Refresh category streams with new config
+    // Refresh category streams — state changes trigger menu rebuild via listener
     app.refresh_category_streams().await;
-
-    // Rebuild menu with updated data
-    let category_streams = app.state.get_category_streams().await;
-    app.tray_manager
-        .rebuild_menu_with_categories(
-            &app_handle,
-            config.followed_categories,
-            category_streams,
-            config.streamer_settings,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
 
     Ok(())
 }

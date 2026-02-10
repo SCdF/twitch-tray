@@ -113,7 +113,7 @@ fn main() {
                     let handle = app_handle.clone();
                     tauri::async_runtime::spawn(async move {
                         let app = handle.state::<Arc<App>>();
-                        app.handle_login(&handle).await;
+                        app.handle_login().await;
                     });
                 });
             }
@@ -126,7 +126,7 @@ fn main() {
                     let handle = app_handle.clone();
                     tauri::async_runtime::spawn(async move {
                         let app = handle.state::<Arc<App>>();
-                        app.handle_logout(&handle).await;
+                        app.handle_logout().await;
                     });
                 });
             }
