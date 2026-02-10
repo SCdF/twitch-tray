@@ -1,5 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+
+use chrono::{Duration, Utc};
 use tauri::{
     image::Image,
     menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
@@ -236,6 +238,9 @@ fn build_authenticated_menu(
         get_importance(&s.user_login, &streamer_settings) != StreamerImportance::Ignore
     });
 
+    // Collect live broadcaster logins for schedule filtering later
+    let live_logins: HashSet<String> = streams.iter().map(|s| s.user_login.clone()).collect();
+
     // === Following Live section ===
     let title = if streams.is_empty() {
         "Following Live".to_string()
@@ -339,11 +344,19 @@ fn build_authenticated_menu(
     }
 
     // === Scheduled section ===
-    // Filter out Ignore streamers from scheduled
+    let soon_threshold = Utc::now() + Duration::minutes(60);
+
+    // Filter out Ignore streamers AND scheduled streams for broadcasters
+    // who are currently live with a start time within the next 60 minutes
     let scheduled: Vec<_> = scheduled
         .into_iter()
         .filter(|s| {
             get_importance(&s.broadcaster_login, &streamer_settings) != StreamerImportance::Ignore
+        })
+        .filter(|s| {
+            // If the broadcaster is live and the scheduled stream starts within 60 min,
+            // treat it as "covered" by the live stream — hide from schedule section
+            !(live_logins.contains(&s.broadcaster_login) && s.start_time <= soon_threshold)
         })
         .collect();
 
