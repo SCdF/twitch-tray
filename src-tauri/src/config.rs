@@ -56,6 +56,9 @@ pub struct Config {
     /// How often (in minutes) to refresh the followed channels list from the API
     #[serde(default = "default_followed_refresh")]
     pub followed_refresh_min: u64,
+    /// How many hours ahead to show in the schedule section
+    #[serde(default = "default_schedule_lookahead")]
+    pub schedule_lookahead_hours: u64,
     /// Categories to follow for category-based stream listings
     #[serde(default)]
     pub followed_categories: Vec<FollowedCategory>,
@@ -92,6 +95,10 @@ fn default_followed_refresh() -> u64 {
     15
 }
 
+fn default_schedule_lookahead() -> u64 {
+    6
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -102,6 +109,7 @@ impl Default for Config {
             schedule_stale_hours: default_schedule_stale_hours(),
             schedule_check_interval_sec: default_schedule_check_interval(),
             followed_refresh_min: default_followed_refresh(),
+            schedule_lookahead_hours: default_schedule_lookahead(),
             followed_categories: Vec::new(),
             streamer_settings: HashMap::new(),
         }
@@ -195,6 +203,12 @@ mod tests {
     }
 
     #[test]
+    fn default_schedule_lookahead_is_6() {
+        let config = Config::default();
+        assert_eq!(config.schedule_lookahead_hours, 6);
+    }
+
+    #[test]
     fn default_notify_on_live_is_true() {
         let config = Config::default();
         assert!(config.notify_on_live);
@@ -243,6 +257,7 @@ mod tests {
         assert_eq!(config.schedule_stale_hours, 24);
         assert_eq!(config.schedule_check_interval_sec, 10);
         assert_eq!(config.followed_refresh_min, 15);
+        assert_eq!(config.schedule_lookahead_hours, 6);
         assert!(config.followed_categories.is_empty());
         assert!(config.streamer_settings.is_empty());
     }
@@ -296,6 +311,7 @@ mod tests {
             schedule_stale_hours: 48,
             schedule_check_interval_sec: 20,
             followed_refresh_min: 30,
+            schedule_lookahead_hours: 12,
             followed_categories: vec![FollowedCategory {
                 id: "12345".to_string(),
                 name: "Just Chatting".to_string(),
@@ -327,6 +343,10 @@ mod tests {
             original.followed_categories
         );
         assert_eq!(deserialized.streamer_settings, original.streamer_settings);
+        assert_eq!(
+            deserialized.schedule_lookahead_hours,
+            original.schedule_lookahead_hours
+        );
     }
 
     #[test]

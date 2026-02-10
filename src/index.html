@@ -31,6 +31,12 @@
           <span class="help-text">After being away longer than this, notifications are suppressed</span>
         </div>
 
+        <div class="form-group">
+          <label for="schedule_lookahead">Schedule Lookahead (hours)</label>
+          <input type="number" id="schedule_lookahead" min="1" max="72" value="6">
+          <span class="help-text">How far ahead to show scheduled streams (1-72 hours)</span>
+        </div>
+
         <div class="form-group checkbox">
           <label>
             <input type="checkbox" id="notify_on_live" checked>

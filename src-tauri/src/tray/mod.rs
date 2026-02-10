@@ -77,7 +77,7 @@ impl TrayManager {
 
     /// Rebuilds the menu based on current state
     pub async fn rebuild_menu(&self, app: &AppHandle) -> tauri::Result<()> {
-        self.rebuild_menu_with_categories(app, Vec::new(), HashMap::new(), HashMap::new())
+        self.rebuild_menu_with_categories(app, Vec::new(), HashMap::new(), HashMap::new(), 6)
             .await
     }
 
@@ -91,6 +91,7 @@ impl TrayManager {
         followed_categories: Vec<FollowedCategory>,
         category_streams: HashMap<String, Vec<Stream>>,
         streamer_settings: HashMap<String, StreamerSettings>,
+        schedule_lookahead_hours: u64,
     ) -> tauri::Result<()> {
         // Acquire lock to serialize menu rebuilds - this prevents crashes from
         // concurrent GTK operations in libayatana-appindicator
@@ -115,6 +116,7 @@ impl TrayManager {
                     followed_categories,
                     category_streams,
                     streamer_settings,
+                    schedule_lookahead_hours,
                 )
             } else {
                 build_unauthenticated_menu(&app_handle)
@@ -222,6 +224,7 @@ fn get_importance(
         .unwrap_or_default()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_authenticated_menu(
     app: &AppHandle,
     mut streams: Vec<Stream>,
@@ -230,6 +233,7 @@ fn build_authenticated_menu(
     followed_categories: Vec<FollowedCategory>,
     category_streams: HashMap<String, Vec<Stream>>,
     streamer_settings: HashMap<String, StreamerSettings>,
+    schedule_lookahead_hours: u64,
 ) -> tauri::Result<Menu<tauri::Wry>> {
     let mut items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
 
@@ -360,8 +364,9 @@ fn build_authenticated_menu(
         })
         .collect();
 
+    let schedule_header = format!("Scheduled (Next {}h)", schedule_lookahead_hours);
     items.push(Box::new(
-        MenuItemBuilder::new("Scheduled (Next 24h)")
+        MenuItemBuilder::new(schedule_header)
             .enabled(false)
             .build(app)?,
     ));

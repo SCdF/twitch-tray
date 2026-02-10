@@ -460,24 +460,35 @@ impl App {
             let mut rx = app.state.subscribe();
 
             while rx.changed().await.is_ok() {
-                // Copy the value before awaiting to avoid holding the borrow across await
-                let has_change = rx.borrow().is_some();
-                if has_change {
-                    // Rebuild menu with category data
-                    let cfg = app.config.get();
-                    let category_streams = app.state.get_category_streams().await;
-                    if let Err(e) = app
-                        .tray_manager
-                        .rebuild_menu_with_categories(
-                            &handle,
-                            cfg.followed_categories,
-                            category_streams,
-                            cfg.streamer_settings,
-                        )
-                        .await
-                    {
-                        tracing::error!("Failed to rebuild menu on state change: {}", e);
-                    }
+                if rx.borrow().is_none() {
+                    continue;
+                }
+
+                // Debounce: wait for rapid-fire state changes to settle.
+                // A single poll cycle triggers multiple state updates (streams,
+                // categories, schedules) — coalesce them into one menu rebuild
+                // to avoid visible flicker on Linux where set_menu() destroys
+                // and recreates the GTK popup.
+                tokio::time::sleep(Duration::from_millis(500)).await;
+
+                // Mark the latest value as seen so changes during the debounce
+                // window don't trigger another immediate rebuild.
+                let _ = *rx.borrow_and_update();
+
+                let cfg = app.config.get();
+                let category_streams = app.state.get_category_streams().await;
+                if let Err(e) = app
+                    .tray_manager
+                    .rebuild_menu_with_categories(
+                        &handle,
+                        cfg.followed_categories,
+                        category_streams,
+                        cfg.streamer_settings,
+                        cfg.schedule_lookahead_hours,
+                    )
+                    .await
+                {
+                    tracing::error!("Failed to rebuild menu on state change: {}", e);
                 }
             }
         });
@@ -621,7 +632,8 @@ impl App {
 
     /// Reads upcoming schedules from DB, merges with inferred schedules, and updates state.
     async fn refresh_schedules_from_db(&self) {
-        let db_schedules = match self.db.get_upcoming_schedules(24 * 3600) {
+        let lookahead_secs = self.config.get().schedule_lookahead_hours * 3600;
+        let db_schedules = match self.db.get_upcoming_schedules(lookahead_secs as i64) {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("Failed to read schedules from DB: {}", e);
@@ -697,7 +709,9 @@ impl App {
         let client = self.client.clone();
         let state = self.state.clone();
         let db = self.db.clone();
-        let notifier_enabled = self.config.get().notify_on_live;
+        let cfg = self.config.get();
+        let notifier_enabled = cfg.notify_on_live;
+        let schedule_lookahead_secs = cfg.schedule_lookahead_hours * 3600;
         let cancel_rx = self.auth_cancel_rx.clone();
         let initial_load_done = self.initial_load_done.clone();
         let last_live_refresh = self.last_live_refresh.clone();
@@ -748,7 +762,9 @@ impl App {
                     }
 
                     // Show cached schedules from DB immediately
-                    if let Ok(db_schedules) = db.get_upcoming_schedules(24 * 3600) {
+                    if let Ok(db_schedules) =
+                        db.get_upcoming_schedules(schedule_lookahead_secs as i64)
+                    {
                         state.set_scheduled_streams(db_schedules).await;
                     }
 

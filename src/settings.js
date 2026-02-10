@@ -18,6 +18,7 @@ const tabs = document.querySelectorAll('.tab');
 const panes = document.querySelectorAll('.pane');
 const pollIntervalInput = document.getElementById('poll_interval');
 const notifyMaxGapInput = document.getElementById('notify_max_gap');
+const scheduleLookaheadInput = document.getElementById('schedule_lookahead');
 const notifyOnLiveInput = document.getElementById('notify_on_live');
 const notifyOnCategoryInput = document.getElementById('notify_on_category');
 const categorySearchInput = document.getElementById('category_search');
@@ -71,6 +72,7 @@ function populateForm() {
 
   pollIntervalInput.value = config.poll_interval_sec;
   notifyMaxGapInput.value = config.notify_max_gap_min;
+  scheduleLookaheadInput.value = config.schedule_lookahead_hours;
   notifyOnLiveInput.checked = config.notify_on_live;
   notifyOnCategoryInput.checked = config.notify_on_category;
 
@@ -335,7 +337,7 @@ function setupEventListeners() {
   });
 
   // Auto-save on general settings changes
-  [pollIntervalInput, notifyMaxGapInput].forEach(input => {
+  [pollIntervalInput, notifyMaxGapInput, scheduleLookaheadInput].forEach(input => {
     input.addEventListener('change', () => autoSave());
   });
   [notifyOnLiveInput, notifyOnCategoryInput].forEach(input => {
@@ -421,6 +423,7 @@ async function autoSave() {
       const newConfig = {
         poll_interval_sec: parseInt(pollIntervalInput.value, 10) || 60,
         notify_max_gap_min: parseInt(notifyMaxGapInput.value, 10) || 10,
+        schedule_lookahead_hours: parseInt(scheduleLookaheadInput.value, 10) || 6,
         notify_on_live: notifyOnLiveInput.checked,
         notify_on_category: notifyOnCategoryInput.checked,
         followed_categories: config.followed_categories || [],
@@ -430,6 +433,7 @@ async function autoSave() {
       // Validate
       newConfig.poll_interval_sec = Math.max(30, Math.min(300, newConfig.poll_interval_sec));
       newConfig.notify_max_gap_min = Math.max(1, Math.min(60, newConfig.notify_max_gap_min));
+      newConfig.schedule_lookahead_hours = Math.max(1, Math.min(72, newConfig.schedule_lookahead_hours));
 
       await invoke('save_config', { config: newConfig });
     }
