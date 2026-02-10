@@ -248,6 +248,7 @@ impl App {
                 if should_refresh {
                     app.refresh_followed_streams().await;
                     app.refresh_category_streams().await;
+                    app.refresh_schedules_from_db().await;
                 }
             }
         });
