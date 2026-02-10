@@ -284,6 +284,7 @@ impl Database {
     ) -> anyhow::Result<Vec<ScheduledStream>> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().timestamp();
+        let start = now - (60 * 15); // 15 minute grace period
         let end = now + horizon_secs;
         let mut stmt = conn.prepare(
             "SELECT ss.id, ss.broadcaster_id, f.broadcaster_login, f.broadcaster_name,
@@ -294,7 +295,7 @@ impl Database {
              WHERE ss.start_time BETWEEN ?1 AND ?2
              ORDER BY ss.start_time",
         )?;
-        let rows = stmt.query_map(rusqlite::params![now, end], |row| {
+        let rows = stmt.query_map(rusqlite::params![start, end], |row| {
             Ok((
                 row.get::<_, String>(0)?,         // id
                 row.get::<_, i64>(1)?,            // broadcaster_id
