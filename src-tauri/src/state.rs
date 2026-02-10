@@ -176,14 +176,27 @@ impl AppState {
         self.inner.read().await.followed_streams.clone()
     }
 
-    /// Updates the scheduled streams
+    /// Updates the scheduled streams (skips rebuild if data unchanged)
     pub async fn set_scheduled_streams(&self, streams: Vec<ScheduledStream>) {
         let mut state = self.inner.write().await;
+
+        // Only trigger a menu rebuild if the data actually changed.
+        // The schedule walker calls this every ~10s; skip notification if unchanged.
+        let changed = !state.schedules_loaded
+            || state.scheduled_streams.len() != streams.len()
+            || state
+                .scheduled_streams
+                .iter()
+                .zip(streams.iter())
+                .any(|(old, new)| old.id != new.id || old.start_time != new.start_time);
+
         state.scheduled_streams = streams;
         state.schedules_loaded = true;
         drop(state);
 
-        self.notify_change(ChangeType::ScheduledStreams);
+        if changed {
+            self.notify_change(ChangeType::ScheduledStreams);
+        }
     }
 
     /// Returns whether schedules have been fetched at least once

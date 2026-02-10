@@ -12,8 +12,7 @@ This is the only file a human has edited.
 ## TODO:
 
 - add general setting for how many followed and how many scheduled to show in main dropdown
-- better schedule. Currently we only check the "first" 50. Instead, how about we check everyone once every 24hrs, with a max of 10 a minute, drip fed into the database. It's not going to change that much, and we can cache and cover everything. menu should also update schedule much fast once it's decoupled, we shouldn't see schduled streams for overnight when we wake up
-- make sure we are detecting wake ups and instantly refreshing if we've been asleep. This should be magic if we schedule our refreshes on a timer?
+- add a streamer setting to hide their schedule, and this should filter at the menu level, hiding scheuled and inferred streams
 
 - ask it about the security of the user's credential. How is it stored, can we take another crack at storing it in the keychain?
 - get a better tray icon, this one looks too large comparatively
@@ -31,6 +30,9 @@ This is the only file a human has edited.
 - audit our API usage and make sure we are abusing the API the minimum amount. We should find out live list once a minute and no more.
 - refactor all places we are querying the api and deal with retries and auth / refresh keys centrally.
 - general refactor of how refreshing is done to decouple data loading with reacting to data changing
+- better schedule. Currently we only check the "first" 50. Instead, how about we check everyone once every 24hrs, with a max of 10 a minute, drip fed into the database. It's not going to change that much, and we can cache and cover everything. menu should also update schedule much fast once it's decoupled, we shouldn't see schduled streams for overnight when we wake up
+- make sure we are detecting wake ups and instantly refreshing if we've been asleep. This should be magic if we schedule our refreshes on a timer?
+- consider a schdeuled stream live if the streamer is live within 60min of the schedule time
 
 ## Done:
 
