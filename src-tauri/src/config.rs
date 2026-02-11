@@ -59,6 +59,10 @@ pub struct Config {
     /// How many hours ahead to show in the schedule section
     #[serde(default = "default_schedule_lookahead")]
     pub schedule_lookahead_hours: u64,
+    /// Minutes before now to include in the schedule window.
+    /// Grace period so recently-started schedules still show if the streamer hasn't gone live yet.
+    #[serde(default = "default_schedule_before_now")]
+    pub schedule_before_now_min: u64,
     /// Categories to follow for category-based stream listings
     #[serde(default)]
     pub followed_categories: Vec<FollowedCategory>,
@@ -99,6 +103,10 @@ fn default_schedule_lookahead() -> u64 {
     6
 }
 
+fn default_schedule_before_now() -> u64 {
+    15
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -110,6 +118,7 @@ impl Default for Config {
             schedule_check_interval_sec: default_schedule_check_interval(),
             followed_refresh_min: default_followed_refresh(),
             schedule_lookahead_hours: default_schedule_lookahead(),
+            schedule_before_now_min: default_schedule_before_now(),
             followed_categories: Vec::new(),
             streamer_settings: HashMap::new(),
         }
@@ -209,6 +218,12 @@ mod tests {
     }
 
     #[test]
+    fn default_schedule_before_now_is_15() {
+        let config = Config::default();
+        assert_eq!(config.schedule_before_now_min, 15);
+    }
+
+    #[test]
     fn default_notify_on_live_is_true() {
         let config = Config::default();
         assert!(config.notify_on_live);
@@ -258,6 +273,7 @@ mod tests {
         assert_eq!(config.schedule_check_interval_sec, 10);
         assert_eq!(config.followed_refresh_min, 15);
         assert_eq!(config.schedule_lookahead_hours, 6);
+        assert_eq!(config.schedule_before_now_min, 15);
         assert!(config.followed_categories.is_empty());
         assert!(config.streamer_settings.is_empty());
     }
@@ -312,6 +328,7 @@ mod tests {
             schedule_check_interval_sec: 20,
             followed_refresh_min: 30,
             schedule_lookahead_hours: 12,
+            schedule_before_now_min: 20,
             followed_categories: vec![FollowedCategory {
                 id: "12345".to_string(),
                 name: "Just Chatting".to_string(),
@@ -346,6 +363,10 @@ mod tests {
         assert_eq!(
             deserialized.schedule_lookahead_hours,
             original.schedule_lookahead_hours
+        );
+        assert_eq!(
+            deserialized.schedule_before_now_min,
+            original.schedule_before_now_min
         );
     }
 

@@ -276,16 +276,16 @@ impl Database {
         Ok(())
     }
 
-    /// Returns scheduled streams starting within `horizon_secs` from now,
+    /// Returns scheduled streams in the `[start, end]` window,
     /// filtered to only currently-followed broadcasters via JOIN.
     pub fn get_upcoming_schedules(
         &self,
-        horizon_secs: i64,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
     ) -> anyhow::Result<Vec<ScheduledStream>> {
         let conn = self.conn.lock().unwrap();
-        let now = Utc::now().timestamp();
-        let start = now - (60 * 15); // 15 minute grace period
-        let end = now + horizon_secs;
+        let start = start.timestamp();
+        let end = end.timestamp();
         let mut stmt = conn.prepare(
             "SELECT ss.id, ss.broadcaster_id, f.broadcaster_login, f.broadcaster_name,
                     ss.title, ss.start_time, ss.end_time, ss.category_name, ss.category_id,
@@ -335,16 +335,18 @@ impl Database {
     /// shifted back 1, 2, and 3 weeks. If a streamer consistently goes live
     /// at similar times across multiple weeks, predicts they'll do so again.
     ///
+    /// `start` and `end` define the prediction window (same clamp as API schedules).
+    ///
     /// Issues exactly 4 SQL queries regardless of channel count:
     /// 1 for earliest streams, 3 for each lookback window.
     pub fn infer_schedules(
         &self,
         channel_lookup: &HashMap<String, FollowedChannel>,
-        api_schedules: &[ScheduledStream],
-        now: DateTime<Utc>,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
     ) -> anyhow::Result<Vec<ScheduledStream>> {
-        let window_start = now - Duration::hours(1);
-        let window_end = now + Duration::hours(24);
+        let window_start = start;
+        let window_end = end;
         let window_secs = (window_end - window_start).num_seconds();
 
         // Collect all user IDs upfront
@@ -450,17 +452,8 @@ impl Database {
                 // Convert to absolute time
                 let predicted_time = window_start + Duration::seconds(rounded);
 
-                // Skip if in the past
-                if predicted_time <= now {
-                    continue;
-                }
-
-                // Skip if an API schedule exists for this streamer within 60 min
-                let dominated = api_schedules.iter().any(|s| {
-                    s.broadcaster_id == channel.broadcaster_id
-                        && (s.start_time - predicted_time).num_seconds().abs() <= 3600
-                });
-                if dominated {
+                // Skip if outside the display window
+                if predicted_time < start {
                     continue;
                 }
 
@@ -698,14 +691,21 @@ mod tests {
 
     // === Inference logic tests ===
 
+    /// Helper to compute the schedule window from a given `now` time,
+    /// matching the defaults used in production (15min before, 6h ahead).
+    fn schedule_window(now: DateTime<Utc>) -> (DateTime<Utc>, DateTime<Utc>) {
+        (now - Duration::minutes(15), now + Duration::hours(6))
+    }
+
     #[test]
     fn three_weeks_two_match_predicted() {
         let db = in_memory_db();
         // "now" is a fixed point: Wednesday at 14:00 UTC
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
+        let (start, end) = schedule_window(now);
 
         // Need early record to establish coverage for all 3 weeks
-        // Week 3 window starts at now-1h-21d = June 25 13:00
+        // Week 3 window starts at start-21d = June 25 13:45
         let earliest = Utc.with_ymd_and_hms(2025, 6, 25, 12, 0, 0).unwrap();
 
         // Streamer went live at ~15:00 on 2 of the last 3 weeks (Wed)
@@ -723,7 +723,7 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = db.infer_schedules(&channels, &[], now).unwrap();
+        let result = db.infer_schedules(&channels, start, end).unwrap();
         assert_eq!(result.len(), 1, "Should predict one schedule");
         assert!(result[0].is_inferred);
         // Predicted time should be around 15:00
@@ -734,6 +734,7 @@ mod tests {
     fn three_weeks_one_match_not_predicted() {
         let db = in_memory_db();
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
+        let (start, end) = schedule_window(now);
 
         // Only 1 out of 3 weeks has a stream at this time
         // We need 3 weeks of data but only 1 match → threshold is 2, so not predicted
@@ -752,7 +753,7 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = db.infer_schedules(&channels, &[], now).unwrap();
+        let result = db.infer_schedules(&channels, start, end).unwrap();
         assert!(
             result.is_empty(),
             "Should not predict with only 1/3 weeks matching"
@@ -763,8 +764,9 @@ mod tests {
     fn two_weeks_both_match_predicted() {
         let db = in_memory_db();
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
+        let (start, end) = schedule_window(now);
 
-        // Need early record to cover week 2 window (starts July 2 13:00)
+        // Need early record to cover week 2 window (starts start-14d)
         let earliest = Utc.with_ymd_and_hms(2025, 7, 2, 12, 0, 0).unwrap();
 
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
@@ -780,7 +782,7 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = db.infer_schedules(&channels, &[], now).unwrap();
+        let result = db.infer_schedules(&channels, start, end).unwrap();
         assert_eq!(result.len(), 1, "Should predict with 2/2 weeks matching");
     }
 
@@ -788,6 +790,7 @@ mod tests {
     fn two_weeks_one_stream_predicted() {
         let db = in_memory_db();
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
+        let (start, end) = schedule_window(now);
 
         // Data goes back 2 weeks, but only week 1 has a stream in window
         // threshold = max(1, 2-1) = 1, so 1 match is enough
@@ -804,7 +807,7 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = db.infer_schedules(&channels, &[], now).unwrap();
+        let result = db.infer_schedules(&channels, start, end).unwrap();
         assert_eq!(
             result.len(),
             1,
@@ -816,10 +819,10 @@ mod tests {
     fn one_week_data_predicted() {
         let db = in_memory_db();
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
+        let (start, end) = schedule_window(now);
 
-        // Week 1 window start is now-1h-7d = July 9 13:00
+        // Week 1 lookback starts at start-7d = July 9 13:45
         // Need earliest record at or before that to have coverage
-        // Stream at 13:00 on July 9 establishes coverage, stream at 15:00 is in window
         let early = Utc.with_ymd_and_hms(2025, 7, 9, 13, 0, 0).unwrap();
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
 
@@ -829,7 +832,7 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = db.infer_schedules(&channels, &[], now).unwrap();
+        let result = db.infer_schedules(&channels, start, end).unwrap();
         assert_eq!(result.len(), 1, "Should predict with 1 week of data");
     }
 
@@ -837,11 +840,12 @@ mod tests {
     fn no_data_no_prediction() {
         let db = in_memory_db();
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
+        let (start, end) = schedule_window(now);
 
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = db.infer_schedules(&channels, &[], now).unwrap();
+        let result = db.infer_schedules(&channels, start, end).unwrap();
         assert!(result.is_empty(), "No data should produce no predictions");
     }
 
@@ -849,8 +853,9 @@ mod tests {
     fn clustering_59min_apart_same_cluster() {
         let db = in_memory_db();
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
+        let (start, end) = schedule_window(now);
 
-        // Need early record to cover week 2 window (starts July 2 13:00)
+        // Need early record to cover week 2 window
         let earliest = Utc.with_ymd_and_hms(2025, 7, 2, 12, 0, 0).unwrap();
 
         // Two streams 1 minute apart should cluster together (within 60min threshold)
@@ -868,7 +873,7 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = db.infer_schedules(&channels, &[], now).unwrap();
+        let result = db.infer_schedules(&channels, start, end).unwrap();
         assert_eq!(
             result.len(),
             1,
@@ -880,9 +885,9 @@ mod tests {
     fn clustering_61min_apart_different_clusters() {
         let db = in_memory_db();
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
+        let (start, end) = schedule_window(now);
 
         // Need early record to establish coverage for both weeks
-        // Week 2 window starts at now-1h-14d = July 2 13:00
         let earliest = Utc.with_ymd_and_hms(2025, 7, 2, 12, 0, 0).unwrap();
 
         // Two streams 61 minutes apart in different weeks should NOT cluster
@@ -900,7 +905,7 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = db.infer_schedules(&channels, &[], now).unwrap();
+        let result = db.infer_schedules(&channels, start, end).unwrap();
         // Each cluster has only 1 distinct week, threshold for 2 weeks data is 1
         // So both should be predicted separately
         assert_eq!(
@@ -914,15 +919,15 @@ mod tests {
     fn average_and_rounding() {
         let db = in_memory_db();
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 10, 0, 0).unwrap();
+        let (start, end) = schedule_window(now);
 
         // Need an early record to establish coverage for all 3 weeks
-        // Week 3 window starts at now-1h-21d = June 25 09:00
         let earliest = Utc.with_ymd_and_hms(2025, 6, 25, 8, 0, 0).unwrap();
 
         // Three streams at 12:45, 12:58, 13:15 (within 30min, so they cluster)
-        // Offsets from window_start (now-1h = 9:00): 3h45m, 3h58m, 4h15m
-        // = 13500, 14280, 15300 seconds
-        // avg = 14360s → /900 = 15.955 → round to 16 → 16*900=14400s = 4h from 9:00 = 13:00
+        // Offsets from window_start (start = 9:45): 3h00m, 3h13m, 3h30m
+        // = 10800, 11580, 12600 seconds
+        // avg = 11660s → /900 = 12.955 → round to 13 → 13*900=11700s = 3h15m from 9:45 = 13:00
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 12, 45, 0).unwrap();
         let w2 = Utc.with_ymd_and_hms(2025, 7, 2, 12, 58, 0).unwrap();
         let w3 = Utc.with_ymd_and_hms(2025, 6, 25, 13, 15, 0).unwrap();
@@ -938,7 +943,7 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = db.infer_schedules(&channels, &[], now).unwrap();
+        let result = db.infer_schedules(&channels, start, end).unwrap();
         assert_eq!(result.len(), 1);
         // Should round to nearest 15 min → 13:00
         assert_eq!(result[0].start_time.hour(), 13);
@@ -949,6 +954,7 @@ mod tests {
     fn multiple_streamers_independent() {
         let db = in_memory_db();
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
+        let (start, end) = schedule_window(now);
 
         // Early records to establish coverage for both streamers
         let early100 = make_test_stream("100", Utc.with_ymd_and_hms(2025, 7, 2, 12, 0, 0).unwrap());
@@ -967,7 +973,7 @@ mod tests {
         channels.insert("100".to_string(), make_channel("100", "StreamerA"));
         channels.insert("200".to_string(), make_channel("200", "StreamerB"));
 
-        let result = db.infer_schedules(&channels, &[], now).unwrap();
+        let result = db.infer_schedules(&channels, start, end).unwrap();
         assert_eq!(result.len(), 2, "Should predict for both streamers");
 
         let names: Vec<&str> = result.iter().map(|s| s.broadcaster_name.as_str()).collect();
@@ -976,52 +982,13 @@ mod tests {
     }
 
     #[test]
-    fn dedup_with_api_schedule() {
-        let db = in_memory_db();
-        let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
-
-        let earliest = Utc.with_ymd_and_hms(2025, 7, 2, 12, 0, 0).unwrap();
-        let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
-        let w2 = Utc.with_ymd_and_hms(2025, 7, 2, 15, 0, 0).unwrap();
-        db.record_streams(&[
-            make_test_stream("100", earliest),
-            make_test_stream("100", w1),
-            make_test_stream("100", w2),
-        ])
-        .unwrap();
-
-        let mut channels = HashMap::new();
-        channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
-
-        // API schedule exists at 15:30 (within 60 min of predicted 15:00)
-        let api_schedule = ScheduledStream {
-            id: "api_123".to_string(),
-            broadcaster_id: "100".to_string(),
-            broadcaster_name: "TestStreamer".to_string(),
-            broadcaster_login: "teststreamer".to_string(),
-            title: "Scheduled Stream".to_string(),
-            start_time: Utc.with_ymd_and_hms(2025, 7, 16, 15, 30, 0).unwrap(),
-            end_time: None,
-            category: None,
-            category_id: None,
-            is_recurring: false,
-            is_inferred: false,
-        };
-
-        let result = db.infer_schedules(&channels, &[api_schedule], now).unwrap();
-        assert!(
-            result.is_empty(),
-            "Should skip inferred schedule when API schedule exists within 60 min"
-        );
-    }
-
-    #[test]
     fn weeks_with_data_excludes_before_earliest() {
         let db = in_memory_db();
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
+        let (start, end) = schedule_window(now);
 
-        // Week 1 window starts at now-1h-7d = July 9 13:00
-        // Week 2 window starts at now-1h-14d = July 2 13:00
+        // Week 1 lookback starts at start-7d = July 9 13:45
+        // Week 2 lookback starts at start-14d = July 2 13:45
         // Earliest record is July 6 (10 days ago) → week 1 valid, week 2 not
         let earliest = Utc.with_ymd_and_hms(2025, 7, 6, 12, 0, 0).unwrap();
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
@@ -1035,7 +1002,7 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = db.infer_schedules(&channels, &[], now).unwrap();
+        let result = db.infer_schedules(&channels, start, end).unwrap();
         // Only 1 week of data → threshold = max(1, 1-1) = 1
         // 1 match >= 1 threshold → predicted
         assert_eq!(result.len(), 1);
@@ -1247,7 +1214,10 @@ mod tests {
         ];
         db.replace_future_schedules(100, &schedules).unwrap();
 
-        let upcoming = db.get_upcoming_schedules(24 * 3600).unwrap();
+        let now = Utc::now();
+        let start = now - Duration::minutes(15);
+        let end = now + Duration::hours(24);
+        let upcoming = db.get_upcoming_schedules(start, end).unwrap();
         assert_eq!(upcoming.len(), 2);
         assert_eq!(upcoming[0].broadcaster_id, "100");
         assert!(!upcoming[0].is_inferred);
@@ -1259,15 +1229,19 @@ mod tests {
         db.sync_followed(&[make_channel("100", "StreamerA")])
             .unwrap();
 
+        let now = Utc::now();
+        let start = now - Duration::minutes(15);
+        let end = now + Duration::hours(24);
+
         // First batch
         db.replace_future_schedules(100, &[make_scheduled_stream("s1", "100", 2)])
             .unwrap();
-        assert_eq!(db.get_upcoming_schedules(24 * 3600).unwrap().len(), 1);
+        assert_eq!(db.get_upcoming_schedules(start, end).unwrap().len(), 1);
 
         // Replace with different schedule
         db.replace_future_schedules(100, &[make_scheduled_stream("s2", "100", 3)])
             .unwrap();
-        let upcoming = db.get_upcoming_schedules(24 * 3600).unwrap();
+        let upcoming = db.get_upcoming_schedules(start, end).unwrap();
         assert_eq!(upcoming.len(), 1);
         assert_eq!(upcoming[0].id, "s2");
     }
@@ -1284,7 +1258,10 @@ mod tests {
         ];
         db.replace_future_schedules(100, &schedules).unwrap();
 
-        let upcoming = db.get_upcoming_schedules(24 * 3600).unwrap();
+        let now = Utc::now();
+        let start = now - Duration::minutes(15);
+        let end = now + Duration::hours(24);
+        let upcoming = db.get_upcoming_schedules(start, end).unwrap();
         assert_eq!(upcoming.len(), 1);
         assert_eq!(upcoming[0].id, "s1");
     }
@@ -1301,7 +1278,10 @@ mod tests {
         db.replace_future_schedules(200, &[make_scheduled_stream("s2", "200", 2)])
             .unwrap();
 
-        let upcoming = db.get_upcoming_schedules(24 * 3600).unwrap();
+        let now = Utc::now();
+        let start = now - Duration::minutes(15);
+        let end = now + Duration::hours(24);
+        let upcoming = db.get_upcoming_schedules(start, end).unwrap();
         assert_eq!(upcoming.len(), 1);
         assert_eq!(upcoming[0].broadcaster_id, "100");
     }

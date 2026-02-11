@@ -632,9 +632,18 @@ impl App {
     }
 
     /// Reads upcoming schedules from DB, merges with inferred schedules, and updates state.
+    ///
+    /// Both API and inferred schedules use the same display window:
+    /// `[now - schedule_before_now_min, now + schedule_lookahead_hours]`.
+    /// Deduplication removes inferred entries that overlap with an API schedule
+    /// for the same broadcaster within 60 minutes.
     pub async fn refresh_schedules_from_db(&self) {
-        let lookahead_secs = self.config.get().schedule_lookahead_hours * 3600;
-        let db_schedules = match self.db.get_upcoming_schedules(lookahead_secs as i64) {
+        let cfg = self.config.get();
+        let now = Utc::now();
+        let start = now - chrono::Duration::minutes(cfg.schedule_before_now_min as i64);
+        let end = now + chrono::Duration::hours(cfg.schedule_lookahead_hours as i64);
+
+        let db_schedules = match self.db.get_upcoming_schedules(start, end) {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("Failed to read schedules from DB: {}", e);
@@ -642,7 +651,7 @@ impl App {
             }
         };
 
-        // Infer schedules from stream history
+        // Infer schedules from stream history using the same window
         let channels = self.state.get_followed_channels().await;
         let channel_lookup: HashMap<String, _> = channels
             .into_iter()
@@ -650,15 +659,25 @@ impl App {
             .collect();
 
         let mut combined = db_schedules;
-        match self
-            .db
-            .infer_schedules(&channel_lookup, &combined, Utc::now())
-        {
+        match self.db.infer_schedules(&channel_lookup, start, end) {
             Ok(inferred) => {
                 if !inferred.is_empty() {
-                    tracing::debug!("Inferred {} schedule(s) from history", inferred.len());
-                    combined.extend(inferred);
-                    combined.sort_by_key(|s| s.start_time);
+                    // Deduplicate: skip inferred schedules that overlap with an
+                    // API schedule for the same broadcaster within 60 minutes
+                    let deduped: Vec<_> = inferred
+                        .into_iter()
+                        .filter(|inf| {
+                            !combined.iter().any(|api| {
+                                api.broadcaster_id == inf.broadcaster_id
+                                    && (api.start_time - inf.start_time).num_seconds().abs() <= 3600
+                            })
+                        })
+                        .collect();
+                    if !deduped.is_empty() {
+                        tracing::debug!("Inferred {} schedule(s) from history", deduped.len());
+                        combined.extend(deduped);
+                        combined.sort_by_key(|s| s.start_time);
+                    }
                 }
             }
             Err(e) => {
@@ -712,7 +731,8 @@ impl App {
         let db = self.db.clone();
         let cfg = self.config.get();
         let notifier_enabled = cfg.notify_on_live;
-        let schedule_lookahead_secs = cfg.schedule_lookahead_hours * 3600;
+        let schedule_before_now_min = cfg.schedule_before_now_min;
+        let schedule_lookahead_hours = cfg.schedule_lookahead_hours;
         let cancel_rx = self.auth_cancel_rx.clone();
         let initial_load_done = self.initial_load_done.clone();
         let last_live_refresh = self.last_live_refresh.clone();
@@ -763,9 +783,12 @@ impl App {
                     }
 
                     // Show cached schedules from DB immediately
-                    if let Ok(db_schedules) =
-                        db.get_upcoming_schedules(schedule_lookahead_secs as i64)
-                    {
+                    let sched_now = Utc::now();
+                    let sched_start =
+                        sched_now - chrono::Duration::minutes(schedule_before_now_min as i64);
+                    let sched_end =
+                        sched_now + chrono::Duration::hours(schedule_lookahead_hours as i64);
+                    if let Ok(db_schedules) = db.get_upcoming_schedules(sched_start, sched_end) {
                         state.set_scheduled_streams(db_schedules).await;
                     }
 
