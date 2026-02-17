@@ -347,7 +347,6 @@ impl Database {
     ) -> anyhow::Result<Vec<ScheduledStream>> {
         let window_start = start;
         let window_end = end;
-        let window_secs = (window_end - window_start).num_seconds();
 
         // Collect all user IDs upfront
         let user_id_map: HashMap<i64, &str> = channel_lookup
@@ -406,31 +405,31 @@ impl Database {
             // Threshold: max(1, weeks_with_data - 1)
             let threshold = std::cmp::max(1, weeks_with_data - 1);
 
-            // Collect (offset_seconds, week_index) pairs from valid windows
-            let mut offset_week_pairs: Vec<(i64, usize)> = Vec::new();
+            // Project each historical stream forward by N weeks to get predicted
+            // absolute times. This makes results stable regardless of when the
+            // computation runs (no dependence on window_start).
+            let mut projected_pairs: Vec<(i64, usize)> = Vec::new();
 
             for &win_idx in &valid_windows {
                 let week_number = win_idx + 1; // 1-indexed week number
 
                 if let Some(streams) = window_streams[win_idx].get(user_id) {
                     for stream_time in streams {
-                        let offset = (*stream_time
-                            - (window_start - Duration::weeks(week_number as i64)))
-                        .num_seconds();
-                        // Clamp to window
-                        if offset >= 0 && offset <= window_secs {
-                            offset_week_pairs.push((offset, week_number));
+                        let projected = *stream_time + Duration::weeks(week_number as i64);
+                        // Only include if projected time falls within prediction window
+                        if projected >= window_start && projected <= window_end {
+                            projected_pairs.push((projected.timestamp(), week_number));
                         }
                     }
                 }
             }
 
-            if offset_week_pairs.is_empty() {
+            if projected_pairs.is_empty() {
                 continue;
             }
 
             // Cluster using single-linkage with 3600s threshold
-            let clusters = cluster_offsets(&offset_week_pairs, 3600);
+            let clusters = cluster_offsets(&projected_pairs, 3600);
 
             for cluster in clusters {
                 // Count distinct weeks in this cluster
@@ -442,15 +441,16 @@ impl Database {
                     continue;
                 }
 
-                // Compute average offset
-                let sum: i64 = cluster.iter().map(|&(o, _)| o).sum();
+                // Compute average projected timestamp
+                let sum: i64 = cluster.iter().map(|&(ts, _)| ts).sum();
                 let avg = sum as f64 / cluster.len() as f64;
 
                 // Round to nearest 15 minutes (900s)
                 let rounded = ((avg / 900.0).round() as i64) * 900;
 
-                // Convert to absolute time
-                let predicted_time = window_start + Duration::seconds(rounded);
+                // Convert to DateTime
+                let predicted_time = DateTime::<Utc>::from_timestamp(rounded, 0)
+                    .expect("valid inferred schedule timestamp");
 
                 // Skip if outside the display window
                 if predicted_time < start {
@@ -925,9 +925,8 @@ mod tests {
         let earliest = Utc.with_ymd_and_hms(2025, 6, 25, 8, 0, 0).unwrap();
 
         // Three streams at 12:45, 12:58, 13:15 (within 30min, so they cluster)
-        // Offsets from window_start (start = 9:45): 3h00m, 3h13m, 3h30m
-        // = 10800, 11580, 12600 seconds
-        // avg = 11660s → /900 = 12.955 → round to 13 → 13*900=11700s = 3h15m from 9:45 = 13:00
+        // Projected forward: all land on July 16 at 12:45, 12:58, 13:15
+        // Average = 12:59:20 → rounded to nearest 15 min = 13:00
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 12, 45, 0).unwrap();
         let w2 = Utc.with_ymd_and_hms(2025, 7, 2, 12, 58, 0).unwrap();
         let w3 = Utc.with_ymd_and_hms(2025, 6, 25, 13, 15, 0).unwrap();
@@ -948,6 +947,47 @@ mod tests {
         // Should round to nearest 15 min → 13:00
         assert_eq!(result[0].start_time.hour(), 13);
         assert_eq!(result[0].start_time.minute(), 0);
+    }
+
+    #[test]
+    fn predicted_time_stable_across_now() {
+        // The predicted time should not change when "now" shifts by minutes,
+        // since it's based on projecting historical data forward, not on offsets
+        // from the current time.
+        let db = in_memory_db();
+
+        let earliest = Utc.with_ymd_and_hms(2025, 7, 2, 12, 0, 0).unwrap();
+        let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
+        let w2 = Utc.with_ymd_and_hms(2025, 7, 2, 15, 5, 0).unwrap();
+
+        db.record_streams(&[
+            make_test_stream("100", earliest),
+            make_test_stream("100", w1),
+            make_test_stream("100", w2),
+        ])
+        .unwrap();
+
+        let mut channels = HashMap::new();
+        channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
+
+        // Run inference at multiple "now" times spanning 30 minutes
+        let mut predicted_times = Vec::new();
+        for minute in [0, 1, 5, 10, 15, 29] {
+            let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, minute, 0).unwrap();
+            let (start, end) = schedule_window(now);
+            let result = db.infer_schedules(&channels, start, end).unwrap();
+            assert_eq!(result.len(), 1, "Should predict at minute {}", minute);
+            predicted_times.push(result[0].start_time);
+        }
+
+        // All predicted times should be identical
+        for (i, t) in predicted_times.iter().enumerate() {
+            assert_eq!(
+                *t, predicted_times[0],
+                "Predicted time at index {} ({}) differs from index 0 ({})",
+                i, t, predicted_times[0]
+            );
+        }
     }
 
     #[test]

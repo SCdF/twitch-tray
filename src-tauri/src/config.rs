@@ -104,7 +104,7 @@ fn default_schedule_lookahead() -> u64 {
 }
 
 fn default_schedule_before_now() -> u64 {
-    15
+    30
 }
 
 impl Default for Config {
@@ -218,9 +218,9 @@ mod tests {
     }
 
     #[test]
-    fn default_schedule_before_now_is_15() {
+    fn default_schedule_before_now_is_30() {
         let config = Config::default();
-        assert_eq!(config.schedule_before_now_min, 15);
+        assert_eq!(config.schedule_before_now_min, 30);
     }
 
     #[test]
@@ -273,7 +273,7 @@ mod tests {
         assert_eq!(config.schedule_check_interval_sec, 10);
         assert_eq!(config.followed_refresh_min, 15);
         assert_eq!(config.schedule_lookahead_hours, 6);
-        assert_eq!(config.schedule_before_now_min, 15);
+        assert_eq!(config.schedule_before_now_min, 30);
         assert!(config.followed_categories.is_empty());
         assert!(config.streamer_settings.is_empty());
     }
