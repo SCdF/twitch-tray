@@ -167,7 +167,10 @@ impl ConfigManager {
 
     /// Gets a copy of the current configuration
     pub fn get(&self) -> Config {
-        self.config.read().unwrap().clone()
+        self.config
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Updates and saves the configuration
@@ -179,7 +182,7 @@ impl ConfigManager {
         std::fs::write(&config_file, json).context("Failed to write config file")?;
 
         // Update in-memory config
-        *self.config.write().unwrap() = config;
+        *self.config.write().unwrap_or_else(|e| e.into_inner()) = config;
 
         Ok(())
     }
