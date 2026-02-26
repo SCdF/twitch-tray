@@ -213,134 +213,44 @@ impl App {
 
     /// Starts the polling tasks
     pub fn start_polling(self: &Arc<Self>, app_handle: AppHandle) {
-        let cfg = self.config.get();
-
-        // Clone self for the async tasks
-        let app = self.clone();
-
-        let poll_interval_secs = cfg.poll_interval_sec;
-
         // Stream polling task - uses wall-clock time to handle sleep correctly
+        let app = self.clone();
         tokio::spawn(async move {
             // Use a short tick interval to detect wake-from-sleep quickly
             let tick_duration = Duration::from_secs(1);
-
             loop {
                 tokio::time::sleep(tick_duration).await;
-
-                if !app.state.is_authenticated().await {
-                    continue;
-                }
-
-                let now = Utc::now();
-                let last_refresh = *app.last_live_refresh.read().await;
-
-                let should_refresh = match last_refresh {
-                    None => true, // Never refreshed, do it now
-                    Some(last) => {
-                        let elapsed = (now - last).num_seconds();
-                        elapsed >= poll_interval_secs as i64
-                    }
-                };
-
-                if should_refresh {
-                    app.refresh_followed_streams().await;
-                    app.refresh_category_streams().await;
-                    app.refresh_schedules_from_db().await;
-                }
+                app.tick_stream_poll(Utc::now()).await;
             }
         });
 
         // Schedule queue walker — checks one broadcaster at a time
         let app = self.clone();
-        let schedule_check_interval = cfg.schedule_check_interval_sec;
-        let schedule_stale_hours = cfg.schedule_stale_hours;
-
         tokio::spawn(async move {
-            let tick_duration = Duration::from_secs(schedule_check_interval);
-
             loop {
+                let tick_duration =
+                    Duration::from_secs(app.config.get().schedule_check_interval_sec);
                 tokio::time::sleep(tick_duration).await;
-
-                if !app.state.is_authenticated().await {
-                    continue;
-                }
-
-                let stale_threshold = (schedule_stale_hours * 3600) as i64;
-                let broadcaster = match app.db.get_next_stale_broadcaster(stale_threshold) {
-                    Ok(Some(b)) => b,
-                    Ok(None) => continue, // All are fresh
-                    Err(e) => {
-                        tracing::error!("Failed to query schedule queue: {}", e);
-                        continue;
-                    }
-                };
-
-                let (bid, blogin, bname) = broadcaster;
-                let bid_str = bid.to_string();
-                tracing::debug!("Checking schedule for {} ({})", bname, bid);
-
-                match app.with_retry(|| app.client.get_schedule(&bid_str)).await {
-                    Ok(Some(data)) => {
-                        let segments = convert_schedule_segments(&data);
-                        if let Err(e) = app.db.replace_future_schedules(bid, &segments) {
-                            tracing::error!("Failed to store schedules for {}: {}", blogin, e);
-                        }
-                        if let Err(e) = app.db.update_last_checked(bid) {
-                            tracing::error!("Failed to update last_checked for {}: {}", blogin, e);
-                        }
-                        app.refresh_schedules_from_db().await;
-                    }
-                    Ok(None) => {
-                        // No schedule (404) — clear future entries for this broadcaster
-                        if let Err(e) = app.db.replace_future_schedules(bid, &[]) {
-                            tracing::error!("Failed to clear schedules for {}: {}", blogin, e);
-                        }
-                        if let Err(e) = app.db.update_last_checked(bid) {
-                            tracing::error!("Failed to update last_checked for {}: {}", blogin, e);
-                        }
-                        app.refresh_schedules_from_db().await;
-                    }
-                    Err(e) => {
-                        // Don't update last_checked — will retry next cycle
-                        tracing::warn!("Failed to fetch schedule for {}: {}", blogin, e);
-                    }
+                if let Err(e) = app.tick_schedule_walker().await {
+                    tracing::error!("Schedule walker error: {}", e);
                 }
             }
         });
 
         // Followed channels refresh task
         let app = self.clone();
-        let followed_refresh_secs = cfg.followed_refresh_min * 60;
-        let last_followed_refresh: Arc<RwLock<Option<DateTime<Utc>>>> = Arc::new(RwLock::new(None));
-
         tokio::spawn(async move {
             let tick_duration = Duration::from_secs(1);
-
+            let mut last_refresh: Option<DateTime<Utc>> = None;
             loop {
                 tokio::time::sleep(tick_duration).await;
-
-                if !app.state.is_authenticated().await {
-                    continue;
-                }
-
                 let now = Utc::now();
-                let last_refresh = *last_followed_refresh.read().await;
-
-                let should_refresh = match last_refresh {
-                    None => true,
-                    Some(last) => {
-                        let elapsed = (now - last).num_seconds();
-                        elapsed >= followed_refresh_secs as i64
-                    }
-                };
-
-                if should_refresh {
-                    if let Err(e) = app.load_followed_channels().await {
-                        tracing::warn!("Failed to refresh followed channels: {}", e);
-                    } else {
-                        *last_followed_refresh.write().await = Some(Utc::now());
-                    }
+                let interval_secs = app.config.get().followed_refresh_min * 60;
+                if app
+                    .tick_followed_channels(now, last_refresh, interval_secs)
+                    .await
+                {
+                    last_refresh = Some(now);
                 }
             }
         });
@@ -558,6 +468,109 @@ impl App {
                 }
             }
         });
+    }
+
+    /// Checks if a streams refresh is due and runs it.
+    /// Returns true if a refresh was triggered.
+    async fn tick_stream_poll(&self, now: DateTime<Utc>) -> bool {
+        if !self.state.is_authenticated().await {
+            return false;
+        }
+
+        let last_refresh = *self.last_live_refresh.read().await;
+        let poll_interval_secs = self.config.get().poll_interval_sec;
+
+        let should_refresh = match last_refresh {
+            None => true,
+            Some(last) => (now - last).num_seconds() >= poll_interval_secs as i64,
+        };
+
+        if should_refresh {
+            self.refresh_followed_streams().await;
+            self.refresh_category_streams().await;
+            self.refresh_schedules_from_db().await;
+        }
+
+        should_refresh
+    }
+
+    /// Runs one iteration of the schedule queue walker.
+    async fn tick_schedule_walker(&self) -> anyhow::Result<()> {
+        if !self.state.is_authenticated().await {
+            return Ok(());
+        }
+
+        let stale_threshold = (self.config.get().schedule_stale_hours * 3600) as i64;
+        let broadcaster = match self.db.get_next_stale_broadcaster(stale_threshold) {
+            Ok(Some(b)) => b,
+            Ok(None) => return Ok(()), // All are fresh
+            Err(e) => {
+                tracing::error!("Failed to query schedule queue: {}", e);
+                return Err(e);
+            }
+        };
+
+        let (bid, blogin, bname) = broadcaster;
+        let bid_str = bid.to_string();
+        tracing::debug!("Checking schedule for {} ({})", bname, bid);
+
+        match self.with_retry(|| self.client.get_schedule(&bid_str)).await {
+            Ok(Some(data)) => {
+                let segments = convert_schedule_segments(&data);
+                if let Err(e) = self.db.replace_future_schedules(bid, &segments) {
+                    tracing::error!("Failed to store schedules for {}: {}", blogin, e);
+                }
+                if let Err(e) = self.db.update_last_checked(bid) {
+                    tracing::error!("Failed to update last_checked for {}: {}", blogin, e);
+                }
+                self.refresh_schedules_from_db().await;
+            }
+            Ok(None) => {
+                // No schedule (404) — clear future entries for this broadcaster
+                if let Err(e) = self.db.replace_future_schedules(bid, &[]) {
+                    tracing::error!("Failed to clear schedules for {}: {}", blogin, e);
+                }
+                if let Err(e) = self.db.update_last_checked(bid) {
+                    tracing::error!("Failed to update last_checked for {}: {}", blogin, e);
+                }
+                self.refresh_schedules_from_db().await;
+            }
+            Err(e) => {
+                // Don't update last_checked — will retry next cycle
+                tracing::warn!("Failed to fetch schedule for {}: {}", blogin, e);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Checks if a followed-channels refresh is due and runs it.
+    /// Returns true if the refresh completed successfully.
+    async fn tick_followed_channels(
+        &self,
+        now: DateTime<Utc>,
+        last_refresh: Option<DateTime<Utc>>,
+        interval_secs: u64,
+    ) -> bool {
+        if !self.state.is_authenticated().await {
+            return false;
+        }
+
+        let should_refresh = match last_refresh {
+            None => true,
+            Some(last) => (now - last).num_seconds() >= interval_secs as i64,
+        };
+
+        if !should_refresh {
+            return false;
+        }
+
+        if let Err(e) = self.load_followed_channels().await {
+            tracing::warn!("Failed to refresh followed channels: {}", e);
+            false
+        } else {
+            true
+        }
     }
 
     /// Performs initial data refresh
