@@ -84,12 +84,6 @@ impl TrayManager {
         Ok(tray)
     }
 
-    /// Rebuilds the menu based on current state
-    pub async fn rebuild_menu(&self, app: &AppHandle) -> tauri::Result<()> {
-        self.rebuild_menu_with_categories(app, Vec::new(), HashMap::new(), HashMap::new(), 6)
-            .await
-    }
-
     /// Rebuilds the menu with category data
     ///
     /// This method serializes all menu rebuilds through a mutex to prevent
