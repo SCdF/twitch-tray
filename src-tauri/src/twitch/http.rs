@@ -14,6 +14,13 @@ use serde::de::DeserializeOwned;
 pub trait HttpClient: Send + Sync {
     /// Makes a GET request and returns the raw response for special handling
     async fn get_response(&self, url: &str, headers: &HeaderMap) -> Result<HttpResponse>;
+
+    /// Makes a POST request with form-encoded params and returns the raw response
+    async fn post_form_response(
+        &self,
+        url: &str,
+        params: Vec<(String, String)>,
+    ) -> Result<HttpResponse>;
 }
 
 /// Response from an HTTP request
@@ -82,6 +89,25 @@ impl HttpClient for ReqwestClient {
 
         Ok(HttpResponse { status, body })
     }
+
+    async fn post_form_response(
+        &self,
+        url: &str,
+        params: Vec<(String, String)>,
+    ) -> Result<HttpResponse> {
+        let response = self
+            .inner
+            .post(url)
+            .form(&params)
+            .send()
+            .await
+            .context("Failed to send POST form request")?;
+
+        let status = response.status().as_u16();
+        let body = response.text().await.unwrap_or_default();
+
+        Ok(HttpResponse { status, body })
+    }
 }
 
 #[cfg(test)]
@@ -96,6 +122,7 @@ pub mod mock {
     #[derive(Debug, Clone, Default)]
     pub struct MockHttpClient {
         responses: Arc<RwLock<HashMap<String, MockResponse>>>,
+        responses_post: Arc<RwLock<HashMap<String, MockResponse>>>,
         requests: Arc<RwLock<Vec<RecordedRequest>>>,
     }
 
@@ -142,6 +169,24 @@ pub mod mock {
             self.on_get(url, 404, "Not Found")
         }
 
+        /// Configures a response for a POST to a URL
+        pub fn on_post(self, url: &str, status: u16, body: impl Into<String>) -> Self {
+            self.responses_post.write().unwrap().insert(
+                url.to_string(),
+                MockResponse {
+                    status,
+                    body: body.into(),
+                },
+            );
+            self
+        }
+
+        /// Configures a successful JSON response for a POST to a URL
+        pub fn on_post_json<T: serde::Serialize>(self, url: &str, data: &T) -> Self {
+            let body = serde_json::to_string(data).expect("Failed to serialize mock data");
+            self.on_post(url, 200, body)
+        }
+
         /// Returns all recorded requests
         pub fn get_requests(&self) -> Vec<RecordedRequest> {
             self.requests.read().unwrap().clone()
@@ -162,6 +207,22 @@ pub mod mock {
             let mock_response = responses
                 .get(url)
                 .ok_or_else(|| anyhow::anyhow!("No mock response configured for URL: {}", url))?;
+
+            Ok(HttpResponse {
+                status: mock_response.status,
+                body: mock_response.body.clone(),
+            })
+        }
+
+        async fn post_form_response(
+            &self,
+            url: &str,
+            _params: Vec<(String, String)>,
+        ) -> Result<HttpResponse> {
+            let responses = self.responses_post.read().unwrap();
+            let mock_response = responses.get(url).ok_or_else(|| {
+                anyhow::anyhow!("No mock POST response configured for URL: {}", url)
+            })?;
 
             Ok(HttpResponse {
                 status: mock_response.status,

@@ -1,10 +1,9 @@
+use super::store::Token;
+use crate::twitch::http::{HttpClient, ReqwestClient};
 use anyhow::{Context, Result};
 use chrono::{Duration, Utc};
-use reqwest::Client;
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde::Deserialize;
-use std::collections::HashMap;
-
-use super::store::Token;
 
 const DEVICE_CODE_URL: &str = "https://id.twitch.tv/oauth2/device";
 const TOKEN_URL: &str = "https://id.twitch.tv/oauth2/token";
@@ -25,7 +24,7 @@ pub enum DeviceFlowError {
     #[error("Device code expired")]
     ExpiredToken,
     #[error("Network error: {0}")]
-    Network(#[from] reqwest::Error),
+    Network(String),
     #[error("API error: {0}")]
     Api(String),
 }
@@ -63,60 +62,75 @@ pub struct ValidateResponse {
 }
 
 /// OAuth Device Code Flow handler
-pub struct DeviceFlow {
+pub struct DeviceFlow<H: HttpClient = ReqwestClient> {
     client_id: String,
-    http: Client,
+    http: H,
 }
 
-impl DeviceFlow {
+impl DeviceFlow<ReqwestClient> {
     /// Creates a new device flow handler
     pub fn new(client_id: String) -> Self {
         Self {
             client_id,
-            http: Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-                .expect("Failed to create HTTP client"),
+            http: ReqwestClient::new(),
         }
+    }
+}
+
+impl<H: HttpClient> DeviceFlow<H> {
+    /// Creates a device flow handler with a custom HTTP client (for testing)
+    #[cfg(test)]
+    pub fn with_http_client(client_id: String, http: H) -> Self {
+        Self { client_id, http }
     }
 
     /// Initiates the device code flow
     pub async fn request_device_code(&self) -> Result<DeviceCodeResponse> {
-        let mut params = HashMap::new();
-        params.insert("client_id", self.client_id.as_str());
-        params.insert("scopes", REQUIRED_SCOPES);
+        let params = vec![
+            ("client_id".to_string(), self.client_id.clone()),
+            ("scopes".to_string(), REQUIRED_SCOPES.to_string()),
+        ];
 
         let response = self
             .http
-            .post(DEVICE_CODE_URL)
-            .form(&params)
-            .send()
+            .post_form_response(DEVICE_CODE_URL, params)
             .await
             .context("Failed to request device code")?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Device code request failed: {} - {}", status, body);
+        if !response.is_success() {
+            anyhow::bail!(
+                "Device code request failed: {} - {}",
+                response.status,
+                response.body
+            );
         }
 
         response
             .json()
-            .await
             .context("Failed to parse device code response")
     }
 
     /// Polls for the access token once
     async fn poll_for_token(&self, device_code: &str) -> Result<TokenResponse, DeviceFlowError> {
-        let mut params = HashMap::new();
-        params.insert("client_id", self.client_id.as_str());
-        params.insert("device_code", device_code);
-        params.insert("grant_type", "urn:ietf:params:oauth:grant-type:device_code");
+        let params = vec![
+            ("client_id".to_string(), self.client_id.clone()),
+            ("device_code".to_string(), device_code.to_string()),
+            (
+                "grant_type".to_string(),
+                "urn:ietf:params:oauth:grant-type:device_code".to_string(),
+            ),
+        ];
 
-        let response = self.http.post(TOKEN_URL).form(&params).send().await?;
+        let response = self
+            .http
+            .post_form_response(TOKEN_URL, params)
+            .await
+            .map_err(|e| DeviceFlowError::Network(e.to_string()))?;
 
-        if response.status() == reqwest::StatusCode::BAD_REQUEST {
-            let err_resp: ErrorResponse = response.json().await?;
+        if response.status == 400 {
+            let err_resp: ErrorResponse = response
+                .json()
+                .map_err(|e| DeviceFlowError::Network(e.to_string()))?;
 
             return match err_resp.message.as_str() {
                 "authorization_pending" => Err(DeviceFlowError::AuthorizationPending),
@@ -127,14 +141,16 @@ impl DeviceFlow {
             };
         }
 
-        if !response.status().is_success() {
+        if !response.is_success() {
             return Err(DeviceFlowError::Api(format!(
                 "Token request failed: {}",
-                response.status()
+                response.status
             )));
         }
 
-        Ok(response.json().await?)
+        response
+            .json()
+            .map_err(|e| DeviceFlowError::Network(e.to_string()))
     }
 
     /// Polls until the user authorizes or the code expires
@@ -193,52 +209,54 @@ impl DeviceFlow {
 
     /// Validates an access token and returns user info
     pub async fn validate_token(&self, access_token: &str) -> Result<ValidateResponse> {
+        let mut headers = HeaderMap::new();
+        let auth_value = HeaderValue::from_str(&format!("OAuth {}", access_token))
+            .context("Invalid access token value")?;
+        headers.insert(AUTHORIZATION, auth_value);
+
         let response = self
             .http
-            .get(VALIDATE_URL)
-            .header("Authorization", format!("OAuth {}", access_token))
-            .send()
+            .get_response(VALIDATE_URL, &headers)
             .await
             .context("Failed to validate token")?;
 
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        if response.status == 401 {
             anyhow::bail!("Token expired or invalid");
         }
 
-        if !response.status().is_success() {
-            anyhow::bail!("Validation failed: {}", response.status());
+        if !response.is_success() {
+            anyhow::bail!("Validation failed: {}", response.status);
         }
 
         response
             .json()
-            .await
             .context("Failed to parse validation response")
     }
 
     /// Refreshes an access token using a refresh token
     pub async fn refresh_token(&self, refresh_token: &str) -> Result<Token> {
-        let mut params = HashMap::new();
-        params.insert("client_id", self.client_id.as_str());
-        params.insert("refresh_token", refresh_token);
-        params.insert("grant_type", "refresh_token");
+        let params = vec![
+            ("client_id".to_string(), self.client_id.clone()),
+            ("refresh_token".to_string(), refresh_token.to_string()),
+            ("grant_type".to_string(), "refresh_token".to_string()),
+        ];
 
         let response = self
             .http
-            .post(TOKEN_URL)
-            .form(&params)
-            .send()
+            .post_form_response(TOKEN_URL, params)
             .await
             .context("Failed to refresh token")?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Token refresh failed: {} - {}", status, body);
+        if !response.is_success() {
+            anyhow::bail!(
+                "Token refresh failed: {} - {}",
+                response.status,
+                response.body
+            );
         }
 
         let tr: TokenResponse = response
             .json()
-            .await
             .context("Failed to parse refresh response")?;
 
         // Validate the new token to get user info
@@ -284,5 +302,216 @@ impl DeviceFlow {
             user_id: vr.user_id,
             user_login: vr.login,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::twitch::http::mock::MockHttpClient;
+    use serde::Serialize;
+    use tokio::sync::watch;
+
+    #[derive(Serialize)]
+    struct TokenBody {
+        access_token: String,
+        refresh_token: String,
+        expires_in: i64,
+        scope: Vec<String>,
+    }
+
+    #[derive(Serialize)]
+    struct ValidateBody {
+        login: String,
+        user_id: String,
+    }
+
+    fn token_body() -> TokenBody {
+        TokenBody {
+            access_token: "tok_abc".into(),
+            refresh_token: "ref_def".into(),
+            expires_in: 3600,
+            scope: vec!["user:read:follows".into()],
+        }
+    }
+
+    fn validate_body() -> ValidateBody {
+        ValidateBody {
+            login: "testuser".into(),
+            user_id: "99999".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn poll_for_token_returns_success() {
+        let mock = MockHttpClient::new().on_post_json(TOKEN_URL, &token_body());
+        let flow = DeviceFlow::with_http_client("client_id".into(), mock);
+
+        let result = flow.poll_for_token("device_code_123").await;
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+        let token = result.unwrap();
+        assert_eq!(token.access_token, "tok_abc");
+        assert_eq!(token.refresh_token, "ref_def");
+    }
+
+    #[tokio::test]
+    async fn poll_for_token_returns_authorization_pending() {
+        let mock =
+            MockHttpClient::new().on_post(TOKEN_URL, 400, r#"{"message":"authorization_pending"}"#);
+        let flow = DeviceFlow::with_http_client("client_id".into(), mock);
+
+        let result = flow.poll_for_token("device_code_123").await;
+        assert!(
+            matches!(result, Err(DeviceFlowError::AuthorizationPending)),
+            "expected AuthorizationPending, got {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn poll_for_token_returns_slow_down() {
+        let mock = MockHttpClient::new().on_post(TOKEN_URL, 400, r#"{"message":"slow_down"}"#);
+        let flow = DeviceFlow::with_http_client("client_id".into(), mock);
+
+        let result = flow.poll_for_token("device_code_123").await;
+        assert!(
+            matches!(result, Err(DeviceFlowError::SlowDown)),
+            "expected SlowDown, got {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn poll_for_token_returns_expired_token() {
+        let mock = MockHttpClient::new().on_post(TOKEN_URL, 400, r#"{"message":"expired_token"}"#);
+        let flow = DeviceFlow::with_http_client("client_id".into(), mock);
+
+        let result = flow.poll_for_token("device_code_123").await;
+        assert!(
+            matches!(result, Err(DeviceFlowError::ExpiredToken)),
+            "expected ExpiredToken, got {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn poll_for_token_returns_access_denied() {
+        let mock = MockHttpClient::new().on_post(TOKEN_URL, 400, r#"{"message":"access_denied"}"#);
+        let flow = DeviceFlow::with_http_client("client_id".into(), mock);
+
+        let result = flow.poll_for_token("device_code_123").await;
+        assert!(
+            matches!(result, Err(DeviceFlowError::AccessDenied)),
+            "expected AccessDenied, got {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_token_cancelled_immediately() {
+        let mock = MockHttpClient::new();
+        let flow = DeviceFlow::with_http_client("client_id".into(), mock);
+
+        let (_tx, cancel) = watch::channel(true); // already cancelled
+        let dcr = DeviceCodeResponse {
+            device_code: "code".into(),
+            user_code: "USER-CODE".into(),
+            verification_uri: "https://twitch.tv/activate".into(),
+            expires_in: 600,
+            interval: 5,
+        };
+
+        let result = flow.wait_for_token(&dcr, cancel).await;
+        assert!(
+            matches!(result, Err(DeviceFlowError::Api(ref msg)) if msg.contains("cancelled")),
+            "expected cancellation error, got {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_token_returns_user_info() {
+        let mock = MockHttpClient::new().on_get(VALIDATE_URL, 200, {
+            serde_json::to_string(&validate_body()).unwrap()
+        });
+        let flow = DeviceFlow::with_http_client("client_id".into(), mock);
+
+        let result = flow.validate_token("my_access_token").await;
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+        let vr = result.unwrap();
+        assert_eq!(vr.login, "testuser");
+        assert_eq!(vr.user_id, "99999");
+    }
+
+    #[tokio::test]
+    async fn validate_token_returns_error_on_401() {
+        let mock = MockHttpClient::new().on_get(VALIDATE_URL, 401, "Unauthorized");
+        let flow = DeviceFlow::with_http_client("client_id".into(), mock);
+
+        let result = flow.validate_token("bad_token").await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("expired or invalid"));
+    }
+
+    #[tokio::test]
+    async fn refresh_token_success() {
+        let mock = MockHttpClient::new()
+            .on_post_json(TOKEN_URL, &token_body())
+            .on_get(VALIDATE_URL, 200, {
+                serde_json::to_string(&validate_body()).unwrap()
+            });
+        let flow = DeviceFlow::with_http_client("client_id".into(), mock);
+
+        let result = flow.refresh_token("my_refresh_token").await;
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+        let token = result.unwrap();
+        assert_eq!(token.access_token, "tok_abc");
+        assert_eq!(token.user_login, "testuser");
+        assert_eq!(token.user_id, "99999");
+    }
+
+    #[tokio::test]
+    async fn refresh_token_fails_on_non_success_status() {
+        let mock = MockHttpClient::new().on_post(TOKEN_URL, 401, "Unauthorized");
+        let flow = DeviceFlow::with_http_client("client_id".into(), mock);
+
+        let result = flow.refresh_token("bad_refresh_token").await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Token refresh failed"));
+    }
+
+    #[tokio::test]
+    async fn request_device_code_success() {
+        #[derive(Serialize)]
+        struct DeviceCodeBody {
+            device_code: String,
+            user_code: String,
+            verification_uri: String,
+            expires_in: i64,
+            interval: i64,
+        }
+
+        let body = DeviceCodeBody {
+            device_code: "dev_code_xyz".into(),
+            user_code: "HELLO-WORLD".into(),
+            verification_uri: "https://twitch.tv/activate".into(),
+            expires_in: 600,
+            interval: 5,
+        };
+
+        let mock = MockHttpClient::new().on_post_json(DEVICE_CODE_URL, &body);
+        let flow = DeviceFlow::with_http_client("client_id".into(), mock);
+
+        let result = flow.request_device_code().await;
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+        let dcr = result.unwrap();
+        assert_eq!(dcr.device_code, "dev_code_xyz");
+        assert_eq!(dcr.user_code, "HELLO-WORLD");
     }
 }
