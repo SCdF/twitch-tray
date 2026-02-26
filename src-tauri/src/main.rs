@@ -7,6 +7,7 @@ mod commands;
 mod config;
 mod db;
 mod notify;
+mod schedule_inference;
 mod state;
 mod tray;
 mod twitch;
