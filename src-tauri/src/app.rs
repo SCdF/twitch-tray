@@ -10,7 +10,7 @@ use tokio::time::Duration;
 const SCHEDULE_DEDUP_WINDOW_SECS: i64 = 3600;
 
 use crate::auth::{DeviceFlow, Token, TokenStore, CLIENT_ID};
-use crate::config::{ConfigManager, StreamerImportance};
+use crate::config::ConfigManager;
 use crate::db::Database;
 use crate::notify::{DesktopNotifier, Notifier, SnoozeRequest, StreamerSettingsRequest};
 use crate::state::AppState;
@@ -37,9 +37,6 @@ pub struct App {
     // Last SUCCESSFUL refresh time for sleep-aware polling
     // Only updated when API calls succeed, used to determine notification suppression
     last_live_refresh: Arc<RwLock<Option<DateTime<Utc>>>>,
-
-    // Maximum gap between successful refreshes before suppressing notifications (in seconds)
-    notify_max_gap_secs: u64,
 
     // Serializes token refresh attempts so only one task refreshes at a time.
     // Twitch refresh tokens are single-use: concurrent refreshes cause 400 errors.
@@ -73,7 +70,6 @@ impl App {
         let tray_manager = TrayManager::new(state.clone());
         let db = Database::new(ConfigManager::config_dir()?.join("data.db"))?;
         let (auth_cancel_tx, auth_cancel_rx) = watch::channel(false);
-        let notify_max_gap_secs = cfg.notify_max_gap_min * 60;
 
         Ok(Self {
             state,
@@ -87,7 +83,6 @@ impl App {
             auth_cancel_tx,
             auth_cancel_rx,
             last_live_refresh: Arc::new(RwLock::new(None)),
-            notify_max_gap_secs,
             refresh_mutex: Arc::new(Mutex::new(())),
             snooze_tx,
             snooze_rx: Arc::new(Mutex::new(Some(snooze_rx))),
@@ -506,62 +501,24 @@ impl App {
             loop {
                 match rx.recv().await {
                     Ok(event) => {
-                        // Skip notifications during initial load (baseline)
-                        if !app.initial_load_done.load(Ordering::SeqCst) {
-                            last_event_time = Some(Utc::now());
-                            continue;
-                        }
-
                         let now = Utc::now();
-
-                        // Check if we should suppress due to sleep/suspension gap
-                        let suppress = match last_event_time {
-                            None => false,
-                            Some(last) => {
-                                let elapsed = (now - last).num_seconds();
-                                let should_suppress = elapsed > app.notify_max_gap_secs as i64;
-                                if should_suppress {
-                                    tracing::info!(
-                                        "Suppressing notifications: gap of {}s exceeds max of {}s",
-                                        elapsed,
-                                        app.notify_max_gap_secs
-                                    );
-                                }
-                                should_suppress
-                            }
-                        };
-
+                        let cfg = app.config.get();
+                        let decision = crate::notification_filter::filter_notifications(
+                            &event,
+                            last_event_time,
+                            now,
+                            cfg.notify_max_gap_min * 60,
+                            app.initial_load_done.load(Ordering::SeqCst),
+                            &cfg.streamer_settings,
+                        );
                         last_event_time = Some(now);
 
-                        if suppress {
-                            continue;
-                        }
-
-                        let streamer_settings = app.config.get().streamer_settings;
-                        for stream in &event.newly_live {
-                            let importance = streamer_settings
-                                .get(&stream.user_login)
-                                .map(|s| s.importance)
-                                .unwrap_or_default();
-                            if importance == StreamerImportance::Silent
-                                || importance == StreamerImportance::Ignore
-                            {
-                                continue;
-                            }
-                            if let Err(e) = app.notifier.stream_live(stream) {
+                        for stream in decision.streams_to_notify {
+                            if let Err(e) = app.notifier.stream_live(&stream) {
                                 tracing::error!("Notification error: {}", e);
                             }
                         }
-                        for change in &event.category_changes {
-                            let importance = streamer_settings
-                                .get(&change.stream.user_login)
-                                .map(|s| s.importance)
-                                .unwrap_or_default();
-                            if importance == StreamerImportance::Silent
-                                || importance == StreamerImportance::Ignore
-                            {
-                                continue;
-                            }
+                        for change in decision.categories_to_notify {
                             if let Err(e) = app
                                 .notifier
                                 .category_changed(&change.stream, &change.old_category)
@@ -878,212 +835,11 @@ impl Clone for App {
             auth_cancel_tx: self.auth_cancel_tx.clone(),
             auth_cancel_rx: self.auth_cancel_rx.clone(),
             last_live_refresh: self.last_live_refresh.clone(),
-            notify_max_gap_secs: self.notify_max_gap_secs,
             refresh_mutex: self.refresh_mutex.clone(),
             snooze_tx: self.snooze_tx.clone(),
             snooze_rx: self.snooze_rx.clone(),
             settings_tx: self.settings_tx.clone(),
             settings_rx: self.settings_rx.clone(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Helper function that replicates the notification suppression logic
-    /// from `refresh_followed_streams`. This allows us to unit test the
-    /// decision-making without needing the full App infrastructure.
-    fn should_suppress_notifications(
-        last_successful_refresh: Option<DateTime<Utc>>,
-        now: DateTime<Utc>,
-        notify_max_gap_secs: u64,
-    ) -> bool {
-        match last_successful_refresh {
-            None => false, // First successful refresh, don't suppress
-            Some(last) => {
-                let elapsed = (now - last).num_seconds();
-                elapsed > notify_max_gap_secs as i64
-            }
-        }
-    }
-
-    // === Notification suppression decision tests ===
-
-    #[test]
-    fn first_refresh_does_not_suppress_notifications() {
-        let now = Utc::now();
-        let max_gap_secs = 600; // 10 minutes
-
-        // No previous successful refresh
-        let suppress = should_suppress_notifications(None, now, max_gap_secs);
-
-        assert!(
-            !suppress,
-            "First refresh should never suppress notifications"
-        );
-    }
-
-    #[test]
-    fn recent_refresh_does_not_suppress_notifications() {
-        let now = Utc::now();
-        let max_gap_secs = 600; // 10 minutes
-
-        // Last successful refresh was 60 seconds ago (within the 10 minute window)
-        let last_refresh = now - chrono::Duration::seconds(60);
-        let suppress = should_suppress_notifications(Some(last_refresh), now, max_gap_secs);
-
-        assert!(
-            !suppress,
-            "Refresh within max gap should not suppress notifications"
-        );
-    }
-
-    #[test]
-    fn old_refresh_suppresses_notifications() {
-        let now = Utc::now();
-        let max_gap_secs = 600; // 10 minutes
-
-        // Last successful refresh was 15 minutes ago (exceeds 10 minute window)
-        let last_refresh = now - chrono::Duration::seconds(900);
-        let suppress = should_suppress_notifications(Some(last_refresh), now, max_gap_secs);
-
-        assert!(
-            suppress,
-            "Refresh exceeding max gap should suppress notifications"
-        );
-    }
-
-    #[test]
-    fn exactly_at_boundary_does_not_suppress() {
-        let now = Utc::now();
-        let max_gap_secs = 600; // 10 minutes
-
-        // Exactly at the boundary (not exceeding, so should not suppress)
-        let last_refresh = now - chrono::Duration::seconds(600);
-        let suppress = should_suppress_notifications(Some(last_refresh), now, max_gap_secs);
-
-        assert!(
-            !suppress,
-            "Refresh exactly at max gap boundary should not suppress"
-        );
-    }
-
-    #[test]
-    fn one_second_over_boundary_suppresses() {
-        let now = Utc::now();
-        let max_gap_secs = 600; // 10 minutes
-
-        // One second over the boundary
-        let last_refresh = now - chrono::Duration::seconds(601);
-        let suppress = should_suppress_notifications(Some(last_refresh), now, max_gap_secs);
-
-        assert!(suppress, "Refresh one second over max gap should suppress");
-    }
-
-    #[test]
-    fn very_long_gap_suppresses() {
-        let now = Utc::now();
-        let max_gap_secs = 600; // 10 minutes
-
-        // Hours of sleep/suspension
-        let last_refresh = now - chrono::Duration::hours(8);
-        let suppress = should_suppress_notifications(Some(last_refresh), now, max_gap_secs);
-
-        assert!(
-            suppress,
-            "Very long gap (hours) should suppress notifications"
-        );
-    }
-
-    #[test]
-    fn custom_max_gap_respected() {
-        let now = Utc::now();
-        let max_gap_secs = 120; // 2 minutes
-
-        // 3 minutes ago - exceeds 2 minute custom threshold
-        let last_refresh = now - chrono::Duration::seconds(180);
-        let suppress = should_suppress_notifications(Some(last_refresh), now, max_gap_secs);
-
-        assert!(suppress, "Custom max gap of 2 minutes should be respected");
-    }
-
-    // === Integration-style tests for timestamp management ===
-
-    #[tokio::test]
-    async fn timestamp_starts_as_none() {
-        let timestamp: Arc<RwLock<Option<DateTime<Utc>>>> = Arc::new(RwLock::new(None));
-        let value = *timestamp.read().await;
-        assert!(value.is_none(), "Timestamp should start as None");
-    }
-
-    #[tokio::test]
-    async fn timestamp_updated_after_success() {
-        let timestamp: Arc<RwLock<Option<DateTime<Utc>>>> = Arc::new(RwLock::new(None));
-
-        // Simulate successful refresh updating the timestamp
-        let now = Utc::now();
-        *timestamp.write().await = Some(now);
-
-        let value = *timestamp.read().await;
-        assert!(value.is_some(), "Timestamp should be Some after update");
-        assert_eq!(value.unwrap(), now, "Timestamp should match the set value");
-    }
-
-    /// This test documents the fix for the wake-from-sleep bug:
-    /// Failed refreshes should NOT update the timestamp, so that subsequent
-    /// successful refreshes correctly calculate the gap from the last success.
-    #[tokio::test]
-    async fn failed_refresh_scenario() {
-        let last_successful: Arc<RwLock<Option<DateTime<Utc>>>> = Arc::new(RwLock::new(None));
-        let max_gap_secs = 600; // 10 minutes
-
-        // T=0: First successful refresh
-        let t0 = Utc::now();
-        *last_successful.write().await = Some(t0);
-
-        // T=8h: Computer wakes from sleep, API call FAILS
-        // In the buggy code, timestamp would be updated here despite failure
-        // In the fixed code, we DON'T update the timestamp on failure
-        // (simulated by not updating last_successful)
-        let _t1 = t0 + chrono::Duration::hours(8);
-        // NO update to last_successful - simulates failed refresh
-
-        // T=8h+1m: Retry succeeds
-        let t2 = t0 + chrono::Duration::hours(8) + chrono::Duration::minutes(1);
-        let last = *last_successful.read().await;
-
-        // The gap should be calculated from t0 (last SUCCESS), not from t1
-        let suppress = should_suppress_notifications(last, t2, max_gap_secs);
-
-        assert!(
-            suppress,
-            "After 8+ hours, notifications should be suppressed even if a \
-             failed refresh occurred in between"
-        );
-    }
-
-    /// This test documents the correct behavior for normal polling
-    #[tokio::test]
-    async fn normal_polling_scenario() {
-        let max_gap_secs = 600; // 10 minutes
-
-        // Simulating normal 60-second polling intervals
-        let t0 = Utc::now();
-        let t1 = t0 + chrono::Duration::seconds(60);
-        let t2 = t0 + chrono::Duration::seconds(120);
-
-        // After first poll (60s gap), should not suppress
-        assert!(
-            !should_suppress_notifications(Some(t0), t1, max_gap_secs),
-            "60 second gap should not suppress"
-        );
-
-        // After second poll (60s gap from t1), should not suppress
-        assert!(
-            !should_suppress_notifications(Some(t1), t2, max_gap_secs),
-            "60 second gap should not suppress"
-        );
     }
 }
