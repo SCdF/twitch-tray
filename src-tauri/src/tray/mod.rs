@@ -1,7 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use tauri::{
     image::Image,
     menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
@@ -10,16 +10,14 @@ use tauri::{
 };
 use tokio::sync::Mutex;
 
-use crate::config::{FollowedCategory, StreamerImportance, StreamerSettings};
-use crate::notify::truncate;
+use crate::config::{FollowedCategory, StreamerSettings};
+use crate::display_state::{compute_display_state, DisplayConfig, DisplayState};
 use crate::state::AppState;
-use crate::twitch::{format_viewer_count, ScheduledStream, Stream};
+use crate::twitch::Stream;
 
 const ICON_BYTES: &[u8] = include_bytes!("../../icons/icon.png");
 const ICON_GREY_BYTES: &[u8] = include_bytes!("../../icons/icon_grey.png");
 
-/// Scheduled stream within this many minutes of now is "covered" by a live stream
-const LIVE_COVERS_SCHEDULE_WINDOW_MIN: i64 = 60;
 /// Width of the settings window in logical pixels
 const SETTINGS_WINDOW_SIZE: f64 = 975.0;
 /// Maximum streams shown directly in main menu before overflow submenu
@@ -111,16 +109,21 @@ impl TrayManager {
         // Build and set menu on the main thread to avoid GTK threading issues
         app.run_on_main_thread(move || {
             let menu_result = if authenticated {
-                build_authenticated_menu(
-                    &app_handle,
+                let display_state = compute_display_state(
                     streams,
                     scheduled,
                     schedules_loaded,
                     followed_categories,
                     category_streams,
-                    streamer_settings,
-                    schedule_lookahead_hours,
-                )
+                    &DisplayConfig {
+                        streamer_settings,
+                        schedule_lookahead_hours,
+                        live_limit: LIVE_MAIN_MENU_LIMIT,
+                        schedule_limit: SCHEDULE_MAIN_MENU_LIMIT,
+                    },
+                    Utc::now(),
+                );
+                render_display_state(&app_handle, display_state)
             } else {
                 build_unauthenticated_menu(&app_handle)
             };
@@ -217,89 +220,45 @@ fn build_unauthenticated_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>
     MenuBuilder::new(app).items(&[&login, &quit]).build()
 }
 
-fn get_importance(
-    user_login: &str,
-    streamer_settings: &HashMap<String, StreamerSettings>,
-) -> StreamerImportance {
-    streamer_settings
-        .get(user_login)
-        .map(|s| s.importance)
-        .unwrap_or_default()
-}
-
-#[allow(clippy::too_many_arguments)]
-fn build_authenticated_menu(
-    app: &AppHandle,
-    mut streams: Vec<Stream>,
-    scheduled: Vec<ScheduledStream>,
-    schedules_loaded: bool,
-    followed_categories: Vec<FollowedCategory>,
-    category_streams: HashMap<String, Vec<Stream>>,
-    streamer_settings: HashMap<String, StreamerSettings>,
-    schedule_lookahead_hours: u64,
-) -> tauri::Result<Menu<tauri::Wry>> {
+/// Maps a `DisplayState` into Tauri menu items.
+///
+/// This is the only function in `tray/mod.rs` that knows about Tauri types.
+/// All business logic (sorting, filtering, labelling) lives in `display_state.rs`.
+fn render_display_state(app: &AppHandle, state: DisplayState) -> tauri::Result<Menu<tauri::Wry>> {
     let mut items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
 
-    // Filter out Ignore streamers from live streams
-    streams.retain(|s| {
-        get_importance(&s.user_login, &streamer_settings) != StreamerImportance::Ignore
-    });
-
-    // Collect live broadcaster logins for schedule filtering later
-    let live_logins: HashSet<String> = streams.iter().map(|s| s.user_login.clone()).collect();
-
     // === Following Live section ===
-    let title = if streams.is_empty() {
+    let total_live = state.live_section.visible.len() + state.live_section.overflow.len();
+    let live_title = if total_live == 0 {
         "Following Live".to_string()
     } else {
-        format!("Following Live ({})", streams.len())
+        format!("Following Live ({})", total_live)
     };
     items.push(Box::new(
-        MenuItemBuilder::new(title).enabled(false).build(app)?,
+        MenuItemBuilder::new(live_title).enabled(false).build(app)?,
     ));
 
-    if streams.is_empty() {
+    if total_live == 0 {
         items.push(Box::new(
             MenuItemBuilder::new("  No streams live")
                 .enabled(false)
                 .build(app)?,
         ));
     } else {
-        // Sort: Favourites first (by viewers), then rest by viewers
-        streams.sort_by(|a, b| {
-            let a_fav =
-                get_importance(&a.user_login, &streamer_settings) == StreamerImportance::Favourite;
-            let b_fav =
-                get_importance(&b.user_login, &streamer_settings) == StreamerImportance::Favourite;
-            b_fav.cmp(&a_fav).then(b.viewer_count.cmp(&a.viewer_count))
-        });
-
-        let (show_in_main, overflow) = if streams.len() > LIVE_MAIN_MENU_LIMIT {
-            let (main, over) = streams.split_at(LIVE_MAIN_MENU_LIMIT);
-            (main.to_vec(), over.to_vec())
-        } else {
-            (streams, Vec::new())
-        };
-
-        for stream in &show_in_main {
-            let is_fav = get_importance(&stream.user_login, &streamer_settings)
-                == StreamerImportance::Favourite;
-            let label = format_stream_label_with_star(stream, is_fav);
-            let id = format!("{}{}", ids::STREAM_PREFIX, stream.user_login);
-            items.push(Box::new(MenuItemBuilder::with_id(id, label).build(app)?));
+        for entry in &state.live_section.visible {
+            let id = format!("{}{}", ids::STREAM_PREFIX, entry.stream.user_login);
+            items.push(Box::new(
+                MenuItemBuilder::with_id(id, &entry.label).build(app)?,
+            ));
         }
 
-        // Add "More" submenu if there are overflow streams
-        if !overflow.is_empty() {
-            let more_label = format!("More ({})...", overflow.len());
+        if !state.live_section.overflow.is_empty() {
+            let more_label = format!("More ({})...", state.live_section.overflow.len());
             let mut more_submenu = SubmenuBuilder::new(app, more_label);
 
-            for stream in &overflow {
-                let is_fav = get_importance(&stream.user_login, &streamer_settings)
-                    == StreamerImportance::Favourite;
-                let label = format_stream_label_with_star(stream, is_fav);
-                let id = format!("{}{}", ids::STREAM_PREFIX, stream.user_login);
-                let item = MenuItemBuilder::with_id(id, label).build(app)?;
+            for entry in &state.live_section.overflow {
+                let id = format!("{}{}", ids::STREAM_PREFIX, entry.stream.user_login);
+                let item = MenuItemBuilder::with_id(id, &entry.label).build(app)?;
                 more_submenu = more_submenu.item(&item);
             }
 
@@ -308,72 +267,36 @@ fn build_authenticated_menu(
     }
 
     // === Category sections ===
-    // Only show header if there are categories with streams
-    let has_category_streams = followed_categories
-        .iter()
-        .any(|cat| category_streams.get(&cat.id).is_some_and(|s| !s.is_empty()));
-
-    if has_category_streams {
+    if !state.category_sections.is_empty() {
         items.push(Box::new(
             MenuItemBuilder::new("Categories")
                 .enabled(false)
                 .build(app)?,
         ));
 
-        for category in &followed_categories {
-            if let Some(cat_streams) = category_streams.get(&category.id) {
-                if !cat_streams.is_empty() {
-                    // Sort by viewer count and take top 10
-                    let mut sorted_streams = cat_streams.clone();
-                    sorted_streams.sort_by(|a, b| b.viewer_count.cmp(&a.viewer_count));
-                    sorted_streams.truncate(10);
+        for cat_section in &state.category_sections {
+            let mut cat_submenu = SubmenuBuilder::new(app, &cat_section.header);
 
-                    // Sum total viewers from the streams we have
-                    let total_viewers: u32 = sorted_streams.iter().map(|s| s.viewer_count).sum();
-                    let label =
-                        format!("{} ({})", category.name, format_viewer_count(total_viewers));
-
-                    let mut cat_submenu = SubmenuBuilder::new(app, &label);
-
-                    for stream in &sorted_streams {
-                        let label = format_category_stream_label(stream);
-                        let id = format!("{}{}", ids::CATEGORY_STREAM_PREFIX, stream.user_login);
-                        let item = MenuItemBuilder::with_id(id, label).build(app)?;
-                        cat_submenu = cat_submenu.item(&item);
-                    }
-
-                    items.push(Box::new(cat_submenu.build()?));
-                }
+            for entry in &cat_section.entries {
+                let id = format!("{}{}", ids::CATEGORY_STREAM_PREFIX, entry.stream.user_login);
+                let item = MenuItemBuilder::with_id(id, &entry.label).build(app)?;
+                cat_submenu = cat_submenu.item(&item);
             }
+
+            items.push(Box::new(cat_submenu.build()?));
         }
     }
 
     // === Scheduled section ===
-    let soon_threshold = Utc::now() + Duration::minutes(LIVE_COVERS_SCHEDULE_WINDOW_MIN);
-
-    // Filter out Ignore streamers AND scheduled streams for broadcasters
-    // who are currently live with a start time within the next 60 minutes
-    let scheduled: Vec<_> = scheduled
-        .into_iter()
-        .filter(|s| {
-            get_importance(&s.broadcaster_login, &streamer_settings) != StreamerImportance::Ignore
-        })
-        .filter(|s| {
-            // If the broadcaster is live and the scheduled stream starts within 60 min,
-            // treat it as "covered" by the live stream — hide from schedule section
-            !(live_logins.contains(&s.broadcaster_login) && s.start_time <= soon_threshold)
-        })
-        .collect();
-
-    let schedule_header = format!("Scheduled (Next {}h)", schedule_lookahead_hours);
     items.push(Box::new(
-        MenuItemBuilder::new(schedule_header)
+        MenuItemBuilder::new(&state.schedule_section.header)
             .enabled(false)
             .build(app)?,
     ));
 
-    if scheduled.is_empty() {
-        let label = if schedules_loaded {
+    let total_sched = state.schedule_section.visible.len() + state.schedule_section.overflow.len();
+    if total_sched == 0 {
+        let label = if state.schedule_section.schedules_loaded {
             "  No scheduled streams"
         } else {
             "  Loading..."
@@ -382,32 +305,28 @@ fn build_authenticated_menu(
             MenuItemBuilder::new(label).enabled(false).build(app)?,
         ));
     } else {
-        let (show_in_main, overflow) = if scheduled.len() > SCHEDULE_MAIN_MENU_LIMIT {
-            let (main, over) = scheduled.split_at(SCHEDULE_MAIN_MENU_LIMIT);
-            (main.to_vec(), over.to_vec())
-        } else {
-            (scheduled, Vec::new())
-        };
-
-        for sched in &show_in_main {
-            let is_fav = get_importance(&sched.broadcaster_login, &streamer_settings)
-                == StreamerImportance::Favourite;
-            let label = format_scheduled_label_with_star(sched, is_fav);
-            let id = format!("{}{}", ids::SCHEDULED_PREFIX, sched.broadcaster_login);
-            items.push(Box::new(MenuItemBuilder::with_id(id, label).build(app)?));
+        for entry in &state.schedule_section.visible {
+            let id = format!(
+                "{}{}",
+                ids::SCHEDULED_PREFIX,
+                entry.scheduled.broadcaster_login
+            );
+            items.push(Box::new(
+                MenuItemBuilder::with_id(id, &entry.label).build(app)?,
+            ));
         }
 
-        // Add "More" submenu if there are overflow scheduled streams
-        if !overflow.is_empty() {
-            let more_label = format!("More ({})...", overflow.len());
+        if !state.schedule_section.overflow.is_empty() {
+            let more_label = format!("More ({})...", state.schedule_section.overflow.len());
             let mut more_submenu = SubmenuBuilder::new(app, more_label);
 
-            for sched in &overflow {
-                let is_fav = get_importance(&sched.broadcaster_login, &streamer_settings)
-                    == StreamerImportance::Favourite;
-                let label = format_scheduled_label_with_star(sched, is_fav);
-                let id = format!("{}{}", ids::SCHEDULED_PREFIX, sched.broadcaster_login);
-                let item = MenuItemBuilder::with_id(id, label).build(app)?;
+            for entry in &state.schedule_section.overflow {
+                let id = format!(
+                    "{}{}",
+                    ids::SCHEDULED_PREFIX,
+                    entry.scheduled.broadcaster_login
+                );
+                let item = MenuItemBuilder::with_id(id, &entry.label).build(app)?;
                 more_submenu = more_submenu.item(&item);
             }
 
@@ -420,7 +339,6 @@ fn build_authenticated_menu(
     let logout = MenuItemBuilder::with_id(ids::LOGOUT, "Logout").build(app)?;
     let quit = MenuItemBuilder::with_id(ids::QUIT, "Quit").build(app)?;
 
-    // Build the menu with separators
     MenuBuilder::new(app)
         .items(&items.iter().map(|i| i.as_ref()).collect::<Vec<_>>())
         .separator()
@@ -464,147 +382,5 @@ fn open_stream(user_login: &str) {
     let url = format!("https://twitch.tv/{user_login}");
     if let Err(e) = open::that(&url) {
         tracing::error!("Failed to open browser: {}", e);
-    }
-}
-
-/// Formats a stream for the Following Live menu with optional star prefix
-/// Format: "[star] StreamerName - GameName (1.2k, 2h 15m)"
-pub(crate) fn format_stream_label_with_star(s: &Stream, star: bool) -> String {
-    let prefix = if star { "\u{2605} " } else { "" };
-    format!(
-        "{}{} - {} ({}, {})",
-        prefix,
-        s.user_name,
-        truncate(&s.game_name, 20),
-        s.format_viewer_count(),
-        s.format_duration()
-    )
-}
-
-/// Formats a scheduled stream label with optional sparkle/star prefix
-/// Format: "[sparkle][star] StreamerName - Tomorrow 3:00 PM"
-pub(crate) fn format_scheduled_label_with_star(s: &ScheduledStream, star: bool) -> String {
-    let sparkle = if s.is_inferred { "\u{2728} " } else { "" };
-    let star_str = if star { "\u{2605} " } else { "" };
-    format!(
-        "{}{}{} - {}",
-        sparkle,
-        star_str,
-        s.broadcaster_name,
-        s.format_start_time()
-    )
-}
-
-/// Formats a stream for category submenu (no game name since it's implied)
-/// Format: "StreamerName (1.2k)"
-pub(crate) fn format_category_stream_label(s: &Stream) -> String {
-    format!("{} ({})", s.user_name, s.format_viewer_count())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_helpers::make_scheduled;
-    use chrono::{Duration, Utc};
-
-    /// Helper to create a test stream with viewer count and age
-    fn make_stream(user_name: &str, game_name: &str, viewer_count: u32, hours_ago: i64) -> Stream {
-        Stream {
-            id: "123".to_string(),
-            user_id: "456".to_string(),
-            user_login: user_name.to_lowercase(),
-            user_name: user_name.to_string(),
-            game_id: "789".to_string(),
-            game_name: game_name.to_string(),
-            title: "Test Stream".to_string(),
-            viewer_count,
-            started_at: Utc::now() - Duration::hours(hours_ago),
-            thumbnail_url: "https://example.com/thumb.jpg".to_string(),
-            tags: vec![],
-        }
-    }
-
-    // === format_stream_label tests ===
-
-    #[test]
-    fn format_stream_label_basic() {
-        let stream = make_stream("Ninja", "Fortnite", 5000, 2);
-        let label = format_stream_label_with_star(&stream, false);
-
-        assert!(
-            label.contains("Ninja"),
-            "Label should contain streamer name"
-        );
-        assert!(label.contains("Fortnite"), "Label should contain game name");
-        assert!(label.contains("5k"), "Label should contain viewer count");
-        assert!(label.contains("2h"), "Label should contain duration");
-    }
-
-    #[test]
-    fn format_stream_label_long_game_name() {
-        let stream = make_stream(
-            "Streamer",
-            "This Is A Very Long Game Name That Should Be Truncated",
-            1000,
-            1,
-        );
-        let label = format_stream_label_with_star(&stream, false);
-
-        // Game name should be truncated to 20 chars
-        assert!(
-            label.len() < 100,
-            "Label should be reasonable length: {}",
-            label
-        );
-        assert!(
-            label.contains("..."),
-            "Long game name should be truncated: {}",
-            label
-        );
-    }
-
-    #[test]
-    fn format_stream_label_small_viewers() {
-        let stream = make_stream("SmallStreamer", "Minecraft", 42, 0);
-        let label = format_stream_label_with_star(&stream, false);
-
-        assert!(
-            label.contains("42"),
-            "Small viewer count should show exact number: {}",
-            label
-        );
-    }
-
-    // === format_scheduled_label tests ===
-
-    #[test]
-    fn format_scheduled_label_basic() {
-        let scheduled = make_scheduled("StreamerName", 5);
-        let label = format_scheduled_label_with_star(&scheduled, false);
-
-        assert!(
-            label.starts_with("StreamerName - "),
-            "Label should start with broadcaster name: {}",
-            label
-        );
-    }
-
-    #[test]
-    fn format_scheduled_label_contains_time() {
-        let scheduled = make_scheduled("TestStreamer", 2);
-        let label = format_scheduled_label_with_star(&scheduled, false);
-
-        // Should contain time-related text (Today, Tomorrow, or day name)
-        let has_time_info = label.contains("Today")
-            || label.contains("Tomorrow")
-            || label.contains("Mon")
-            || label.contains("Tue")
-            || label.contains("Wed")
-            || label.contains("Thu")
-            || label.contains("Fri")
-            || label.contains("Sat")
-            || label.contains("Sun");
-
-        assert!(has_time_info, "Label should contain time info: {}", label);
     }
 }

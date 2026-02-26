@@ -3,6 +3,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod display_state;
 pub mod notify;
 pub mod state;
 pub mod tray;

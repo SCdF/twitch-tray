@@ -6,6 +6,7 @@ mod auth;
 mod commands;
 mod config;
 mod db;
+mod display_state;
 mod notification_filter;
 mod notify;
 mod schedule_inference;
