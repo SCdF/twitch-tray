@@ -467,7 +467,7 @@ pub fn handle_menu_event(app: &AppHandle, id: &str) {
 
 /// Opens a Twitch stream in the default browser
 fn open_stream(user_login: &str) {
-    let url = format!("https://twitch.tv/{}", user_login);
+    let url = format!("https://twitch.tv/{user_login}");
     if let Err(e) = open::that(&url) {
         tracing::error!("Failed to open browser: {}", e);
     }

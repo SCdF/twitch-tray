@@ -243,7 +243,7 @@ impl Notifier for DesktopNotifier {
             stream.game_name.clone()
         };
 
-        let url = format!("https://twitch.tv/{}", stream.user_login);
+        let url = stream.channel_url();
         let snooze = self.make_snooze_info(stream);
         let settings = self.make_settings_info(stream);
         self.send_notification(
@@ -268,7 +268,7 @@ impl Notifier for DesktopNotifier {
             stream.game_name.clone()
         };
 
-        let url = format!("https://twitch.tv/{}", stream.user_login);
+        let url = stream.channel_url();
         let snooze = self.make_snooze_info(stream);
         let settings = self.make_settings_info(stream);
         self.send_notification(
@@ -289,7 +289,7 @@ impl Notifier for DesktopNotifier {
         let title = format!("{} changed category", stream.user_name);
         let message = format!("{} → {}", old_category, stream.game_name);
 
-        let url = format!("https://twitch.tv/{}", stream.user_login);
+        let url = stream.channel_url();
         let settings = self.make_settings_info(stream);
         self.send_notification(
             &title,

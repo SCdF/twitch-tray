@@ -19,6 +19,11 @@ pub struct Stream {
 }
 
 impl Stream {
+    /// Returns the Twitch channel URL
+    pub fn channel_url(&self) -> String {
+        format!("https://twitch.tv/{}", self.user_login)
+    }
+
     /// Returns the duration since the stream started
     pub fn duration(&self) -> chrono::Duration {
         Utc::now().signed_duration_since(self.started_at)
