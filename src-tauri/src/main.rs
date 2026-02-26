@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod app_services;
 mod auth;
 mod commands;
 mod config;
@@ -23,6 +24,7 @@ use tauri::{Listener, Manager};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use crate::app::App;
+use crate::app_services::AppServices;
 use crate::display::DisplayBackend;
 use crate::display_state::DisplayState;
 use crate::tray::{handle_menu_event, TrayBackend};
@@ -49,7 +51,10 @@ fn main() {
             // Create the application state
             let application = Arc::new(App::new().expect("Failed to initialize application"));
 
-            // Store the app in Tauri state for event handlers
+            // Store as Arc<dyn AppServices> so commands are decoupled from App
+            let app_services: Arc<dyn AppServices> = application.clone();
+            app.manage(app_services);
+            // Also store the concrete Arc<App> for event handlers that need it
             app.manage(application.clone());
 
             // Create the tray backend (holds AppHandle — only Tauri-coupled display type)

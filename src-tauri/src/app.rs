@@ -9,6 +9,7 @@ use tokio::time::Duration;
 /// Within this many seconds, an inferred schedule is considered a duplicate of an API schedule
 const SCHEDULE_DEDUP_WINDOW_SECS: i64 = 3600;
 
+use crate::app_services::AppServices;
 use crate::auth::{DeviceFlow, Token, TokenStore, CLIENT_ID};
 use crate::config::ConfigManager;
 use crate::db::Database;
@@ -814,6 +815,44 @@ impl App {
         self.state.clear().await;
         self.client.clear_auth().await;
         self.initial_load_done.store(false, Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl AppServices for App {
+    fn get_config(&self) -> crate::config::Config {
+        self.config.get()
+    }
+
+    async fn save_config(&self, config: crate::config::Config) -> anyhow::Result<()> {
+        self.config.save(config)?;
+        // Use trait dispatch so the trait methods are used and testable via mock
+        AppServices::refresh_category_streams(self).await;
+        AppServices::refresh_schedules_from_db(self).await;
+        Ok(())
+    }
+
+    async fn search_categories(
+        &self,
+        query: &str,
+    ) -> Result<Vec<crate::twitch::Category>, crate::twitch::ApiError> {
+        self.client.search_categories(query).await
+    }
+
+    fn get_followed_categories(&self) -> Vec<crate::config::FollowedCategory> {
+        self.config.get().followed_categories
+    }
+
+    async fn get_followed_channels(&self) -> Vec<crate::twitch::FollowedChannel> {
+        self.state.get_followed_channels().await
+    }
+
+    async fn refresh_category_streams(&self) {
+        App::refresh_category_streams(self).await
+    }
+
+    async fn refresh_schedules_from_db(&self) {
+        App::refresh_schedules_from_db(self).await
     }
 }
 
