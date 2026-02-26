@@ -12,6 +12,7 @@ mod display_state;
 mod notification_filter;
 mod notify;
 mod schedule_inference;
+mod schedule_walker;
 mod session;
 mod state;
 mod tray;

@@ -6,9 +6,6 @@ use tauri::AppHandle;
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::time::Duration;
 
-/// Within this many seconds, an inferred schedule is considered a duplicate of an API schedule
-const SCHEDULE_DEDUP_WINDOW_SECS: i64 = 3600;
-
 use crate::app_services::AppServices;
 use crate::auth::{TokenStore, CLIENT_ID};
 use crate::config::ConfigManager;
@@ -18,6 +15,7 @@ use crate::display_state::{
     compute_display_state, DisplayConfig, DEFAULT_LIVE_MENU_LIMIT, DEFAULT_SCHEDULE_MENU_LIMIT,
 };
 use crate::notify::{DesktopNotifier, Notifier, SnoozeRequest, StreamerSettingsRequest};
+use crate::schedule_walker::ScheduleWalker;
 use crate::session::SessionManager;
 use crate::state::AppState;
 use crate::twitch::TwitchClient;
@@ -32,6 +30,9 @@ pub struct App {
 
     // Auth lifecycle (session restore, login, logout, token refresh)
     session: SessionManager,
+
+    // Schedule queue walker
+    walker: Arc<ScheduleWalker>,
 
     // Cancellation for auth flow
     auth_cancel_tx: watch::Sender<bool>,
@@ -77,6 +78,14 @@ impl App {
             Arc::new(Mutex::new(())),
         );
 
+        let walker = Arc::new(ScheduleWalker::new(
+            db.clone(),
+            client.clone(),
+            state.clone(),
+            ConfigManager::new()?,
+            session.clone(),
+        ));
+
         Ok(Self {
             state,
             config,
@@ -84,6 +93,7 @@ impl App {
             notifier,
             db,
             session,
+            walker,
             auth_cancel_tx,
             auth_cancel_rx,
             snooze_tx,
@@ -125,17 +135,7 @@ impl App {
         });
 
         // Schedule queue walker — checks one broadcaster at a time
-        let app = self.clone();
-        tokio::spawn(async move {
-            loop {
-                let tick_duration =
-                    Duration::from_secs(app.config.get().schedule_check_interval_sec);
-                tokio::time::sleep(tick_duration).await;
-                if let Err(e) = app.tick_schedule_walker().await {
-                    tracing::error!("Schedule walker error: {}", e);
-                }
-            }
-        });
+        self.walker.clone().start();
 
         // Followed channels refresh task
         let app = self.clone();
@@ -407,56 +407,6 @@ impl App {
         should_refresh
     }
 
-    /// Runs one iteration of the schedule queue walker.
-    async fn tick_schedule_walker(&self) -> anyhow::Result<()> {
-        if !self.state.is_authenticated().await {
-            return Ok(());
-        }
-
-        let stale_threshold = (self.config.get().schedule_stale_hours * 3600) as i64;
-        let broadcaster = match self.db.get_next_stale_broadcaster(stale_threshold) {
-            Ok(Some(b)) => b,
-            Ok(None) => return Ok(()), // All are fresh
-            Err(e) => {
-                tracing::error!("Failed to query schedule queue: {}", e);
-                return Err(e);
-            }
-        };
-
-        let (bid, blogin, bname) = broadcaster;
-        let bid_str = bid.to_string();
-        tracing::debug!("Checking schedule for {} ({})", bname, bid);
-
-        match self.with_retry(|| self.client.get_schedule(&bid_str)).await {
-            Ok(Some(data)) => {
-                let segments = convert_schedule_segments(&data);
-                if let Err(e) = self.db.replace_future_schedules(bid, &segments) {
-                    tracing::error!("Failed to store schedules for {}: {}", blogin, e);
-                }
-                if let Err(e) = self.db.update_last_checked(bid) {
-                    tracing::error!("Failed to update last_checked for {}: {}", blogin, e);
-                }
-                self.refresh_schedules_from_db().await;
-            }
-            Ok(None) => {
-                // No schedule (404) — clear future entries for this broadcaster
-                if let Err(e) = self.db.replace_future_schedules(bid, &[]) {
-                    tracing::error!("Failed to clear schedules for {}: {}", blogin, e);
-                }
-                if let Err(e) = self.db.update_last_checked(bid) {
-                    tracing::error!("Failed to update last_checked for {}: {}", blogin, e);
-                }
-                self.refresh_schedules_from_db().await;
-            }
-            Err(e) => {
-                // Don't update last_checked — will retry next cycle
-                tracing::warn!("Failed to fetch schedule for {}: {}", blogin, e);
-            }
-        }
-
-        Ok(())
-    }
-
     /// Checks if a followed-channels refresh is due and runs it.
     /// Returns true if the refresh completed successfully.
     async fn tick_followed_channels(
@@ -516,61 +466,8 @@ impl App {
     }
 
     /// Reads upcoming schedules from DB, merges with inferred schedules, and updates state.
-    ///
-    /// Both API and inferred schedules use the same display window:
-    /// `[now - schedule_before_now_min, now + schedule_lookahead_hours]`.
-    /// Deduplication removes inferred entries that overlap with an API schedule
-    /// for the same broadcaster within 60 minutes.
     pub async fn refresh_schedules_from_db(&self) {
-        let cfg = self.config.get();
-        let now = Utc::now();
-        let start = now - chrono::Duration::minutes(cfg.schedule_before_now_min as i64);
-        let end = now + chrono::Duration::hours(cfg.schedule_lookahead_hours as i64);
-
-        let db_schedules = match self.db.get_upcoming_schedules(start, end) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("Failed to read schedules from DB: {}", e);
-                return;
-            }
-        };
-
-        // Infer schedules from stream history using the same window
-        let channels = self.state.get_followed_channels().await;
-        let channel_lookup: HashMap<String, _> = channels
-            .into_iter()
-            .map(|c| (c.broadcaster_id.clone(), c))
-            .collect();
-
-        let mut combined = db_schedules;
-        match self.db.infer_schedules(&channel_lookup, start, end) {
-            Ok(inferred) => {
-                if !inferred.is_empty() {
-                    // Deduplicate: skip inferred schedules that overlap with an
-                    // API schedule for the same broadcaster within 60 minutes
-                    let deduped: Vec<_> = inferred
-                        .into_iter()
-                        .filter(|inf| {
-                            !combined.iter().any(|api| {
-                                api.broadcaster_id == inf.broadcaster_id
-                                    && (api.start_time - inf.start_time).num_seconds().abs()
-                                        <= SCHEDULE_DEDUP_WINDOW_SECS
-                            })
-                        })
-                        .collect();
-                    if !deduped.is_empty() {
-                        tracing::debug!("Inferred {} schedule(s) from history", deduped.len());
-                        combined.extend(deduped);
-                        combined.sort_by_key(|s| s.start_time);
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::error!("Failed to infer schedules: {}", e);
-            }
-        }
-
-        self.state.set_scheduled_streams(combined).await;
+        self.walker.refresh_schedules_from_db().await;
     }
 
     /// Refreshes streams for all followed categories
@@ -671,34 +568,6 @@ impl AppServices for App {
     }
 }
 
-/// Converts raw API schedule segments into `ScheduledStream` structs.
-/// Skips canceled segments. Does NOT filter by time horizon (stores all future segments).
-fn convert_schedule_segments(
-    data: &crate::twitch::ScheduleData,
-) -> Vec<crate::twitch::ScheduledStream> {
-    let Some(segments) = &data.segments else {
-        return Vec::new();
-    };
-
-    segments
-        .iter()
-        .filter(|seg| seg.canceled_until.is_none())
-        .map(|seg| crate::twitch::ScheduledStream {
-            id: seg.id.clone(),
-            broadcaster_id: data.broadcaster_id.clone(),
-            broadcaster_name: data.broadcaster_name.clone(),
-            broadcaster_login: data.broadcaster_login.clone(),
-            title: seg.title.clone(),
-            start_time: seg.start_time,
-            end_time: seg.end_time,
-            category: seg.category.as_ref().map(|c| c.name.clone()),
-            category_id: seg.category.as_ref().map(|c| c.id.clone()),
-            is_recurring: seg.is_recurring,
-            is_inferred: false,
-        })
-        .collect()
-}
-
 impl Clone for App {
     fn clone(&self) -> Self {
         let cfg = self.config.get();
@@ -714,6 +583,7 @@ impl Clone for App {
             ),
             db: self.db.clone(),
             session: self.session.clone(),
+            walker: self.walker.clone(),
             auth_cancel_tx: self.auth_cancel_tx.clone(),
             auth_cancel_rx: self.auth_cancel_rx.clone(),
             snooze_tx: self.snooze_tx.clone(),
