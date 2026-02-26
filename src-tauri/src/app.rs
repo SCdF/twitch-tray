@@ -1,16 +1,16 @@
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tauri::AppHandle;
-use tokio::sync::{mpsc, watch, Mutex, RwLock};
+use tokio::sync::{mpsc, watch, Mutex};
 use tokio::time::Duration;
 
 /// Within this many seconds, an inferred schedule is considered a duplicate of an API schedule
 const SCHEDULE_DEDUP_WINDOW_SECS: i64 = 3600;
 
 use crate::app_services::AppServices;
-use crate::auth::{DeviceFlow, Token, TokenStore, CLIENT_ID};
+use crate::auth::{TokenStore, CLIENT_ID};
 use crate::config::ConfigManager;
 use crate::db::Database;
 use crate::display::DisplayBackend;
@@ -18,32 +18,24 @@ use crate::display_state::{
     compute_display_state, DisplayConfig, DEFAULT_LIVE_MENU_LIMIT, DEFAULT_SCHEDULE_MENU_LIMIT,
 };
 use crate::notify::{DesktopNotifier, Notifier, SnoozeRequest, StreamerSettingsRequest};
+use crate::session::SessionManager;
 use crate::state::AppState;
-use crate::twitch::{ApiError, TwitchClient};
+use crate::twitch::TwitchClient;
 
 /// Main application orchestrator
 pub struct App {
     pub state: Arc<AppState>,
     pub config: ConfigManager,
-    pub store: TokenStore,
     pub client: TwitchClient,
     pub notifier: DesktopNotifier,
     pub db: Database,
 
-    // Tracks if initial load is complete (don't notify until then)
-    initial_load_done: Arc<AtomicBool>,
+    // Auth lifecycle (session restore, login, logout, token refresh)
+    session: SessionManager,
 
     // Cancellation for auth flow
     auth_cancel_tx: watch::Sender<bool>,
     auth_cancel_rx: watch::Receiver<bool>,
-
-    // Last SUCCESSFUL refresh time for sleep-aware polling
-    // Only updated when API calls succeed, used to determine notification suppression
-    last_live_refresh: Arc<RwLock<Option<DateTime<Utc>>>>,
-
-    // Serializes token refresh attempts so only one task refreshes at a time.
-    // Twitch refresh tokens are single-use: concurrent refreshes cause 400 errors.
-    refresh_mutex: Arc<Mutex<()>>,
 
     // Snooze notification channel
     snooze_tx: mpsc::UnboundedSender<SnoozeRequest>,
@@ -57,8 +49,10 @@ pub struct App {
 impl App {
     /// Creates a new application instance
     pub fn new() -> anyhow::Result<Self> {
+        use std::sync::atomic::AtomicBool;
+        use tokio::sync::RwLock;
+
         let config = ConfigManager::new()?;
-        let store = TokenStore::new()?;
         let state = AppState::new();
         let cfg = config.get();
         let (snooze_tx, snooze_rx) = mpsc::unbounded_channel();
@@ -73,18 +67,25 @@ impl App {
         let db = Database::new(ConfigManager::config_dir()?.join("data.db"))?;
         let (auth_cancel_tx, auth_cancel_rx) = watch::channel(false);
 
+        let session = SessionManager::new(
+            TokenStore::new()?,
+            client.clone(),
+            state.clone(),
+            db.clone(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(Mutex::new(())),
+        );
+
         Ok(Self {
             state,
             config,
-            store,
             client,
             notifier,
             db,
-            initial_load_done: Arc::new(AtomicBool::new(false)),
+            session,
             auth_cancel_tx,
             auth_cancel_rx,
-            last_live_refresh: Arc::new(RwLock::new(None)),
-            refresh_mutex: Arc::new(Mutex::new(())),
             snooze_tx,
             snooze_rx: Arc::new(Mutex::new(Some(snooze_rx))),
             settings_tx,
@@ -92,117 +93,18 @@ impl App {
         })
     }
 
-    /// Tries to restore a session from stored token
+    /// Tries to restore a session from stored token.
     pub async fn restore_session(&self) -> anyhow::Result<()> {
-        let mut token = self.store.load_token()?;
-        let flow = DeviceFlow::new(CLIENT_ID.to_string());
-
-        // If token is expired locally, refresh immediately
-        let needs_refresh = if token.is_expired() {
-            tracing::info!("Token expired, attempting refresh...");
-            true
-        } else {
-            // Token looks valid locally — validate with Twitch in case it was
-            // revoked server-side (e.g., after sleep or token rotation)
-            match flow.validate_token(&token.access_token).await {
-                Ok(_) => false,
-                Err(_) => {
-                    tracing::info!("Token rejected by Twitch, attempting refresh...");
-                    true
-                }
-            }
-        };
-
-        if needs_refresh {
-            token = flow.refresh_token(&token.refresh_token).await?;
-            self.store.save_token(&token)?;
-            tracing::info!("Token refreshed successfully");
-        }
-
-        if !token.is_valid() {
-            anyhow::bail!("Stored token is invalid");
-        }
-
-        self.initialize_session(&token).await?;
-        Ok(())
-    }
-
-    /// Initializes a session with the given token
-    pub async fn initialize_session(&self, token: &Token) -> anyhow::Result<()> {
-        self.client
-            .set_access_token(token.access_token.clone())
-            .await;
-        self.client.set_user_id(token.user_id.clone()).await;
-
-        self.state
-            .set_authenticated(true, token.user_id.clone(), token.user_login.clone())
-            .await;
-
-        // Load followed channels
-        if let Err(e) = self.load_followed_channels().await {
-            tracing::warn!("Failed to load followed channels: {}", e);
-        }
-
-        Ok(())
-    }
-
-    async fn load_followed_channels(&self) -> anyhow::Result<()> {
-        let follows = self
-            .with_retry(|| self.client.get_all_followed_channels())
-            .await?;
-
-        // Persist to DB and seed the schedule queue
-        self.db.sync_followed(&follows)?;
-        let ids = self.db.get_followed_ids()?;
-        self.db.ensure_schedule_queue_entries(&ids)?;
-
-        self.state.set_followed_channels(follows).await;
-        Ok(())
+        self.session.restore_session().await
     }
 
     /// Calls `f()`, and on `ApiError::Unauthorized` refreshes the token and retries once.
-    async fn with_retry<F, Fut, T>(&self, f: F) -> Result<T, ApiError>
+    async fn with_retry<F, Fut, T>(&self, f: F) -> Result<T, crate::twitch::ApiError>
     where
         F: Fn() -> Fut,
-        Fut: std::future::Future<Output = Result<T, ApiError>>,
+        Fut: std::future::Future<Output = Result<T, crate::twitch::ApiError>>,
     {
-        crate::twitch::with_retry(f, || self.try_refresh_token()).await
-    }
-
-    /// Attempts to refresh the OAuth token
-    ///
-    /// Called when API calls return 401 Unauthorized, indicating the token
-    /// has expired (e.g., after laptop sleep). Serialized via mutex because
-    /// Twitch refresh tokens are single-use — concurrent refreshes would
-    /// invalidate each other.
-    async fn try_refresh_token(&self) -> anyhow::Result<()> {
-        // Snapshot the token that's currently failing, before waiting on the mutex
-        let failing_token = self.client.get_access_token().await;
-
-        let _guard = self.refresh_mutex.lock().await;
-
-        // If the client's token changed while we waited, another task already refreshed
-        if self.client.get_access_token().await != failing_token {
-            tracing::debug!("Token already refreshed by another task");
-            return Ok(());
-        }
-
-        tracing::info!("Token expired during API call, attempting refresh...");
-
-        let token = self.store.load_token()?;
-        let flow = DeviceFlow::new(CLIENT_ID.to_string());
-        let new_token = flow.refresh_token(&token.refresh_token).await?;
-
-        // Save the refreshed token
-        self.store.save_token(&new_token)?;
-
-        // Update the client with new credentials
-        self.client
-            .set_access_token(new_token.access_token.clone())
-            .await;
-
-        tracing::info!("Token refreshed successfully");
-        Ok(())
+        crate::twitch::with_retry(f, || self.session.try_refresh_token()).await
     }
 
     /// Starts the polling tasks
@@ -429,7 +331,7 @@ impl App {
                             last_event_time,
                             now,
                             cfg.notify_max_gap_min * 60,
-                            app.initial_load_done.load(Ordering::SeqCst),
+                            app.session.initial_load_done.load(Ordering::SeqCst),
                             &cfg.streamer_settings,
                         );
                         last_event_time = Some(now);
@@ -488,7 +390,7 @@ impl App {
             return false;
         }
 
-        let last_refresh = *self.last_live_refresh.read().await;
+        let last_refresh = self.session.last_live_refresh().await;
         let poll_interval_secs = self.config.get().poll_interval_sec;
 
         let should_refresh = match last_refresh {
@@ -576,7 +478,7 @@ impl App {
             return false;
         }
 
-        if let Err(e) = self.load_followed_channels().await {
+        if let Err(e) = self.session.load_followed_channels().await {
             tracing::warn!("Failed to refresh followed channels: {}", e);
             false
         } else {
@@ -589,10 +491,8 @@ impl App {
         self.refresh_followed_streams().await;
         self.refresh_schedules_from_db().await;
         self.refresh_category_streams().await;
-        self.initial_load_done.store(true, Ordering::SeqCst);
-
-        // Set initial refresh time
-        *self.last_live_refresh.write().await = Some(Utc::now());
+        self.session.mark_initial_load_done();
+        self.session.record_live_refresh().await;
     }
 
     async fn refresh_followed_streams(&self) {
@@ -609,7 +509,7 @@ impl App {
         };
 
         // Update last successful refresh time
-        *self.last_live_refresh.write().await = Some(Utc::now());
+        self.session.record_live_refresh().await;
 
         // Write to state — this broadcasts the StreamsUpdated event
         self.state.set_followed_streams(streams).await;
@@ -703,111 +603,33 @@ impl App {
         }
     }
 
-    /// Handles login request
+    /// Handles a login request.
+    ///
+    /// Spawns the OAuth device flow in the background. On success the session
+    /// is initialized and `refresh_all_data` is called. On failure an error
+    /// notification is sent.
     pub async fn handle_login(&self) {
-        let flow = DeviceFlow::new(CLIENT_ID.to_string());
-
-        // Reset cancellation
         let _ = self.auth_cancel_tx.send(false);
-
-        let store = TokenStore::new().expect("Failed to create token store");
-        let client = self.client.clone();
-        let state = self.state.clone();
-        let db = self.db.clone();
-        let cfg = self.config.get();
-        let notifier_enabled = cfg.notify_on_live;
-        let schedule_before_now_min = cfg.schedule_before_now_min;
-        let schedule_lookahead_hours = cfg.schedule_lookahead_hours;
         let cancel_rx = self.auth_cancel_rx.clone();
-        let initial_load_done = self.initial_load_done.clone();
-        let last_live_refresh = self.last_live_refresh.clone();
+        let session = self.session.clone();
+        let app = self.clone();
 
         tokio::spawn(async move {
-            match flow
-                .authenticate(
-                    |_user_code, verification_uri| {
-                        // Open browser to verification URL
-                        if let Err(e) = open::that(verification_uri) {
-                            tracing::error!("Failed to open browser: {}", e);
-                        }
-                    },
-                    cancel_rx,
-                )
-                .await
-            {
-                Ok(token) => {
-                    // Save token
-                    if let Err(e) = store.save_token(&token) {
-                        tracing::error!("Failed to save token: {}", e);
-                    }
-
-                    // Initialize session
-                    client.set_access_token(token.access_token.clone()).await;
-                    client.set_user_id(token.user_id.clone()).await;
-
-                    state
-                        .set_authenticated(true, token.user_id.clone(), token.user_login.clone())
-                        .await;
-
-                    // Load followed channels and persist to DB
-                    if let Ok(follows) = client.get_all_followed_channels().await {
-                        if let Err(e) = db.sync_followed(&follows) {
-                            tracing::error!("Failed to sync followed to DB: {}", e);
-                        }
-                        if let Ok(ids) = db.get_followed_ids() {
-                            if let Err(e) = db.ensure_schedule_queue_entries(&ids) {
-                                tracing::error!("Failed to seed schedule queue: {}", e);
-                            }
-                        }
-                        state.set_followed_channels(follows).await;
-                    }
-
-                    // Initial data fetch
-                    if let Ok(streams) = client.get_followed_streams().await {
-                        state.set_followed_streams(streams).await;
-                    }
-
-                    // Show cached schedules from DB immediately
-                    let sched_now = Utc::now();
-                    let sched_start =
-                        sched_now - chrono::Duration::minutes(schedule_before_now_min as i64);
-                    let sched_end =
-                        sched_now + chrono::Duration::hours(schedule_lookahead_hours as i64);
-                    if let Ok(db_schedules) = db.get_upcoming_schedules(sched_start, sched_end) {
-                        state.set_scheduled_streams(db_schedules).await;
-                    }
-
-                    // Mark initial load done so notification listener starts firing
-                    initial_load_done.store(true, Ordering::SeqCst);
-
-                    // Set initial refresh time so polling knows when to next refresh
-                    *last_live_refresh.write().await = Some(Utc::now());
-
-                    tracing::info!("Logged in as {}", token.user_login);
+            match session.handle_login(cancel_rx).await {
+                Ok(()) => {
+                    app.refresh_all_data().await;
                 }
                 Err(e) => {
                     tracing::error!("Authentication failed: {}", e);
-                    let (err_tx, _) = mpsc::unbounded_channel();
-                    let (err_settings_tx, _) = mpsc::unbounded_channel();
-                    let notifier =
-                        DesktopNotifier::new(notifier_enabled, false, err_tx, err_settings_tx);
-                    let _ = notifier.error(&format!("Authentication failed: {}", e));
+                    let _ = app.notifier.error(&format!("Authentication failed: {}", e));
                 }
             }
         });
     }
 
-    /// Handles logout request
+    /// Handles a logout request.
     pub async fn handle_logout(&self) {
-        // Clear stored token
-        if let Err(e) = self.store.delete_token() {
-            tracing::error!("Failed to delete token: {}", e);
-        }
-
-        // Clear state — triggers menu rebuild via state change listener
-        self.state.clear().await;
-        self.client.clear_auth().await;
-        self.initial_load_done.store(false, Ordering::SeqCst);
+        self.session.handle_logout().await;
     }
 }
 
@@ -883,7 +705,6 @@ impl Clone for App {
         Self {
             state: self.state.clone(),
             config: ConfigManager::new().expect("Failed to create config manager"),
-            store: TokenStore::new().expect("Failed to create token store"),
             client: self.client.clone(),
             notifier: DesktopNotifier::new(
                 cfg.notify_on_live,
@@ -892,11 +713,9 @@ impl Clone for App {
                 self.settings_tx.clone(),
             ),
             db: self.db.clone(),
-            initial_load_done: self.initial_load_done.clone(),
+            session: self.session.clone(),
             auth_cancel_tx: self.auth_cancel_tx.clone(),
             auth_cancel_rx: self.auth_cancel_rx.clone(),
-            last_live_refresh: self.last_live_refresh.clone(),
-            refresh_mutex: self.refresh_mutex.clone(),
             snooze_tx: self.snooze_tx.clone(),
             snooze_rx: self.snooze_rx.clone(),
             settings_tx: self.settings_tx.clone(),
