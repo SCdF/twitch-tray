@@ -10,12 +10,12 @@ async fn state_tracks_newly_live_streams() {
     let mut rx = state.subscribe_streams();
 
     // Initial load
-    let stream_a = common::make_stream("a", "StreamerA", 1000);
+    let stream_a = common::make_stream("a", "StreamerA");
     state.set_followed_streams(vec![stream_a.clone()]).await;
     let _ = rx.recv().await;
 
     // New stream goes live
-    let stream_b = common::make_stream("b", "StreamerB", 2000);
+    let stream_b = common::make_stream("b", "StreamerB");
     state.set_followed_streams(vec![stream_a, stream_b]).await;
     let event = rx.recv().await.unwrap();
 
@@ -29,8 +29,8 @@ async fn state_tracks_no_new_streams_when_unchanged() {
     let mut rx = state.subscribe_streams();
 
     // Both streams live
-    let stream_a = common::make_stream("a", "StreamerA", 1000);
-    let stream_b = common::make_stream("b", "StreamerB", 2000);
+    let stream_a = common::make_stream("a", "StreamerA");
+    let stream_b = common::make_stream("b", "StreamerB");
     state
         .set_followed_streams(vec![stream_a.clone(), stream_b.clone()])
         .await;

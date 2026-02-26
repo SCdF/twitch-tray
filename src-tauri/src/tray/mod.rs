@@ -510,9 +510,10 @@ pub(crate) fn format_category_stream_label(s: &Stream) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::make_scheduled;
     use chrono::{Duration, Utc};
 
-    /// Helper to create a test stream
+    /// Helper to create a test stream with viewer count and age
     fn make_stream(user_name: &str, game_name: &str, viewer_count: i64, hours_ago: i64) -> Stream {
         Stream {
             id: "123".to_string(),
@@ -526,23 +527,6 @@ mod tests {
             started_at: Utc::now() - Duration::hours(hours_ago),
             thumbnail_url: "https://example.com/thumb.jpg".to_string(),
             tags: vec![],
-        }
-    }
-
-    /// Helper to create a scheduled stream
-    fn make_scheduled(broadcaster_name: &str, hours_until: i64) -> ScheduledStream {
-        ScheduledStream {
-            id: "sched123".to_string(),
-            broadcaster_id: "456".to_string(),
-            broadcaster_name: broadcaster_name.to_string(),
-            broadcaster_login: broadcaster_name.to_lowercase(),
-            title: "Scheduled Stream".to_string(),
-            start_time: Utc::now() + Duration::hours(hours_until),
-            end_time: None,
-            category: Some("Gaming".to_string()),
-            category_id: Some("123".to_string()),
-            is_recurring: false,
-            is_inferred: false,
         }
     }
 

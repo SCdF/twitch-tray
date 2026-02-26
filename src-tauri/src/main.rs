@@ -11,6 +11,9 @@ mod state;
 mod tray;
 mod twitch;
 
+#[cfg(test)]
+mod test_helpers;
+
 use std::sync::Arc;
 use tauri::{Listener, Manager};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};

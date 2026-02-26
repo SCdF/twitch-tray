@@ -291,8 +291,8 @@ impl<H: HttpClient> TwitchClient<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::make_stream;
     use crate::twitch::http::mock::MockHttpClient;
-    use chrono::{Duration, Utc};
 
     fn make_streams_response(streams: Vec<Stream>, cursor: Option<&str>) -> StreamsResponse {
         StreamsResponse {
@@ -300,22 +300,6 @@ mod tests {
             pagination: cursor.map(|c| Pagination {
                 cursor: Some(c.to_string()),
             }),
-        }
-    }
-
-    fn make_stream(user_id: &str, user_name: &str) -> Stream {
-        Stream {
-            id: format!("stream_{}", user_id),
-            user_id: user_id.to_string(),
-            user_login: user_name.to_lowercase(),
-            user_name: user_name.to_string(),
-            game_id: "game123".to_string(),
-            game_name: "Test Game".to_string(),
-            title: "Test Stream".to_string(),
-            viewer_count: 1000,
-            started_at: Utc::now() - Duration::hours(1),
-            thumbnail_url: "https://example.com/thumb.jpg".to_string(),
-            tags: vec![],
         }
     }
 

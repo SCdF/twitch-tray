@@ -260,41 +260,7 @@ impl Default for AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Duration, Utc};
-
-    /// Helper to create a test stream with a specific user_id
-    fn make_stream(user_id: &str, user_name: &str) -> Stream {
-        Stream {
-            id: format!("stream_{}", user_id),
-            user_id: user_id.to_string(),
-            user_login: user_name.to_lowercase(),
-            user_name: user_name.to_string(),
-            game_id: "game123".to_string(),
-            game_name: "Test Game".to_string(),
-            title: "Test Stream".to_string(),
-            viewer_count: 1000,
-            started_at: Utc::now() - Duration::hours(1),
-            thumbnail_url: "https://example.com/thumb.jpg".to_string(),
-            tags: vec![],
-        }
-    }
-
-    /// Helper to create a stream with a specific game
-    fn make_stream_with_game(user_id: &str, game_id: &str, game_name: &str) -> Stream {
-        Stream {
-            id: format!("stream_{}", user_id),
-            user_id: user_id.to_string(),
-            user_login: format!("user_{}", user_id),
-            user_name: format!("User {}", user_id),
-            game_id: game_id.to_string(),
-            game_name: game_name.to_string(),
-            title: "Test Stream".to_string(),
-            viewer_count: 1000,
-            started_at: Utc::now() - Duration::hours(1),
-            thumbnail_url: "https://example.com/thumb.jpg".to_string(),
-            tags: vec![],
-        }
-    }
+    use crate::test_helpers::{make_stream, make_stream_with_game};
 
     // === set_followed_streams change detection tests ===
 

@@ -7,3 +7,6 @@ pub mod notify;
 pub mod state;
 pub mod tray;
 pub mod twitch;
+
+#[cfg(test)]
+mod test_helpers;
