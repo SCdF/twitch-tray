@@ -1,29 +1,20 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use chrono::Utc;
 use tauri::{
     image::Image,
     menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     tray::{TrayIcon, TrayIconBuilder},
     AppHandle, Emitter, Manager, WebviewWindowBuilder,
 };
-use tokio::sync::Mutex;
 
-use crate::config::{FollowedCategory, StreamerSettings};
-use crate::display_state::{compute_display_state, DisplayConfig, DisplayState};
-use crate::state::AppState;
-use crate::twitch::Stream;
+use crate::display::DisplayBackend;
+use crate::display_state::DisplayState;
 
 const ICON_BYTES: &[u8] = include_bytes!("../../icons/icon.png");
 const ICON_GREY_BYTES: &[u8] = include_bytes!("../../icons/icon_grey.png");
 
 /// Width of the settings window in logical pixels
 const SETTINGS_WINDOW_SIZE: f64 = 975.0;
-/// Maximum streams shown directly in main menu before overflow submenu
-const LIVE_MAIN_MENU_LIMIT: usize = 10;
-/// Maximum scheduled streams shown directly in main menu before overflow submenu
-const SCHEDULE_MAIN_MENU_LIMIT: usize = 5;
 
 /// Menu item IDs
 mod ids {
@@ -51,119 +42,100 @@ fn load_icon(bytes: &[u8]) -> tauri::Result<Image<'static>> {
     Ok(Image::new_owned(buf, info.width, info.height))
 }
 
-/// Manages the system tray
+/// System tray adapter that implements [`DisplayBackend`].
+///
+/// This is the only type in the codebase that holds an `AppHandle`.
+/// All business logic lives in the domain core; `TrayBackend` is a thin
+/// adapter that converts a [`DisplayState`] into Tauri menu items.
 #[derive(Clone)]
-pub struct TrayManager {
-    state: Arc<AppState>,
-    /// Mutex to serialize menu rebuilds - prevents concurrent GTK operations
-    /// which can crash libayatana-appindicator on Linux
+pub struct TrayBackend {
+    app_handle: AppHandle,
+    /// Serialises menu rebuilds to prevent concurrent GTK operations which
+    /// can crash libayatana-appindicator on Linux.
     rebuild_lock: Arc<Mutex<()>>,
 }
 
-impl TrayManager {
-    /// Creates a new tray manager
-    pub fn new(state: Arc<AppState>) -> Self {
+impl TrayBackend {
+    /// Creates a new tray backend bound to the given app handle.
+    pub fn new(app_handle: AppHandle) -> Self {
         Self {
-            state,
+            app_handle,
             rebuild_lock: Arc::new(Mutex::new(())),
         }
     }
 
-    /// Creates the initial tray icon
-    pub fn create_tray(&self, app: &AppHandle) -> tauri::Result<TrayIcon> {
+    /// Creates the initial tray icon.
+    pub fn create_tray(&self) -> tauri::Result<TrayIcon> {
         let icon = load_icon(ICON_GREY_BYTES)?;
 
         let tray = TrayIconBuilder::with_id("main")
             .icon(icon)
             .tooltip("Twitch Tray")
             .show_menu_on_left_click(true)
-            .build(app)?;
+            .build(&self.app_handle)?;
 
         Ok(tray)
     }
+}
 
-    /// Rebuilds the menu with category data
+impl DisplayBackend for TrayBackend {
+    /// Renders the given display state as the tray menu.
     ///
-    /// This method serializes all menu rebuilds through a mutex to prevent
-    /// concurrent GTK operations which can crash libayatana-appindicator on Linux.
-    pub async fn rebuild_menu_with_categories(
-        &self,
-        app: &AppHandle,
-        followed_categories: Vec<FollowedCategory>,
-        category_streams: HashMap<String, Vec<Stream>>,
-        streamer_settings: HashMap<String, StreamerSettings>,
-        schedule_lookahead_hours: u64,
-    ) -> tauri::Result<()> {
-        // Acquire lock to serialize menu rebuilds - this prevents crashes from
-        // concurrent GTK operations in libayatana-appindicator
-        let _guard = self.rebuild_lock.lock().await;
+    /// Serialises all menu rebuilds through a mutex to prevent concurrent
+    /// GTK operations which can crash libayatana-appindicator on Linux.
+    fn update(&self, state: DisplayState) -> anyhow::Result<()> {
+        // Acquire lock to serialise menu rebuilds.
+        // std::sync::Mutex is fine here: no `.await` is held while locked.
+        let _guard = self.rebuild_lock.lock().unwrap_or_else(|e| e.into_inner());
 
-        let authenticated = self.state.is_authenticated().await;
-        let streams = self.state.get_followed_streams().await;
-        let scheduled = self.state.get_scheduled_streams().await;
-        let schedules_loaded = self.state.schedules_loaded().await;
+        let app_handle = self.app_handle.clone();
+        let authenticated = state.authenticated;
 
-        // Clone app handle for the closure
-        let app_handle = app.clone();
-
-        // Build and set menu on the main thread to avoid GTK threading issues
-        app.run_on_main_thread(move || {
-            let menu_result = if authenticated {
-                let display_state = compute_display_state(
-                    streams,
-                    scheduled,
-                    schedules_loaded,
-                    followed_categories,
-                    category_streams,
-                    &DisplayConfig {
-                        streamer_settings,
-                        schedule_lookahead_hours,
-                        live_limit: LIVE_MAIN_MENU_LIMIT,
-                        schedule_limit: SCHEDULE_MAIN_MENU_LIMIT,
-                    },
-                    Utc::now(),
-                );
-                render_display_state(&app_handle, display_state)
-            } else {
-                build_unauthenticated_menu(&app_handle)
-            };
-
-            let menu = match menu_result {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::error!("Failed to build menu: {}", e);
-                    return;
-                }
-            };
-
-            // Update the tray menu
-            if let Some(tray) = app_handle.tray_by_id("main") {
-                if let Err(e) = tray.set_menu(Some(menu)) {
-                    tracing::error!("Failed to set tray menu: {}", e);
-                    return;
-                }
-
-                // Update icon based on auth state
-                let icon_result = if authenticated {
-                    load_icon(ICON_BYTES)
+        // Build and set menu on the main thread to avoid GTK threading issues.
+        // Clone the handle so the closure can own it while we call the method on the original.
+        let app_handle_closure = app_handle.clone();
+        app_handle
+            .run_on_main_thread(move || {
+                let app_handle = app_handle_closure;
+                let menu_result = if authenticated {
+                    render_display_state(&app_handle, state)
                 } else {
-                    load_icon(ICON_GREY_BYTES)
+                    build_unauthenticated_menu(&app_handle)
                 };
 
-                match icon_result {
-                    Ok(icon) => {
-                        if let Err(e) = tray.set_icon(Some(icon)) {
-                            tracing::error!("Failed to set tray icon: {}", e);
+                let menu = match menu_result {
+                    Ok(m) => m,
+                    Err(e) => {
+                        tracing::error!("Failed to build menu: {}", e);
+                        return;
+                    }
+                };
+
+                if let Some(tray) = app_handle.tray_by_id("main") {
+                    if let Err(e) = tray.set_menu(Some(menu)) {
+                        tracing::error!("Failed to set tray menu: {}", e);
+                        return;
+                    }
+
+                    let icon_result = if authenticated {
+                        load_icon(ICON_BYTES)
+                    } else {
+                        load_icon(ICON_GREY_BYTES)
+                    };
+
+                    match icon_result {
+                        Ok(icon) => {
+                            if let Err(e) = tray.set_icon(Some(icon)) {
+                                tracing::error!("Failed to set tray icon: {}", e);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to load icon: {}", e);
                         }
                     }
-                    Err(e) => {
-                        tracing::error!("Failed to load icon: {}", e);
-                    }
                 }
-            }
-        })?;
-
-        Ok(())
+            })
+            .map_err(anyhow::Error::from)
     }
 }
 

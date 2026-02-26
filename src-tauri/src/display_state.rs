@@ -10,6 +10,11 @@ use crate::twitch::{format_viewer_count, ScheduledStream, Stream};
 /// and hidden from the schedule section.
 const LIVE_COVERS_SCHEDULE_WINDOW_MIN: i64 = 60;
 
+/// Maximum live streams shown directly in the main menu before the overflow submenu.
+pub const DEFAULT_LIVE_MENU_LIMIT: usize = 10;
+/// Maximum scheduled streams shown directly in the main menu before the overflow submenu.
+pub const DEFAULT_SCHEDULE_MENU_LIMIT: usize = 5;
+
 /// A live stream entry ready to be rendered.
 pub struct StreamEntry {
     pub stream: Stream,
@@ -49,14 +54,38 @@ pub struct CategorySection {
     pub entries: Vec<CategoryStreamEntry>,
 }
 
-/// The full computed display state for an authenticated menu.
+/// The full computed display state for the tray menu.
 ///
 /// This is a pure data type — no Tauri or GTK types. The render layer
 /// (`tray/mod.rs`) maps this into actual menu items.
+///
+/// When `authenticated` is false the render layer shows the login menu
+/// and the other fields are ignored.
 pub struct DisplayState {
+    pub authenticated: bool,
     pub live_section: LiveSection,
     pub schedule_section: ScheduleSection,
     pub category_sections: Vec<CategorySection>,
+}
+
+impl DisplayState {
+    /// A display state that renders as the "not logged in" menu.
+    pub fn unauthenticated() -> Self {
+        Self {
+            authenticated: false,
+            live_section: LiveSection {
+                visible: Vec::new(),
+                overflow: Vec::new(),
+            },
+            schedule_section: ScheduleSection {
+                header: String::new(),
+                visible: Vec::new(),
+                overflow: Vec::new(),
+                schedules_loaded: false,
+            },
+            category_sections: Vec::new(),
+        }
+    }
 }
 
 /// Configuration that governs how `compute_display_state` shapes the display.
@@ -255,6 +284,7 @@ pub fn compute_display_state(
     };
 
     DisplayState {
+        authenticated: true,
         live_section,
         schedule_section,
         category_sections,

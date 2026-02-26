@@ -6,6 +6,7 @@ mod auth;
 mod commands;
 mod config;
 mod db;
+mod display;
 mod display_state;
 mod notification_filter;
 mod notify;
@@ -22,7 +23,9 @@ use tauri::{Listener, Manager};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use crate::app::App;
-use crate::tray::handle_menu_event;
+use crate::display::DisplayBackend;
+use crate::display_state::DisplayState;
+use crate::tray::{handle_menu_event, TrayBackend};
 
 fn main() {
     // Initialize logging
@@ -49,10 +52,12 @@ fn main() {
             // Store the app in Tauri state for event handlers
             app.manage(application.clone());
 
+            // Create the tray backend (holds AppHandle — only Tauri-coupled display type)
+            let tray_backend = Arc::new(TrayBackend::new(app.handle().clone()));
+
             // Create the tray icon
-            let tray = application
-                .tray_manager
-                .create_tray(app.handle())
+            let tray = tray_backend
+                .create_tray()
                 .expect("Failed to create tray icon");
 
             // Set up menu event handler
@@ -63,22 +68,12 @@ fn main() {
             // Clone handles for async setup
             let app_handle = app.handle().clone();
             let app_clone = application.clone();
+            let tray_backend_clone = tray_backend.clone();
 
             // Spawn async initialization
             tauri::async_runtime::spawn(async move {
                 // Set initial menu immediately (unauthenticated state - no network needed)
-                let cfg = app_clone.config.get();
-                if let Err(e) = app_clone
-                    .tray_manager
-                    .rebuild_menu_with_categories(
-                        &app_handle,
-                        Vec::new(),
-                        std::collections::HashMap::new(),
-                        std::collections::HashMap::new(),
-                        cfg.schedule_lookahead_hours,
-                    )
-                    .await
-                {
+                if let Err(e) = tray_backend_clone.update(DisplayState::unauthenticated()) {
                     tracing::error!("Failed to build initial menu: {}", e);
                 }
 
@@ -94,7 +89,7 @@ fn main() {
                 }
 
                 // Start polling tasks (includes state change listener for menu updates)
-                app_clone.start_polling(app_handle.clone());
+                app_clone.start_polling(app_handle.clone(), tray_backend_clone);
 
                 // Fetch initial data in background - menu will update via state change listener
                 if app_clone.state.is_authenticated().await {

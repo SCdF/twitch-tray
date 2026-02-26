@@ -12,9 +12,12 @@ const SCHEDULE_DEDUP_WINDOW_SECS: i64 = 3600;
 use crate::auth::{DeviceFlow, Token, TokenStore, CLIENT_ID};
 use crate::config::ConfigManager;
 use crate::db::Database;
+use crate::display::DisplayBackend;
+use crate::display_state::{
+    compute_display_state, DisplayConfig, DEFAULT_LIVE_MENU_LIMIT, DEFAULT_SCHEDULE_MENU_LIMIT,
+};
 use crate::notify::{DesktopNotifier, Notifier, SnoozeRequest, StreamerSettingsRequest};
 use crate::state::AppState;
-use crate::tray::TrayManager;
 use crate::twitch::{ApiError, TwitchClient};
 
 /// Main application orchestrator
@@ -24,7 +27,6 @@ pub struct App {
     pub store: TokenStore,
     pub client: TwitchClient,
     pub notifier: DesktopNotifier,
-    pub tray_manager: TrayManager,
     pub db: Database,
 
     // Tracks if initial load is complete (don't notify until then)
@@ -67,7 +69,6 @@ impl App {
             settings_tx.clone(),
         );
         let client = TwitchClient::new(CLIENT_ID.to_string());
-        let tray_manager = TrayManager::new(state.clone());
         let db = Database::new(ConfigManager::config_dir()?.join("data.db"))?;
         let (auth_cancel_tx, auth_cancel_rx) = watch::channel(false);
 
@@ -77,7 +78,6 @@ impl App {
             store,
             client,
             notifier,
-            tray_manager,
             db,
             initial_load_done: Arc::new(AtomicBool::new(false)),
             auth_cancel_tx,
@@ -212,7 +212,11 @@ impl App {
     }
 
     /// Starts the polling tasks
-    pub fn start_polling(self: &Arc<Self>, app_handle: AppHandle) {
+    pub fn start_polling(
+        self: &Arc<Self>,
+        app_handle: AppHandle,
+        display: Arc<dyn DisplayBackend>,
+    ) {
         // Stream polling task - uses wall-clock time to handle sleep correctly
         let app = self.clone();
         tokio::spawn(async move {
@@ -363,7 +367,7 @@ impl App {
 
         // State change listener task — rebuilds menu on any state change
         let app = self.clone();
-        let handle = app_handle.clone();
+        let disp = display.clone();
 
         tokio::spawn(async move {
             let mut rx = app.state.subscribe();
@@ -384,19 +388,32 @@ impl App {
                 // window don't trigger another immediate rebuild.
                 let _ = *rx.borrow_and_update();
 
-                let cfg = app.config.get();
-                let category_streams = app.state.get_category_streams().await;
-                if let Err(e) = app
-                    .tray_manager
-                    .rebuild_menu_with_categories(
-                        &handle,
+                let authenticated = app.state.is_authenticated().await;
+                let display_state = if authenticated {
+                    let streams = app.state.get_followed_streams().await;
+                    let scheduled = app.state.get_scheduled_streams().await;
+                    let schedules_loaded = app.state.schedules_loaded().await;
+                    let cfg = app.config.get();
+                    let category_streams = app.state.get_category_streams().await;
+                    compute_display_state(
+                        streams,
+                        scheduled,
+                        schedules_loaded,
                         cfg.followed_categories,
                         category_streams,
-                        cfg.streamer_settings,
-                        cfg.schedule_lookahead_hours,
+                        &DisplayConfig {
+                            streamer_settings: cfg.streamer_settings,
+                            schedule_lookahead_hours: cfg.schedule_lookahead_hours,
+                            live_limit: DEFAULT_LIVE_MENU_LIMIT,
+                            schedule_limit: DEFAULT_SCHEDULE_MENU_LIMIT,
+                        },
+                        Utc::now(),
                     )
-                    .await
-                {
+                } else {
+                    crate::display_state::DisplayState::unauthenticated()
+                };
+
+                if let Err(e) = disp.update(display_state) {
                     tracing::error!("Failed to rebuild menu on state change: {}", e);
                 }
             }
@@ -842,7 +859,6 @@ impl Clone for App {
                 self.snooze_tx.clone(),
                 self.settings_tx.clone(),
             ),
-            tray_manager: self.tray_manager.clone(),
             db: self.db.clone(),
             initial_load_done: self.initial_load_done.clone(),
             auth_cancel_tx: self.auth_cancel_tx.clone(),
