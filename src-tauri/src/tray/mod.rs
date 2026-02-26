@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 use crate::config::{FollowedCategory, StreamerImportance, StreamerSettings};
 use crate::notify::truncate;
 use crate::state::AppState;
-use crate::twitch::{ScheduledStream, Stream};
+use crate::twitch::{format_viewer_count, ScheduledStream, Stream};
 
 const ICON_BYTES: &[u8] = include_bytes!("../../icons/icon.png");
 const ICON_GREY_BYTES: &[u8] = include_bytes!("../../icons/icon_grey.png");
@@ -505,20 +505,6 @@ pub(crate) fn format_scheduled_label_with_star(s: &ScheduledStream, star: bool) 
 /// Format: "StreamerName (1.2k)"
 pub(crate) fn format_category_stream_label(s: &Stream) -> String {
     format!("{} ({})", s.user_name, s.format_viewer_count())
-}
-
-/// Formats a viewer count with k suffix for thousands
-fn format_viewer_count(count: i64) -> String {
-    if count >= 1000 {
-        let k = count as f64 / 1000.0;
-        if k.fract() < 0.05 {
-            format!("{}k", k as i64)
-        } else {
-            format!("{:.1}k", k)
-        }
-    } else {
-        count.to_string()
-    }
 }
 
 #[cfg(test)]

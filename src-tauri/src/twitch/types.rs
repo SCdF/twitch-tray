@@ -18,6 +18,20 @@ pub struct Stream {
     pub tags: Vec<String>,
 }
 
+/// Formats a viewer count with k suffix for thousands
+pub fn format_viewer_count(count: i64) -> String {
+    if count >= 1000 {
+        let k = count as f64 / 1000.0;
+        if k.fract() < 0.05 {
+            format!("{}k", k as i64)
+        } else {
+            format!("{:.1}k", k)
+        }
+    } else {
+        count.to_string()
+    }
+}
+
 impl Stream {
     /// Returns the Twitch channel URL
     pub fn channel_url(&self) -> String {
@@ -44,16 +58,7 @@ impl Stream {
 
     /// Returns a formatted viewer count
     pub fn format_viewer_count(&self) -> String {
-        if self.viewer_count >= 1000 {
-            let k = self.viewer_count as f64 / 1000.0;
-            if k.fract() < 0.05 {
-                format!("{}k", k as i64)
-            } else {
-                format!("{:.1}k", k)
-            }
-        } else {
-            self.viewer_count.to_string()
-        }
+        format_viewer_count(self.viewer_count)
     }
 }
 
