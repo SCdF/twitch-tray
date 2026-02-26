@@ -166,14 +166,7 @@ impl App {
         F: Fn() -> Fut,
         Fut: std::future::Future<Output = Result<T, ApiError>>,
     {
-        match f().await {
-            Ok(val) => Ok(val),
-            Err(ApiError::Unauthorized) => {
-                self.try_refresh_token().await.map_err(ApiError::Other)?;
-                f().await
-            }
-            Err(e) => Err(e),
-        }
+        crate::twitch::with_retry(f, || self.try_refresh_token()).await
     }
 
     /// Attempts to refresh the OAuth token
