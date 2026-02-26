@@ -27,12 +27,6 @@ This is the only file a human has edited.
 
 
 - inferred magic schedules
-- audit our API usage and make sure we are abusing the API the minimum amount. We should find out live list once a minute and no more.
-- refactor all places we are querying the api and deal with retries and auth / refresh keys centrally.
-- general refactor of how refreshing is done to decouple data loading with reacting to data changing
-- better schedule. Currently we only check the "first" 50. Instead, how about we check everyone once every 24hrs, with a max of 10 a minute, drip fed into the database. It's not going to change that much, and we can cache and cover everything. menu should also update schedule much fast once it's decoupled, we shouldn't see schduled streams for overnight when we wake up
-- make sure we are detecting wake ups and instantly refreshing if we've been asleep. This should be magic if we schedule our refreshes on a timer?
-- consider a schdeuled stream live if the streamer is live within 60min of the schedule time
 
 ## Done:
 
@@ -68,3 +62,9 @@ make: *** [Makefile:26: run] Aborted (core dumped)
 thread 'tokio-runtime-worker' (242242) panicked at src/notify.rs:185:28:
 byte index 47 is not a char boundary; it is inside '👺' (bytes 44..48) of `👺IM BACK👺IN QATAR👺PARTIAL SHUTDOWN?👺EPSTEIN REVEALS POG👺YANIS VAROUFAKIS👺 !guest`
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+- audit our API usage and make sure we are abusing the API the minimum amount. We should find out live list once a minute and no more.
+- refactor all places we are querying the api and deal with retries and auth / refresh keys centrally.
+- general refactor of how refreshing is done to decouple data loading with reacting to data changing
+- better schedule. Currently we only check the "first" 50. Instead, how about we check everyone once every 24hrs, with a max of 10 a minute, drip fed into the database. It's not going to change that much, and we can cache and cover everything. menu should also update schedule much fast once it's decoupled, we shouldn't see schduled streams for overnight when we wake up
+- make sure we are detecting wake ups and instantly refreshing if we've been asleep. This should be magic if we schedule our refreshes on a timer?
+- consider a schdeuled stream live if the streamer is live within 60min of the schedule time

@@ -100,7 +100,7 @@ impl DesktopNotifier {
             .summary(title)
             .body(message)
             .appname(APP_NAME)
-            .timeout(5000);
+            .timeout(10000);
 
         // Set notification category if provided (freedesktop.org spec)
         // This allows users to configure different notification behaviors per category
