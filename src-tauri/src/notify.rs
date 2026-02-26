@@ -9,6 +9,8 @@ use tokio::sync::mpsc;
 use crate::twitch::Stream;
 
 const APP_NAME: &str = "Twitch Tray";
+const NOTIFICATION_TIMEOUT_MS: i32 = 10_000;
+const SNOOZE_DURATION_MIN: i64 = 10;
 
 /// A request to snooze a stream notification and re-notify after a delay
 #[derive(Debug, Clone)]
@@ -100,7 +102,7 @@ impl DesktopNotifier {
             .summary(title)
             .body(message)
             .appname(APP_NAME)
-            .timeout(10000);
+            .timeout(NOTIFICATION_TIMEOUT_MS);
 
         // Set notification category if provided (freedesktop.org spec)
         // This allows users to configure different notification behaviors per category
@@ -128,7 +130,7 @@ impl DesktopNotifier {
                             let request = SnoozeRequest {
                                 user_id: info.user_id.clone(),
                                 user_name: info.user_name.clone(),
-                                remind_at: Utc::now() + Duration::minutes(10),
+                                remind_at: Utc::now() + Duration::minutes(SNOOZE_DURATION_MIN),
                             };
                             let _ = info.snooze_tx.send(request);
                         }

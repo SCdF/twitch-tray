@@ -7,6 +7,17 @@ use std::sync::RwLock;
 const APP_NAME: &str = "twitch-tray";
 const CONFIG_FILE: &str = "config.json";
 
+// Default values as named constants — referenceable from tests and other modules
+pub const DEFAULT_POLL_INTERVAL_SEC: u64 = 60;
+pub const DEFAULT_NOTIFY_ON_LIVE: bool = true;
+pub const DEFAULT_NOTIFY_ON_CATEGORY: bool = true;
+pub const DEFAULT_NOTIFY_MAX_GAP_MIN: u64 = 10;
+pub const DEFAULT_SCHEDULE_STALE_HOURS: u64 = 24;
+pub const DEFAULT_SCHEDULE_CHECK_INTERVAL_SEC: u64 = 10;
+pub const DEFAULT_FOLLOWED_REFRESH_MIN: u64 = 15;
+pub const DEFAULT_SCHEDULE_LOOKAHEAD_HOURS: u64 = 6;
+pub const DEFAULT_SCHEDULE_BEFORE_NOW_MIN: u64 = 30;
+
 /// Importance level for a streamer, affecting display and notifications
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -72,53 +83,53 @@ pub struct Config {
 }
 
 fn default_poll_interval() -> u64 {
-    60
+    DEFAULT_POLL_INTERVAL_SEC
 }
 
 fn default_notify_on_live() -> bool {
-    true
+    DEFAULT_NOTIFY_ON_LIVE
 }
 
 fn default_notify_on_category() -> bool {
-    true
+    DEFAULT_NOTIFY_ON_CATEGORY
 }
 
 fn default_notify_max_gap() -> u64 {
-    10
+    DEFAULT_NOTIFY_MAX_GAP_MIN
 }
 
 fn default_schedule_stale_hours() -> u64 {
-    24
+    DEFAULT_SCHEDULE_STALE_HOURS
 }
 
 fn default_schedule_check_interval() -> u64 {
-    10
+    DEFAULT_SCHEDULE_CHECK_INTERVAL_SEC
 }
 
 fn default_followed_refresh() -> u64 {
-    15
+    DEFAULT_FOLLOWED_REFRESH_MIN
 }
 
 fn default_schedule_lookahead() -> u64 {
-    6
+    DEFAULT_SCHEDULE_LOOKAHEAD_HOURS
 }
 
 fn default_schedule_before_now() -> u64 {
-    30
+    DEFAULT_SCHEDULE_BEFORE_NOW_MIN
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            poll_interval_sec: default_poll_interval(),
-            notify_on_live: default_notify_on_live(),
-            notify_on_category: default_notify_on_category(),
-            notify_max_gap_min: default_notify_max_gap(),
-            schedule_stale_hours: default_schedule_stale_hours(),
-            schedule_check_interval_sec: default_schedule_check_interval(),
-            followed_refresh_min: default_followed_refresh(),
-            schedule_lookahead_hours: default_schedule_lookahead(),
-            schedule_before_now_min: default_schedule_before_now(),
+            poll_interval_sec: DEFAULT_POLL_INTERVAL_SEC,
+            notify_on_live: DEFAULT_NOTIFY_ON_LIVE,
+            notify_on_category: DEFAULT_NOTIFY_ON_CATEGORY,
+            notify_max_gap_min: DEFAULT_NOTIFY_MAX_GAP_MIN,
+            schedule_stale_hours: DEFAULT_SCHEDULE_STALE_HOURS,
+            schedule_check_interval_sec: DEFAULT_SCHEDULE_CHECK_INTERVAL_SEC,
+            followed_refresh_min: DEFAULT_FOLLOWED_REFRESH_MIN,
+            schedule_lookahead_hours: DEFAULT_SCHEDULE_LOOKAHEAD_HOURS,
+            schedule_before_now_min: DEFAULT_SCHEDULE_BEFORE_NOW_MIN,
             followed_categories: Vec::new(),
             streamer_settings: HashMap::new(),
         }
@@ -190,55 +201,64 @@ mod tests {
     #[test]
     fn default_poll_interval_is_60() {
         let config = Config::default();
-        assert_eq!(config.poll_interval_sec, 60);
+        assert_eq!(config.poll_interval_sec, DEFAULT_POLL_INTERVAL_SEC);
     }
 
     #[test]
     fn default_schedule_stale_hours_is_24() {
         let config = Config::default();
-        assert_eq!(config.schedule_stale_hours, 24);
+        assert_eq!(config.schedule_stale_hours, DEFAULT_SCHEDULE_STALE_HOURS);
     }
 
     #[test]
     fn default_schedule_check_interval_is_10() {
         let config = Config::default();
-        assert_eq!(config.schedule_check_interval_sec, 10);
+        assert_eq!(
+            config.schedule_check_interval_sec,
+            DEFAULT_SCHEDULE_CHECK_INTERVAL_SEC
+        );
     }
 
     #[test]
     fn default_followed_refresh_is_15() {
         let config = Config::default();
-        assert_eq!(config.followed_refresh_min, 15);
+        assert_eq!(config.followed_refresh_min, DEFAULT_FOLLOWED_REFRESH_MIN);
     }
 
     #[test]
     fn default_schedule_lookahead_is_6() {
         let config = Config::default();
-        assert_eq!(config.schedule_lookahead_hours, 6);
+        assert_eq!(
+            config.schedule_lookahead_hours,
+            DEFAULT_SCHEDULE_LOOKAHEAD_HOURS
+        );
     }
 
     #[test]
     fn default_schedule_before_now_is_30() {
         let config = Config::default();
-        assert_eq!(config.schedule_before_now_min, 30);
+        assert_eq!(
+            config.schedule_before_now_min,
+            DEFAULT_SCHEDULE_BEFORE_NOW_MIN
+        );
     }
 
     #[test]
     fn default_notify_on_live_is_true() {
         let config = Config::default();
-        assert!(config.notify_on_live);
+        assert_eq!(config.notify_on_live, DEFAULT_NOTIFY_ON_LIVE);
     }
 
     #[test]
     fn default_notify_on_category_is_true() {
         let config = Config::default();
-        assert!(config.notify_on_category);
+        assert_eq!(config.notify_on_category, DEFAULT_NOTIFY_ON_CATEGORY);
     }
 
     #[test]
     fn default_notify_max_gap_is_10() {
         let config = Config::default();
-        assert_eq!(config.notify_max_gap_min, 10);
+        assert_eq!(config.notify_max_gap_min, DEFAULT_NOTIFY_MAX_GAP_MIN);
     }
 
     #[test]
@@ -265,15 +285,24 @@ mod tests {
         let json = "{}";
         let config: Config = serde_json::from_str(json).unwrap();
 
-        assert_eq!(config.poll_interval_sec, 60);
-        assert!(config.notify_on_live);
-        assert!(config.notify_on_category);
-        assert_eq!(config.notify_max_gap_min, 10);
-        assert_eq!(config.schedule_stale_hours, 24);
-        assert_eq!(config.schedule_check_interval_sec, 10);
-        assert_eq!(config.followed_refresh_min, 15);
-        assert_eq!(config.schedule_lookahead_hours, 6);
-        assert_eq!(config.schedule_before_now_min, 30);
+        assert_eq!(config.poll_interval_sec, DEFAULT_POLL_INTERVAL_SEC);
+        assert_eq!(config.notify_on_live, DEFAULT_NOTIFY_ON_LIVE);
+        assert_eq!(config.notify_on_category, DEFAULT_NOTIFY_ON_CATEGORY);
+        assert_eq!(config.notify_max_gap_min, DEFAULT_NOTIFY_MAX_GAP_MIN);
+        assert_eq!(config.schedule_stale_hours, DEFAULT_SCHEDULE_STALE_HOURS);
+        assert_eq!(
+            config.schedule_check_interval_sec,
+            DEFAULT_SCHEDULE_CHECK_INTERVAL_SEC
+        );
+        assert_eq!(config.followed_refresh_min, DEFAULT_FOLLOWED_REFRESH_MIN);
+        assert_eq!(
+            config.schedule_lookahead_hours,
+            DEFAULT_SCHEDULE_LOOKAHEAD_HOURS
+        );
+        assert_eq!(
+            config.schedule_before_now_min,
+            DEFAULT_SCHEDULE_BEFORE_NOW_MIN
+        );
         assert!(config.followed_categories.is_empty());
         assert!(config.streamer_settings.is_empty());
     }

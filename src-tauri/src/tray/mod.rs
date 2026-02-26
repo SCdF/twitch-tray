@@ -18,6 +18,15 @@ use crate::twitch::{ScheduledStream, Stream};
 const ICON_BYTES: &[u8] = include_bytes!("../../icons/icon.png");
 const ICON_GREY_BYTES: &[u8] = include_bytes!("../../icons/icon_grey.png");
 
+/// Scheduled stream within this many minutes of now is "covered" by a live stream
+const LIVE_COVERS_SCHEDULE_WINDOW_MIN: i64 = 60;
+/// Width of the settings window in logical pixels
+const SETTINGS_WINDOW_SIZE: f64 = 975.0;
+/// Maximum streams shown directly in main menu before overflow submenu
+const LIVE_MAIN_MENU_LIMIT: usize = 10;
+/// Maximum scheduled streams shown directly in main menu before overflow submenu
+const SCHEDULE_MAIN_MENU_LIMIT: usize = 5;
+
 /// Menu item IDs
 mod ids {
     pub const LOGIN: &str = "login";
@@ -172,7 +181,7 @@ pub fn open_settings_window(app: &AppHandle) {
     // Create new settings window
     match WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::App("index.html".into()))
         .title("Twitch Tray Settings")
-        .inner_size(975.0, 975.0)
+        .inner_size(SETTINGS_WINDOW_SIZE, SETTINGS_WINDOW_SIZE)
         .resizable(true)
         .center()
         .build()
@@ -197,7 +206,7 @@ pub fn open_streamer_settings_window(app: &AppHandle, user_login: &str, display_
 
     match WebviewWindowBuilder::new(app, &window_id, tauri::WebviewUrl::App(url.into()))
         .title(&title)
-        .inner_size(975.0, 975.0)
+        .inner_size(SETTINGS_WINDOW_SIZE, SETTINGS_WINDOW_SIZE)
         .resizable(true)
         .center()
         .build()
@@ -271,10 +280,8 @@ fn build_authenticated_menu(
             b_fav.cmp(&a_fav).then(b.viewer_count.cmp(&a.viewer_count))
         });
 
-        // Show top 10 in main menu
-        const MAIN_MENU_LIMIT: usize = 10;
-        let (show_in_main, overflow) = if streams.len() > MAIN_MENU_LIMIT {
-            let (main, over) = streams.split_at(MAIN_MENU_LIMIT);
+        let (show_in_main, overflow) = if streams.len() > LIVE_MAIN_MENU_LIMIT {
+            let (main, over) = streams.split_at(LIVE_MAIN_MENU_LIMIT);
             (main.to_vec(), over.to_vec())
         } else {
             (streams, Vec::new())
@@ -348,7 +355,7 @@ fn build_authenticated_menu(
     }
 
     // === Scheduled section ===
-    let soon_threshold = Utc::now() + Duration::minutes(60);
+    let soon_threshold = Utc::now() + Duration::minutes(LIVE_COVERS_SCHEDULE_WINDOW_MIN);
 
     // Filter out Ignore streamers AND scheduled streams for broadcasters
     // who are currently live with a start time within the next 60 minutes
@@ -381,10 +388,8 @@ fn build_authenticated_menu(
             MenuItemBuilder::new(label).enabled(false).build(app)?,
         ));
     } else {
-        // Show top 5 in main menu
-        const MAIN_MENU_LIMIT: usize = 5;
-        let (show_in_main, overflow) = if scheduled.len() > MAIN_MENU_LIMIT {
-            let (main, over) = scheduled.split_at(MAIN_MENU_LIMIT);
+        let (show_in_main, overflow) = if scheduled.len() > SCHEDULE_MAIN_MENU_LIMIT {
+            let (main, over) = scheduled.split_at(SCHEDULE_MAIN_MENU_LIMIT);
             (main.to_vec(), over.to_vec())
         } else {
             (scheduled, Vec::new())

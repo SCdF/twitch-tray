@@ -6,6 +6,9 @@ use tauri::AppHandle;
 use tokio::sync::{mpsc, watch, Mutex, RwLock};
 use tokio::time::Duration;
 
+/// Within this many seconds, an inferred schedule is considered a duplicate of an API schedule
+const SCHEDULE_DEDUP_WINDOW_SECS: i64 = 3600;
+
 use crate::auth::{DeviceFlow, Token, TokenStore, CLIENT_ID};
 use crate::config::{ConfigManager, StreamerImportance};
 use crate::db::Database;
@@ -669,7 +672,8 @@ impl App {
                         .filter(|inf| {
                             !combined.iter().any(|api| {
                                 api.broadcaster_id == inf.broadcaster_id
-                                    && (api.start_time - inf.start_time).num_seconds().abs() <= 3600
+                                    && (api.start_time - inf.start_time).num_seconds().abs()
+                                        <= SCHEDULE_DEDUP_WINDOW_SECS
                             })
                         })
                         .collect();
