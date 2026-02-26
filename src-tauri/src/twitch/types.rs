@@ -11,7 +11,7 @@ pub struct Stream {
     pub game_id: String,
     pub game_name: String,
     pub title: String,
-    pub viewer_count: i64,
+    pub viewer_count: u32,
     pub started_at: DateTime<Utc>,
     pub thumbnail_url: String,
     #[serde(default)]
@@ -19,11 +19,11 @@ pub struct Stream {
 }
 
 /// Formats a viewer count with k suffix for thousands
-pub fn format_viewer_count(count: i64) -> String {
+pub fn format_viewer_count(count: u32) -> String {
     if count >= 1000 {
         let k = count as f64 / 1000.0;
         if k.fract() < 0.05 {
-            format!("{}k", k as i64)
+            format!("{}k", k as u32)
         } else {
             format!("{:.1}k", k)
         }
@@ -193,7 +193,7 @@ mod tests {
     use chrono::{Duration, TimeZone};
 
     /// Helper to create a test stream with specified viewer count
-    fn stream_with_viewers(viewer_count: i64) -> Stream {
+    fn stream_with_viewers(viewer_count: u32) -> Stream {
         Stream {
             id: "123".to_string(),
             user_id: "456".to_string(),

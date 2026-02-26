@@ -329,7 +329,7 @@ fn build_authenticated_menu(
                     sorted_streams.truncate(10);
 
                     // Sum total viewers from the streams we have
-                    let total_viewers: i64 = sorted_streams.iter().map(|s| s.viewer_count).sum();
+                    let total_viewers: u32 = sorted_streams.iter().map(|s| s.viewer_count).sum();
                     let label =
                         format!("{} ({})", category.name, format_viewer_count(total_viewers));
 
@@ -508,7 +508,7 @@ mod tests {
     use chrono::{Duration, Utc};
 
     /// Helper to create a test stream with viewer count and age
-    fn make_stream(user_name: &str, game_name: &str, viewer_count: i64, hours_ago: i64) -> Stream {
+    fn make_stream(user_name: &str, game_name: &str, viewer_count: u32, hours_ago: i64) -> Stream {
         Stream {
             id: "123".to_string(),
             user_id: "456".to_string(),
