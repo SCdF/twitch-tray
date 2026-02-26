@@ -6,6 +6,8 @@ pub mod auth;
 pub mod config;
 pub mod display;
 pub mod display_state;
+pub mod notification_dispatcher;
+pub mod notification_filter;
 pub mod notify;
 pub mod state;
 pub mod tray;

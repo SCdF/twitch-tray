@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tauri::AppHandle;
 use tokio::sync::{mpsc, watch, Mutex};
@@ -14,6 +13,7 @@ use crate::display::DisplayBackend;
 use crate::display_state::{
     compute_display_state, DisplayConfig, DEFAULT_LIVE_MENU_LIMIT, DEFAULT_SCHEDULE_MENU_LIMIT,
 };
+use crate::notification_dispatcher::NotificationDispatcher;
 use crate::notify::{DesktopNotifier, Notifier, SnoozeRequest, StreamerSettingsRequest};
 use crate::schedule_walker::ScheduleWalker;
 use crate::session::SessionManager;
@@ -25,7 +25,7 @@ pub struct App {
     pub state: Arc<AppState>,
     pub config: ConfigManager,
     pub client: TwitchClient,
-    pub notifier: DesktopNotifier,
+    pub notifier: Arc<dyn Notifier>,
     pub db: Database,
 
     // Auth lifecycle (session restore, login, logout, token refresh)
@@ -33,6 +33,9 @@ pub struct App {
 
     // Schedule queue walker
     walker: Arc<ScheduleWalker>,
+
+    // Notification dispatcher
+    dispatcher: Arc<NotificationDispatcher>,
 
     // Cancellation for auth flow
     auth_cancel_tx: watch::Sender<bool>,
@@ -58,12 +61,12 @@ impl App {
         let cfg = config.get();
         let (snooze_tx, snooze_rx) = mpsc::unbounded_channel();
         let (settings_tx, settings_rx) = mpsc::unbounded_channel();
-        let notifier = DesktopNotifier::new(
+        let notifier: Arc<dyn Notifier> = Arc::new(DesktopNotifier::new(
             cfg.notify_on_live,
             cfg.notify_on_category,
             snooze_tx.clone(),
             settings_tx.clone(),
-        );
+        ));
         let client = TwitchClient::new(CLIENT_ID.to_string());
         let db = Database::new(ConfigManager::config_dir()?.join("data.db"))?;
         let (auth_cancel_tx, auth_cancel_rx) = watch::channel(false);
@@ -86,6 +89,12 @@ impl App {
             session.clone(),
         ));
 
+        let dispatcher = Arc::new(NotificationDispatcher::new(
+            notifier.clone(),
+            ConfigManager::new()?,
+            session.initial_load_done.clone(),
+        ));
+
         Ok(Self {
             state,
             config,
@@ -94,6 +103,7 @@ impl App {
             db,
             session,
             walker,
+            dispatcher,
             auth_cancel_tx,
             auth_cancel_rx,
             snooze_tx,
@@ -316,49 +326,9 @@ impl App {
         });
 
         // Notification listener task — reacts to stream update events
-        let app = self.clone();
-        tokio::spawn(async move {
-            let mut rx = app.state.subscribe_streams();
-            let mut last_event_time: Option<DateTime<Utc>> = None;
-
-            loop {
-                match rx.recv().await {
-                    Ok(event) => {
-                        let now = Utc::now();
-                        let cfg = app.config.get();
-                        let decision = crate::notification_filter::filter_notifications(
-                            &event,
-                            last_event_time,
-                            now,
-                            cfg.notify_max_gap_min * 60,
-                            app.session.initial_load_done.load(Ordering::SeqCst),
-                            &cfg.streamer_settings,
-                        );
-                        last_event_time = Some(now);
-
-                        for stream in decision.streams_to_notify {
-                            if let Err(e) = app.notifier.stream_live(&stream) {
-                                tracing::error!("Notification error: {}", e);
-                            }
-                        }
-                        for change in decision.categories_to_notify {
-                            if let Err(e) = app
-                                .notifier
-                                .category_changed(&change.stream, &change.old_category)
-                            {
-                                tracing::error!("Notification error: {}", e);
-                            }
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!("Notification listener lagged by {} events", n);
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        break;
-                    }
-                }
-            }
-        });
+        self.dispatcher
+            .clone()
+            .start(self.state.subscribe_streams());
 
         // History recording listener task — records stream data on every update
         let app = self.clone();
@@ -570,20 +540,15 @@ impl AppServices for App {
 
 impl Clone for App {
     fn clone(&self) -> Self {
-        let cfg = self.config.get();
         Self {
             state: self.state.clone(),
             config: ConfigManager::new().expect("Failed to create config manager"),
             client: self.client.clone(),
-            notifier: DesktopNotifier::new(
-                cfg.notify_on_live,
-                cfg.notify_on_category,
-                self.snooze_tx.clone(),
-                self.settings_tx.clone(),
-            ),
+            notifier: self.notifier.clone(),
             db: self.db.clone(),
             session: self.session.clone(),
             walker: self.walker.clone(),
+            dispatcher: self.dispatcher.clone(),
             auth_cancel_tx: self.auth_cancel_tx.clone(),
             auth_cancel_rx: self.auth_cancel_rx.clone(),
             snooze_tx: self.snooze_tx.clone(),

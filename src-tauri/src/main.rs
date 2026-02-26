@@ -9,6 +9,7 @@ mod config;
 mod db;
 mod display;
 mod display_state;
+mod notification_dispatcher;
 mod notification_filter;
 mod notify;
 mod schedule_inference;
