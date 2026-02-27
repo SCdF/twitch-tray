@@ -11,27 +11,51 @@ twitch-tray/
 │   ├── tauri.conf.json
 │   ├── build.rs
 │   ├── icons/
-│   │   ├── icon.png           # Tray icon (64x64 RGBA)
-│   │   └── icon_grey.png      # Dimmed icon for unauthenticated state
-│   └── src/
-│       ├── main.rs            # Entry point, Tauri setup
-│       ├── app.rs             # Lifecycle, polling, session management
-│       ├── auth/
-│       │   ├── mod.rs
-│       │   ├── store.rs       # Keyring token storage
-│       │   └── deviceflow.rs  # OAuth Device Code Flow
-│       ├── twitch/
-│       │   ├── mod.rs
-│       │   ├── client.rs      # reqwest-based Helix client
-│       │   └── types.rs       # Stream, ScheduledStream structs
-│       ├── state.rs           # Central state, change detection
-│       ├── config.rs          # XDG config management
-│       ├── tray.rs            # Tray icon + menu construction
-│       └── notify.rs          # Desktop notifications
-├── src/                       # Frontend (empty - tray-only app)
+│   │   ├── icon.png                    # Tray icon (64x64 RGBA)
+│   │   └── icon_grey.png               # Dimmed icon for unauthenticated state
+│   ├── src/
+│   │   ├── main.rs                     # Entry point, Tauri setup
+│   │   ├── lib.rs                      # Library root, module declarations
+│   │   ├── app.rs                      # Thin wiring layer; implements AppServices
+│   │   ├── commands.rs                 # Tauri command handlers (thin adapters)
+│   │   ├── state.rs                    # AppState: thread-safe view of live data
+│   │   ├── config.rs                   # ConfigManager, Config, named defaults
+│   │   ├── db.rs                       # Database: SQLite persistence (no domain logic)
+│   │   ├── notify.rs                   # DesktopNotifier: implements Notifier trait
+│   │   ├── test_helpers.rs             # Shared test helper types (cfg(test))
+│   │   │
+│   │   ├── # Domain logic (no Tauri/GTK imports)
+│   │   ├── display_state.rs            # DisplayState, compute_display_state()
+│   │   ├── notification_filter.rs      # Pure notification suppression policy
+│   │   ├── schedule_inference.rs       # Pure schedule inference algorithm
+│   │   │
+│   │   ├── # Output ports (traits)
+│   │   ├── display.rs                  # DisplayBackend trait + RecordingDisplayBackend
+│   │   ├── app_services.rs             # AppServices trait + MockAppServices
+│   │   │
+│   │   ├── # Orchestration
+│   │   ├── session.rs                  # SessionManager: auth lifecycle
+│   │   ├── schedule_walker.rs          # ScheduleWalker: schedule queue
+│   │   ├── notification_dispatcher.rs  # NotificationDispatcher: event → notify
+│   │   │
+│   │   ├── auth/
+│   │   │   ├── mod.rs                  # CLIENT_ID constant, module declarations
+│   │   │   ├── store.rs                # Keyring token storage
+│   │   │   └── deviceflow.rs          # OAuth Device Code Flow
+│   │   ├── tray/
+│   │   │   └── mod.rs                  # TrayBackend: implements DisplayBackend (AppHandle lives here only)
+│   │   └── twitch/
+│   │       ├── mod.rs                  # with_retry helper, re-exports
+│   │       ├── http.rs                 # HttpClient trait, ReqwestClient, MockHttpClient
+│   │       ├── client.rs               # TwitchClient: reqwest-based Helix API client
+│   │       └── types.rs                # Stream, ScheduledStream, FollowedChannel, etc.
+│   └── tests/
+│       └── common/
+│           └── mod.rs                  # Integration test helpers (make_stream, etc.)
+├── src/                                # Frontend (empty - tray-only app)
 ├── .github/workflows/
-│   ├── ci.yml                 # Clippy, tests on every push
-│   └── release.yml            # Build binaries on git tag push
+│   ├── ci.yml                          # Clippy, tests on every push
+│   └── release.yml                     # Build binaries on git tag push
 ├── Makefile
 └── README.md
 ```
@@ -91,7 +115,7 @@ Config file: `~/.config/twitch-tray/config.json`
 - `schedule_check_interval_sec`: How often the schedule queue walker checks the next channel (default: 10 seconds)
 - `followed_refresh_min`: How often to refresh the followed channels list from the API (default: 15 minutes)
 
-**Note**: Client ID is hardcoded in `src/auth/mod.rs`. No user configuration needed.
+**Note**: Client ID is hardcoded in `src-tauri/src/auth/mod.rs`. No user configuration needed.
 
 Token storage: System keyring with file fallback at `~/.config/twitch-tray/token.json`
 
@@ -138,9 +162,40 @@ Required scope: `user:read:follows`
 ## Data Flow
 
 ```
-Polling (60s)         → GetFollowedStreams  → state.set_followed_streams() → tray.rebuild_menu()
-Queue walker (10s)    → GetSchedule(1 ch)   → db.replace_future_schedules() → refresh_schedules_from_db()
-Followed refresh (15m)→ GetAllFollowedChannels → db.sync_followed() → state.set_followed_channels()
+Polling (60s)           → GetFollowedStreams      → state.set_followed_streams()
+                                                       ├─ watch channel → compute_display_state()
+                                                       │                → DisplayBackend.update()
+                                                       └─ broadcast StreamsUpdated
+                                                            → NotificationDispatcher.listen()
+                                                            → NotificationFilter (suppression policy)
+                                                            → Notifier.stream_live() / .category_change()
+
+Queue walker (10s)      → GetSchedule(1 ch)       → db.replace_future_schedules()
+                                                   → state.set_scheduled_streams()
+                                                       └─ watch channel → DisplayBackend.update()
+
+Followed refresh (15m)  → GetAllFollowedChannels   → db.sync_followed()
+                                                   → state.set_followed_channels()
+```
+
+### Hexagonal layer boundaries
+
+```
+┌──────────────────────────────────────────────┐
+│  Domain logic (pure Rust, no framework deps) │
+│  display_state.rs, notification_filter.rs,   │
+│  schedule_inference.rs, state.rs, config.rs  │
+└──────────────┬───────────────────────────────┘
+               │ uses traits (ports)
+       ┌───────┴────────┐
+       ▼                ▼
+DisplayBackend       Notifier          ← output ports
+       ▲                ▲
+       │                │ implements
+TrayBackend      DesktopNotifier       ← adapters (tray/, notify.rs)
+
+HttpClient  ←── ReqwestClient / MockHttpClient
+AppServices ←── App (wiring) / MockAppServices
 ```
 
 Schedule fetching uses a queue-based approach: instead of bulk-fetching all channels at once,
@@ -206,10 +261,11 @@ This triggers the release workflow which:
 
 ## Architecture
 
-- **Tauri 2.0**: Provides system tray, menu API, and cross-platform support
-- **Tokio**: Multi-threaded async runtime for concurrent polling
-- **State Management**: `Arc<AppState>` with `RwLock` and watch channels for change notification
-- **No Frontend**: This is a tray-only app - the `src/` directory contains only a placeholder HTML
+- **Tauri 2.0**: Provides system tray, menu API, and cross-platform support. Confined to `TrayBackend` and `main.rs`.
+- **Tokio**: Multi-threaded async runtime for concurrent polling tasks.
+- **State Management**: `Arc<AppState>` with `RwLock`; a watch channel drives reactive menu rebuilds, a broadcast channel carries `StreamsUpdated` events to the notification path.
+- **`App`**: Thin wiring layer. Constructs `SessionManager`, `ScheduleWalker`, `NotificationDispatcher`, wires them to shared state, and starts polling tasks via `start_polling()`.
+- **No Frontend**: This is a tray-only app — the `src/` directory contains only a placeholder HTML file.
 
 ## Architectural Principles
 
@@ -317,6 +373,6 @@ RUST_BACKTRACE=1 make run
 ### Fixed: Menu rebuild crashes (Linux)
 
 `libayatana-appindicator3` was crashing (SIGSEGV/SIGABRT) when multiple async tasks called `tray.set_menu()` concurrently. Fixed by:
-1. Adding `Arc<Mutex<()>>` to `TrayManager` to serialize menu rebuilds
+1. Adding `Arc<Mutex<()>>` to `TrayBackend` to serialize menu rebuilds
 2. Using `app.run_on_main_thread()` to dispatch GTK operations to the main thread
-3. Making `TrayManager` clonable so all instances share the same mutex
+3. Making `TrayBackend` clonable so all instances share the same mutex
