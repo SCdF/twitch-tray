@@ -21,6 +21,8 @@ const notifyMaxGapInput = document.getElementById('notify_max_gap');
 const scheduleLookaheadInput = document.getElementById('schedule_lookahead');
 const notifyOnLiveInput = document.getElementById('notify_on_live');
 const notifyOnCategoryInput = document.getElementById('notify_on_category');
+const liveMenuLimitInput = document.getElementById('live_menu_limit');
+const scheduleMenuLimitInput = document.getElementById('schedule_menu_limit');
 const categorySearchInput = document.getElementById('category_search');
 const searchResultsDiv = document.getElementById('search_results');
 const categoryListDiv = document.getElementById('category_list');
@@ -72,9 +74,11 @@ function populateForm() {
 
   pollIntervalInput.value = config.poll_interval_sec;
   notifyMaxGapInput.value = config.notify_max_gap_min;
-  scheduleLookaheadInput.value = config.schedule_lookahead_hours;
   notifyOnLiveInput.checked = config.notify_on_live;
   notifyOnCategoryInput.checked = config.notify_on_category;
+  scheduleLookaheadInput.value = config.schedule_lookahead_hours;
+  liveMenuLimitInput.value = config.live_menu_limit;
+  scheduleMenuLimitInput.value = config.schedule_menu_limit;
 
   renderCategoryList();
   renderStreamerList();
@@ -337,7 +341,7 @@ function setupEventListeners() {
   });
 
   // Auto-save on general settings changes
-  [pollIntervalInput, notifyMaxGapInput, scheduleLookaheadInput].forEach(input => {
+  [pollIntervalInput, notifyMaxGapInput, scheduleLookaheadInput, liveMenuLimitInput, scheduleMenuLimitInput].forEach(input => {
     input.addEventListener('change', () => autoSave());
   });
   [notifyOnLiveInput, notifyOnCategoryInput].forEach(input => {
@@ -423,9 +427,11 @@ async function autoSave() {
       const newConfig = {
         poll_interval_sec: parseInt(pollIntervalInput.value, 10) || 60,
         notify_max_gap_min: parseInt(notifyMaxGapInput.value, 10) || 10,
-        schedule_lookahead_hours: parseInt(scheduleLookaheadInput.value, 10) || 6,
         notify_on_live: notifyOnLiveInput.checked,
         notify_on_category: notifyOnCategoryInput.checked,
+        schedule_lookahead_hours: parseInt(scheduleLookaheadInput.value, 10) || 6,
+        live_menu_limit: parseInt(liveMenuLimitInput.value, 10) || 10,
+        schedule_menu_limit: parseInt(scheduleMenuLimitInput.value, 10) || 5,
         followed_categories: config.followed_categories || [],
         streamer_settings: config.streamer_settings || {}
       };
@@ -434,6 +440,8 @@ async function autoSave() {
       newConfig.poll_interval_sec = Math.max(30, Math.min(300, newConfig.poll_interval_sec));
       newConfig.notify_max_gap_min = Math.max(1, Math.min(60, newConfig.notify_max_gap_min));
       newConfig.schedule_lookahead_hours = Math.max(1, Math.min(72, newConfig.schedule_lookahead_hours));
+      newConfig.live_menu_limit = Math.max(1, Math.min(50, newConfig.live_menu_limit));
+      newConfig.schedule_menu_limit = Math.max(1, Math.min(20, newConfig.schedule_menu_limit));
 
       await invoke('save_config', { config: newConfig });
     }

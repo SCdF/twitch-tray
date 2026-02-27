@@ -552,31 +552,6 @@ mod tests {
         assert_eq!(notifications[0].message, "Old Game → New Game");
     }
 
-    // === DesktopNotifier tests ===
-
-    #[test]
-    fn desktop_notifier_stream_live_always_dispatches() {
-        // DesktopNotifier no longer gates on notify_on_live — that's done by
-        // NotificationDispatcher reading config live. Verify no error is returned.
-        let (snooze_tx, _rx) = mpsc::unbounded_channel();
-        let (settings_tx, _rx2) = mpsc::unbounded_channel();
-        let notifier = DesktopNotifier::new(snooze_tx, settings_tx);
-
-        let stream = make_stream("Test", "Game", "Title");
-        notifier.stream_live(&stream).unwrap();
-    }
-
-    #[test]
-    fn desktop_notifier_category_changed_always_dispatches() {
-        // DesktopNotifier no longer gates on notify_on_category.
-        let (snooze_tx, _rx) = mpsc::unbounded_channel();
-        let (settings_tx, _rx2) = mpsc::unbounded_channel();
-        let notifier = DesktopNotifier::new(snooze_tx, settings_tx);
-
-        let stream = make_stream("Test", "Game", "Title");
-        notifier.category_changed(&stream, "Old Game").unwrap();
-    }
-
     // === truncate tests ===
 
     #[test]

@@ -9,9 +9,7 @@ use crate::auth::{TokenStore, CLIENT_ID};
 use crate::config::ConfigManager;
 use crate::db::Database;
 use crate::display::DisplayBackend;
-use crate::display_state::{
-    compute_display_state, DisplayConfig, DEFAULT_LIVE_MENU_LIMIT, DEFAULT_SCHEDULE_MENU_LIMIT,
-};
+use crate::display_state::{compute_display_state, DisplayConfig};
 use crate::notification_dispatcher::NotificationDispatcher;
 use crate::notify::{DesktopNotifier, Notifier, SnoozeRequest, StreamerSettingsRequest};
 use crate::schedule_walker::ScheduleWalker;
@@ -302,8 +300,8 @@ impl App {
                         &DisplayConfig {
                             streamer_settings: cfg.streamer_settings,
                             schedule_lookahead_hours: cfg.schedule_lookahead_hours,
-                            live_limit: DEFAULT_LIVE_MENU_LIMIT,
-                            schedule_limit: DEFAULT_SCHEDULE_MENU_LIMIT,
+                            live_limit: cfg.live_menu_limit,
+                            schedule_limit: cfg.schedule_menu_limit,
                         },
                         Utc::now(),
                     )

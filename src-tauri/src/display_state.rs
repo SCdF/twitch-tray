@@ -10,11 +10,6 @@ use crate::twitch::{format_viewer_count, ScheduledStream, Stream};
 /// and hidden from the schedule section.
 const LIVE_COVERS_SCHEDULE_WINDOW_MIN: i64 = 60;
 
-/// Maximum live streams shown directly in the main menu before the overflow submenu.
-pub const DEFAULT_LIVE_MENU_LIMIT: usize = 10;
-/// Maximum scheduled streams shown directly in the main menu before the overflow submenu.
-pub const DEFAULT_SCHEDULE_MENU_LIMIT: usize = 5;
-
 /// A live stream entry ready to be rendered.
 pub struct StreamEntry {
     pub stream: Stream,

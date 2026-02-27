@@ -17,6 +17,8 @@ pub const DEFAULT_SCHEDULE_CHECK_INTERVAL_SEC: u64 = 10;
 pub const DEFAULT_FOLLOWED_REFRESH_MIN: u64 = 15;
 pub const DEFAULT_SCHEDULE_LOOKAHEAD_HOURS: u64 = 6;
 pub const DEFAULT_SCHEDULE_BEFORE_NOW_MIN: u64 = 30;
+pub const DEFAULT_LIVE_MENU_LIMIT: usize = 10;
+pub const DEFAULT_SCHEDULE_MENU_LIMIT: usize = 5;
 
 /// Importance level for a streamer, affecting display and notifications
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -74,6 +76,12 @@ pub struct Config {
     /// Grace period so recently-started schedules still show if the streamer hasn't gone live yet.
     #[serde(default = "default_schedule_before_now")]
     pub schedule_before_now_min: u64,
+    /// Maximum live streams shown directly in the main menu before the overflow submenu.
+    #[serde(default = "default_live_menu_limit")]
+    pub live_menu_limit: usize,
+    /// Maximum scheduled streams shown directly in the main menu before the overflow submenu.
+    #[serde(default = "default_schedule_menu_limit")]
+    pub schedule_menu_limit: usize,
     /// Categories to follow for category-based stream listings
     #[serde(default)]
     pub followed_categories: Vec<FollowedCategory>,
@@ -118,6 +126,14 @@ fn default_schedule_before_now() -> u64 {
     DEFAULT_SCHEDULE_BEFORE_NOW_MIN
 }
 
+fn default_live_menu_limit() -> usize {
+    DEFAULT_LIVE_MENU_LIMIT
+}
+
+fn default_schedule_menu_limit() -> usize {
+    DEFAULT_SCHEDULE_MENU_LIMIT
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -130,6 +146,8 @@ impl Default for Config {
             followed_refresh_min: DEFAULT_FOLLOWED_REFRESH_MIN,
             schedule_lookahead_hours: DEFAULT_SCHEDULE_LOOKAHEAD_HOURS,
             schedule_before_now_min: DEFAULT_SCHEDULE_BEFORE_NOW_MIN,
+            live_menu_limit: DEFAULT_LIVE_MENU_LIMIT,
+            schedule_menu_limit: DEFAULT_SCHEDULE_MENU_LIMIT,
             followed_categories: Vec::new(),
             streamer_settings: HashMap::new(),
         }
@@ -281,6 +299,18 @@ mod tests {
     }
 
     #[test]
+    fn default_live_menu_limit_is_10() {
+        let config = Config::default();
+        assert_eq!(config.live_menu_limit, DEFAULT_LIVE_MENU_LIMIT);
+    }
+
+    #[test]
+    fn default_schedule_menu_limit_is_5() {
+        let config = Config::default();
+        assert_eq!(config.schedule_menu_limit, DEFAULT_SCHEDULE_MENU_LIMIT);
+    }
+
+    #[test]
     fn default_followed_categories_is_empty() {
         let config = Config::default();
         assert!(config.followed_categories.is_empty());
@@ -322,6 +352,8 @@ mod tests {
             config.schedule_before_now_min,
             DEFAULT_SCHEDULE_BEFORE_NOW_MIN
         );
+        assert_eq!(config.live_menu_limit, DEFAULT_LIVE_MENU_LIMIT);
+        assert_eq!(config.schedule_menu_limit, DEFAULT_SCHEDULE_MENU_LIMIT);
         assert!(config.followed_categories.is_empty());
         assert!(config.streamer_settings.is_empty());
     }
@@ -377,6 +409,8 @@ mod tests {
             followed_refresh_min: 30,
             schedule_lookahead_hours: 12,
             schedule_before_now_min: 20,
+            live_menu_limit: 7,
+            schedule_menu_limit: 3,
             followed_categories: vec![FollowedCategory {
                 id: "12345".to_string(),
                 name: "Just Chatting".to_string(),
@@ -415,6 +449,11 @@ mod tests {
         assert_eq!(
             deserialized.schedule_before_now_min,
             original.schedule_before_now_min
+        );
+        assert_eq!(deserialized.live_menu_limit, original.live_menu_limit);
+        assert_eq!(
+            deserialized.schedule_menu_limit,
+            original.schedule_menu_limit
         );
     }
 
