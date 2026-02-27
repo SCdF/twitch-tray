@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use tokio::sync::broadcast;
+use tokio::task::JoinHandle;
 
 use crate::config::ConfigManager;
 use crate::notification_filter::filter_notifications;
@@ -37,11 +38,11 @@ impl NotificationDispatcher {
         }
     }
 
-    /// Spawns the listener task and returns immediately.
-    pub fn start(self: Arc<Self>, rx: broadcast::Receiver<StreamsUpdated>) {
+    /// Spawns the listener task and returns its handle.
+    pub fn start(self: Arc<Self>, rx: broadcast::Receiver<StreamsUpdated>) -> JoinHandle<()> {
         tokio::spawn(async move {
             self.listen(rx).await;
-        });
+        })
     }
 
     async fn listen(&self, mut rx: broadcast::Receiver<StreamsUpdated>) {

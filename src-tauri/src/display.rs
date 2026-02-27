@@ -8,6 +8,9 @@ use crate::display_state::DisplayState;
 /// states that would have been rendered.
 pub trait DisplayBackend: Send + Sync {
     fn update(&self, state: DisplayState) -> anyhow::Result<()>;
+
+    /// Opens the per-streamer settings window (or focuses it if already open).
+    fn open_streamer_settings_window(&self, user_login: &str, display_name: &str);
 }
 
 #[cfg(test)]
@@ -45,5 +48,7 @@ pub mod mock {
             self.updates.lock().unwrap().push(state);
             Ok(())
         }
+
+        fn open_streamer_settings_window(&self, _user_login: &str, _display_name: &str) {}
     }
 }

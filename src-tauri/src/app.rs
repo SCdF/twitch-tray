@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::AppHandle;
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::time::Duration;
 
@@ -19,6 +18,7 @@ use crate::schedule_walker::ScheduleWalker;
 use crate::session::SessionManager;
 use crate::state::AppState;
 use crate::twitch::TwitchClient;
+use tokio::task::JoinHandle;
 
 /// Main application orchestrator
 pub struct App {
@@ -127,29 +127,30 @@ impl App {
         crate::twitch::with_retry(f, || self.session.try_refresh_token()).await
     }
 
-    /// Starts the polling tasks
+    /// Starts the polling tasks and returns their join handles.
     pub fn start_polling(
         self: &Arc<Self>,
-        app_handle: AppHandle,
         display: Arc<dyn DisplayBackend>,
-    ) {
+    ) -> Vec<JoinHandle<()>> {
+        let mut handles = Vec::new();
+
         // Stream polling task - uses wall-clock time to handle sleep correctly
         let app = self.clone();
-        tokio::spawn(async move {
+        handles.push(tokio::spawn(async move {
             // Use a short tick interval to detect wake-from-sleep quickly
             let tick_duration = Duration::from_secs(1);
             loop {
                 tokio::time::sleep(tick_duration).await;
                 app.tick_stream_poll(Utc::now()).await;
             }
-        });
+        }));
 
         // Schedule queue walker — checks one broadcaster at a time
-        self.walker.clone().start();
+        handles.push(self.walker.clone().start());
 
         // Followed channels refresh task
         let app = self.clone();
-        tokio::spawn(async move {
+        handles.push(tokio::spawn(async move {
             let tick_duration = Duration::from_secs(1);
             let mut last_refresh: Option<DateTime<Utc>> = None;
             loop {
@@ -163,11 +164,11 @@ impl App {
                     last_refresh = Some(now);
                 }
             }
-        });
+        }));
 
         // Snooze notification task
         let app = self.clone();
-        tokio::spawn(async move {
+        handles.push(tokio::spawn(async move {
             // Take the receiver out of the Arc<Mutex<Option<...>>>
             let mut rx = match app.snooze_rx.lock().await.take() {
                 Some(rx) => rx,
@@ -227,12 +228,12 @@ impl App {
                     snoozed.remove(&user_id);
                 }
             }
-        });
+        }));
 
         // Streamer settings task
         let app = self.clone();
-        let settings_app_handle = app_handle.clone();
-        tokio::spawn(async move {
+        let disp_settings = display.clone();
+        handles.push(tokio::spawn(async move {
             let mut rx = match app.settings_rx.lock().await.take() {
                 Some(rx) => rx,
                 None => {
@@ -263,19 +264,15 @@ impl App {
                     }
                 }
 
-                crate::tray::open_streamer_settings_window(
-                    &settings_app_handle,
-                    &request.user_login,
-                    &request.display_name,
-                );
+                disp_settings
+                    .open_streamer_settings_window(&request.user_login, &request.display_name);
             }
-        });
+        }));
 
         // State change listener task — rebuilds menu on any state change
         let app = self.clone();
         let disp = display.clone();
-
-        tokio::spawn(async move {
+        handles.push(tokio::spawn(async move {
             let mut rx = app.state.subscribe();
 
             while rx.changed().await.is_ok() {
@@ -323,16 +320,18 @@ impl App {
                     tracing::error!("Failed to rebuild menu on state change: {}", e);
                 }
             }
-        });
+        }));
 
         // Notification listener task — reacts to stream update events
-        self.dispatcher
-            .clone()
-            .start(self.state.subscribe_streams());
+        handles.push(
+            self.dispatcher
+                .clone()
+                .start(self.state.subscribe_streams()),
+        );
 
         // History recording listener task — records stream data on every update
         let app = self.clone();
-        tokio::spawn(async move {
+        handles.push(tokio::spawn(async move {
             let mut rx = app.state.subscribe_streams();
 
             loop {
@@ -350,7 +349,9 @@ impl App {
                     }
                 }
             }
-        });
+        }));
+
+        handles
     }
 
     /// Checks if a streams refresh is due and runs it.

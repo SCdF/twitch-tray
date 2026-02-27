@@ -74,7 +74,6 @@ fn main() {
             });
 
             // Clone handles for async setup
-            let app_handle = app.handle().clone();
             let app_clone = application.clone();
             let tray_backend_clone = tray_backend.clone();
 
@@ -97,7 +96,7 @@ fn main() {
                 }
 
                 // Start polling tasks (includes state change listener for menu updates)
-                app_clone.start_polling(app_handle.clone(), tray_backend_clone);
+                app_clone.start_polling(tray_backend_clone);
 
                 // Fetch initial data in background - menu will update via state change listener
                 if app_clone.state.is_authenticated().await {

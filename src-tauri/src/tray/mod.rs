@@ -137,6 +137,10 @@ impl DisplayBackend for TrayBackend {
             })
             .map_err(anyhow::Error::from)
     }
+
+    fn open_streamer_settings_window(&self, user_login: &str, display_name: &str) {
+        open_streamer_settings_window(&self.app_handle, user_login, display_name);
+    }
 }
 
 /// Opens the settings window
