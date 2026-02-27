@@ -29,7 +29,7 @@ pub struct ScheduleWalker {
     db: Database,
     client: TwitchClient,
     state: Arc<AppState>,
-    config: ConfigManager,
+    config: Arc<ConfigManager>,
     session: SessionManager,
 }
 
@@ -38,7 +38,7 @@ impl ScheduleWalker {
         db: Database,
         client: TwitchClient,
         state: Arc<AppState>,
-        config: ConfigManager,
+        config: Arc<ConfigManager>,
         session: SessionManager,
     ) -> Self {
         Self {

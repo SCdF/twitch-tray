@@ -60,23 +60,21 @@ pub trait Notifier: Send + Sync {
 
 /// Desktop notification implementation
 pub struct DesktopNotifier {
-    notify_on_live: bool,
-    notify_on_category: bool,
     snooze_tx: mpsc::UnboundedSender<SnoozeRequest>,
     settings_tx: mpsc::UnboundedSender<StreamerSettingsRequest>,
 }
 
 impl DesktopNotifier {
-    /// Creates a new notifier
+    /// Creates a new notifier.
+    ///
+    /// `notify_on_live` and `notify_on_category` are no longer stored here —
+    /// gating is done by `NotificationDispatcher` which reads config live on
+    /// each event so that changes take effect without a restart.
     pub fn new(
-        notify_on_live: bool,
-        notify_on_category: bool,
         snooze_tx: mpsc::UnboundedSender<SnoozeRequest>,
         settings_tx: mpsc::UnboundedSender<StreamerSettingsRequest>,
     ) -> Self {
         Self {
-            notify_on_live,
-            notify_on_category,
             snooze_tx,
             settings_tx,
         }
@@ -230,10 +228,6 @@ impl DesktopNotifier {
 
 impl Notifier for DesktopNotifier {
     fn stream_live(&self, stream: &Stream) -> anyhow::Result<()> {
-        if !self.notify_on_live {
-            return Ok(());
-        }
-
         let title = format!("{} is now live!", stream.user_name);
         let message = if !stream.title.is_empty() {
             format!("{} - {}", stream.game_name, truncate(&stream.title, 50))
@@ -255,10 +249,6 @@ impl Notifier for DesktopNotifier {
     }
 
     fn stream_reminder(&self, stream: &Stream) -> anyhow::Result<()> {
-        if !self.notify_on_live {
-            return Ok(());
-        }
-
         let title = format!("{} live for {}", stream.user_name, stream.format_duration());
         let message = if !stream.title.is_empty() {
             format!("{} - {}", stream.game_name, truncate(&stream.title, 50))
@@ -280,10 +270,6 @@ impl Notifier for DesktopNotifier {
     }
 
     fn category_changed(&self, stream: &Stream, old_category: &str) -> anyhow::Result<()> {
-        if !self.notify_on_category {
-            return Ok(());
-        }
-
         let title = format!("{} changed category", stream.user_name);
         let message = format!("{} → {}", old_category, stream.game_name);
 
@@ -569,24 +555,25 @@ mod tests {
     // === DesktopNotifier tests ===
 
     #[test]
-    fn desktop_notifier_respects_notify_on_live_flag() {
+    fn desktop_notifier_stream_live_always_dispatches() {
+        // DesktopNotifier no longer gates on notify_on_live — that's done by
+        // NotificationDispatcher reading config live. Verify no error is returned.
         let (snooze_tx, _rx) = mpsc::unbounded_channel();
         let (settings_tx, _rx2) = mpsc::unbounded_channel();
-        let notifier = DesktopNotifier::new(false, false, snooze_tx, settings_tx);
+        let notifier = DesktopNotifier::new(snooze_tx, settings_tx);
 
         let stream = make_stream("Test", "Game", "Title");
-        // This should not send a notification (and not error)
         notifier.stream_live(&stream).unwrap();
     }
 
     #[test]
-    fn desktop_notifier_respects_notify_on_category_flag() {
+    fn desktop_notifier_category_changed_always_dispatches() {
+        // DesktopNotifier no longer gates on notify_on_category.
         let (snooze_tx, _rx) = mpsc::unbounded_channel();
         let (settings_tx, _rx2) = mpsc::unbounded_channel();
-        let notifier = DesktopNotifier::new(true, false, snooze_tx, settings_tx);
+        let notifier = DesktopNotifier::new(snooze_tx, settings_tx);
 
         let stream = make_stream("Test", "Game", "Title");
-        // This should not send a notification (and not error)
         notifier.category_changed(&stream, "Old Game").unwrap();
     }
 

@@ -21,14 +21,14 @@ use crate::state::StreamsUpdated;
 /// notifications according to the current config and notification filter.
 pub struct NotificationDispatcher {
     notifier: Arc<dyn Notifier>,
-    config: ConfigManager,
+    config: Arc<ConfigManager>,
     initial_load_done: Arc<AtomicBool>,
 }
 
 impl NotificationDispatcher {
     pub fn new(
         notifier: Arc<dyn Notifier>,
-        config: ConfigManager,
+        config: Arc<ConfigManager>,
         initial_load_done: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -45,7 +45,7 @@ impl NotificationDispatcher {
         })
     }
 
-    async fn listen(&self, mut rx: broadcast::Receiver<StreamsUpdated>) {
+    pub(crate) async fn listen(&self, mut rx: broadcast::Receiver<StreamsUpdated>) {
         let mut last_event_time: Option<DateTime<Utc>> = None;
 
         loop {
@@ -63,17 +63,21 @@ impl NotificationDispatcher {
                     );
                     last_event_time = Some(now);
 
-                    for stream in decision.streams_to_notify {
-                        if let Err(e) = self.notifier.stream_live(&stream) {
-                            tracing::error!("Notification error: {}", e);
+                    if cfg.notify_on_live {
+                        for stream in decision.streams_to_notify {
+                            if let Err(e) = self.notifier.stream_live(&stream) {
+                                tracing::error!("Notification error: {}", e);
+                            }
                         }
                     }
-                    for change in decision.categories_to_notify {
-                        if let Err(e) = self
-                            .notifier
-                            .category_changed(&change.stream, &change.old_category)
-                        {
-                            tracing::error!("Notification error: {}", e);
+                    if cfg.notify_on_category {
+                        for change in decision.categories_to_notify {
+                            if let Err(e) = self
+                                .notifier
+                                .category_changed(&change.stream, &change.old_category)
+                            {
+                                tracing::error!("Notification error: {}", e);
+                            }
                         }
                     }
                 }
@@ -85,5 +89,135 @@ impl NotificationDispatcher {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::notify::mock::RecordingNotifier;
+    use crate::state::StreamsUpdated;
+    use crate::twitch::Stream;
+    use chrono::Utc;
+
+    fn make_stream(user_login: &str) -> Stream {
+        Stream {
+            id: "1".to_string(),
+            user_id: "100".to_string(),
+            user_login: user_login.to_string(),
+            user_name: user_login.to_string(),
+            game_id: "game".to_string(),
+            game_name: "Game".to_string(),
+            title: "Title".to_string(),
+            viewer_count: 1000,
+            started_at: Utc::now() - chrono::Duration::hours(1),
+            thumbnail_url: String::new(),
+            tags: vec![],
+        }
+    }
+
+    fn make_event(user_login: &str) -> StreamsUpdated {
+        let stream = make_stream(user_login);
+        StreamsUpdated {
+            streams: vec![stream.clone()],
+            newly_live: vec![stream],
+            category_changes: vec![],
+        }
+    }
+
+    fn make_category_event(user_login: &str) -> StreamsUpdated {
+        use crate::state::CategoryChange;
+        let stream = make_stream(user_login);
+        StreamsUpdated {
+            streams: vec![stream.clone()],
+            newly_live: vec![],
+            category_changes: vec![CategoryChange {
+                stream,
+                old_category: "Old Game".to_string(),
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn live_notifications_suppressed_when_config_disabled_without_restart() {
+        let notifier = Arc::new(RecordingNotifier::new());
+        let config = Arc::new(ConfigManager::with_config(Config {
+            notify_on_live: true,
+            ..Config::default()
+        }));
+        let initial_load_done = Arc::new(AtomicBool::new(true));
+
+        let dispatcher =
+            NotificationDispatcher::new(notifier.clone(), config.clone(), initial_load_done);
+
+        let (tx, rx) = broadcast::channel(16);
+        let handle = tokio::spawn(async move { dispatcher.listen(rx).await });
+
+        tx.send(make_event("streamer")).unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            notifier.notification_count(),
+            1,
+            "expected notification when enabled"
+        );
+
+        // Disable live notifications at runtime — no restart
+        config.set(Config {
+            notify_on_live: false,
+            ..Config::default()
+        });
+        notifier.clear();
+
+        tx.send(make_event("streamer")).unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            notifier.notification_count(),
+            0,
+            "no notification expected after config change"
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn category_notifications_suppressed_when_config_disabled_without_restart() {
+        let notifier = Arc::new(RecordingNotifier::new());
+        let config = Arc::new(ConfigManager::with_config(Config {
+            notify_on_category: true,
+            ..Config::default()
+        }));
+        let initial_load_done = Arc::new(AtomicBool::new(true));
+
+        let dispatcher =
+            NotificationDispatcher::new(notifier.clone(), config.clone(), initial_load_done);
+
+        let (tx, rx) = broadcast::channel(16);
+        let handle = tokio::spawn(async move { dispatcher.listen(rx).await });
+
+        tx.send(make_category_event("streamer")).unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            notifier.notification_count(),
+            1,
+            "expected notification when enabled"
+        );
+
+        // Disable category notifications at runtime — no restart
+        config.set(Config {
+            notify_on_category: false,
+            ..Config::default()
+        });
+        notifier.clear();
+
+        tx.send(make_category_event("streamer")).unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            notifier.notification_count(),
+            0,
+            "no notification expected after config change"
+        );
+
+        handle.abort();
     }
 }

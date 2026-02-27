@@ -23,7 +23,7 @@ use tokio::task::JoinHandle;
 /// Main application orchestrator
 pub struct App {
     pub state: Arc<AppState>,
-    pub config: ConfigManager,
+    pub config: Arc<ConfigManager>,
     pub client: TwitchClient,
     pub notifier: Arc<dyn Notifier>,
     pub db: Database,
@@ -56,17 +56,12 @@ impl App {
         use std::sync::atomic::AtomicBool;
         use tokio::sync::RwLock;
 
-        let config = ConfigManager::new()?;
+        let config = Arc::new(ConfigManager::new()?);
         let state = AppState::new();
-        let cfg = config.get();
         let (snooze_tx, snooze_rx) = mpsc::unbounded_channel();
         let (settings_tx, settings_rx) = mpsc::unbounded_channel();
-        let notifier: Arc<dyn Notifier> = Arc::new(DesktopNotifier::new(
-            cfg.notify_on_live,
-            cfg.notify_on_category,
-            snooze_tx.clone(),
-            settings_tx.clone(),
-        ));
+        let notifier: Arc<dyn Notifier> =
+            Arc::new(DesktopNotifier::new(snooze_tx.clone(), settings_tx.clone()));
         let client = TwitchClient::new(CLIENT_ID.to_string());
         let db = Database::new(ConfigManager::config_dir()?.join("data.db"))?;
         let (auth_cancel_tx, auth_cancel_rx) = watch::channel(false);
@@ -85,13 +80,13 @@ impl App {
             db.clone(),
             client.clone(),
             state.clone(),
-            ConfigManager::new()?,
+            config.clone(),
             session.clone(),
         ));
 
         let dispatcher = Arc::new(NotificationDispatcher::new(
             notifier.clone(),
-            ConfigManager::new()?,
+            config.clone(),
             session.initial_load_done.clone(),
         ));
 
@@ -543,7 +538,7 @@ impl Clone for App {
     fn clone(&self) -> Self {
         Self {
             state: self.state.clone(),
-            config: ConfigManager::new().expect("Failed to create config manager"),
+            config: self.config.clone(),
             client: self.client.clone(),
             notifier: self.notifier.clone(),
             db: self.db.clone(),

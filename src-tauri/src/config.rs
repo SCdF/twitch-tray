@@ -193,6 +193,22 @@ impl ConfigManager {
             .context("Could not determine config directory")?
             .join(APP_NAME))
     }
+
+    /// Creates a `ConfigManager` pre-loaded with the given config (no disk I/O).
+    /// Only available in tests.
+    #[cfg(test)]
+    pub fn with_config(config: Config) -> Self {
+        Self {
+            config: RwLock::new(config),
+        }
+    }
+
+    /// Overwrites the in-memory config without writing to disk.
+    /// Only available in tests.
+    #[cfg(test)]
+    pub fn set(&self, config: Config) {
+        *self.config.write().unwrap_or_else(|e| e.into_inner()) = config;
+    }
 }
 
 #[cfg(test)]
