@@ -60,7 +60,6 @@ pub trait Notifier: Send + Sync {
 
 /// Desktop notification implementation
 pub struct DesktopNotifier {
-    enabled: bool,
     notify_on_live: bool,
     notify_on_category: bool,
     snooze_tx: mpsc::UnboundedSender<SnoozeRequest>,
@@ -76,7 +75,6 @@ impl DesktopNotifier {
         settings_tx: mpsc::UnboundedSender<StreamerSettingsRequest>,
     ) -> Self {
         Self {
-            enabled: true,
             notify_on_live,
             notify_on_category,
             snooze_tx,
@@ -232,7 +230,7 @@ impl DesktopNotifier {
 
 impl Notifier for DesktopNotifier {
     fn stream_live(&self, stream: &Stream) -> anyhow::Result<()> {
-        if !self.enabled || !self.notify_on_live {
+        if !self.notify_on_live {
             return Ok(());
         }
 
@@ -257,7 +255,7 @@ impl Notifier for DesktopNotifier {
     }
 
     fn stream_reminder(&self, stream: &Stream) -> anyhow::Result<()> {
-        if !self.enabled || !self.notify_on_live {
+        if !self.notify_on_live {
             return Ok(());
         }
 
@@ -282,7 +280,7 @@ impl Notifier for DesktopNotifier {
     }
 
     fn category_changed(&self, stream: &Stream, old_category: &str) -> anyhow::Result<()> {
-        if !self.enabled || !self.notify_on_category {
+        if !self.notify_on_category {
             return Ok(());
         }
 
