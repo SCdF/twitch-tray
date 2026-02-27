@@ -211,6 +211,73 @@ This triggers the release workflow which:
 - **State Management**: `Arc<AppState>` with `RwLock` and watch channels for change notification
 - **No Frontend**: This is a tray-only app - the `src/` directory contains only a placeholder HTML
 
+## Architectural Principles
+
+### Hexagonal Architecture (Ports and Adapters)
+
+Business logic must have **no dependency** on Tauri, GTK, D-Bus, or any display framework.
+
+**Output ports (traits):**
+- `DisplayBackend` — implemented by `TrayBackend` (Tauri system tray)
+- `Notifier` — implemented by `DesktopNotifier`
+
+**Input/infrastructure ports:**
+- `HttpClient` — production: `ReqwestClient`; tests: `MockHttpClient`
+- `AppServices` — consumed by Tauri command handlers
+
+**Rule:** `AppHandle` must not appear outside of `tray/mod.rs` (the `TrayBackend`) and `main.rs`. If you need UI behaviour in domain code, add a method to `DisplayBackend` instead.
+
+### Single Responsibility Principle
+
+Each type has one reason to change:
+- `SessionManager` — auth lifecycle only
+- `ScheduleWalker` — schedule queue only
+- `NotificationDispatcher` — notification dispatch only
+- `NotificationFilter` — notification suppression policy only
+- `Database` — persistence only (no domain logic)
+
+### Dependency Direction
+
+```
+Domain code → Traits (ports) ← Adapters
+```
+
+Domain code never imports adapter types directly.
+
+## Test-Driven Development
+
+This codebase follows **Red → Green → Refactor** TDD. Before writing production code:
+
+1. **Red**: Write a failing test that describes the desired behaviour.
+2. **Green**: Write the minimum production code to make the test pass.
+3. **Refactor**: Clean up without changing behaviour. Tests stay green.
+
+### Testing layers
+
+**Unit tests** (`#[cfg(test)]` inline modules) — test a single function or type in isolation.
+Use mocks for all external dependencies:
+- `MockHttpClient` — `twitch/http.rs`
+- `RecordingNotifier` — `notify.rs` (mod mock)
+- `RecordingDisplayBackend` — `display.rs` (mod mock)
+- `MockAppServices` — `app_services.rs` (mod mock)
+- Test helpers (`make_stream` etc.) — `tests/common/mod.rs`
+
+**Integration tests** (`tests/`) — test collaboration between two or more real components.
+
+### Do not test through the wiring layer
+
+`App` is a wiring layer. Tests that construct `App` to test notification logic or display
+state are testing the wrong layer. Test `NotificationFilter`, `compute_display_state`,
+`ScheduleWalker::tick` directly.
+
+### Test naming
+
+Test names describe behaviour, not implementation:
+- ✅ `notifications_suppressed_after_sleep_gap`
+- ✅ `favourite_streamers_sorted_before_others`
+- ❌ `test_filter_notifications_function`
+- ❌ `test_build_menu`
+
 ## Debugging Core Dumps
 
 This system uses `systemd-coredump`. When the app crashes with "Segmentation fault (core dumped)":
