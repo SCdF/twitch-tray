@@ -374,3 +374,56 @@ h2 {
   border-radius: 6px;
 }
 
+/* Debug tab */
+#debug-table-container {
+  overflow-y: auto;
+  max-height: 560px;
+  border: 1px solid #0f3460;
+  border-radius: 6px;
+}
+
+#debug-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 13px;
+  table-layout: fixed;
+}
+
+#debug-table thead th {
+  position: sticky;
+  top: 0;
+  background-color: #16213e;
+  padding: 8px 10px;
+  text-align: left;
+  font-weight: 500;
+  color: #a0a0a0;
+  border-bottom: 1px solid #0f3460;
+  z-index: 1;
+}
+
+.debug-col-icon {
+  width: 28px;
+  text-align: center !important;
+}
+
+#debug-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(15, 52, 96, 0.4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#debug-table td:first-child {
+  text-align: center;
+}
+
+#debug-table tbody tr:nth-child(even) {
+  background-color: rgba(22, 33, 62, 0.5);
+}
+
+#debug-table tbody tr:hover {
+  background-color: rgba(145, 70, 255, 0.1);
+}
+

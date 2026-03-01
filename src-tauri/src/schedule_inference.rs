@@ -6,15 +6,14 @@ use crate::twitch::{FollowedChannel, ScheduledStream};
 
 /// Infers future schedules from historical stream data.
 ///
-/// Uses a weekly-recurrence heuristic: looks at the same time window
-/// shifted back 1, 2, and 3 weeks. If a streamer consistently goes live
-/// at similar times across multiple weeks, predicts they'll do so again.
+/// Uses a weekly-recurrence heuristic: looks at the same time window shifted
+/// back 1, 2, and 3 weeks. A stream is predicted if at least 2 of those 3
+/// lookback windows contain a stream at roughly the same time (within 1 hour).
 ///
 /// `window_start` and `window_end` define the prediction window.
 ///
-/// `history` contains `(user_id, started_at_unix_timestamp)` pairs covering:
-/// - The earliest recorded stream per user (for data-coverage determination)
-/// - All streams in the three lookback windows (for projection)
+/// `history` contains `(user_id, started_at_unix_timestamp)` pairs for all
+/// streams in the three lookback windows.
 ///
 /// Issues no I/O — purely computational. The caller (Database::infer_schedules)
 /// is responsible for loading the relevant rows from SQLite.
@@ -33,34 +32,15 @@ pub fn infer_schedules(
         return Vec::new();
     }
 
-    // Compute the earliest observed timestamp per user from the history slice.
-    // The DB wrapper ensures the global MIN per user is present in the slice,
-    // so this correctly reflects how far back each streamer's data goes.
-    let mut earliest_map: HashMap<i64, DateTime<Utc>> = HashMap::new();
-    for &(uid, ts) in history {
-        if let Some(dt) = DateTime::from_timestamp(ts, 0) {
-            earliest_map
-                .entry(uid)
-                .and_modify(|e| {
-                    if dt < *e {
-                        *e = dt;
-                    }
-                })
-                .or_insert(dt);
-        }
-    }
-
     // Define lookback windows (same window shifted back by 1/2/3 weeks).
-    let lookback_windows: Vec<(DateTime<Utc>, DateTime<Utc>)> = (1..=3)
-        .map(|weeks| {
-            let shift = Duration::weeks(weeks);
-            (window_start - shift, window_end - shift)
-        })
-        .collect();
+    let lookback_windows: [(DateTime<Utc>, DateTime<Utc>); 3] = [1, 2, 3].map(|weeks| {
+        let shift = Duration::weeks(weeks);
+        (window_start - shift, window_end - shift)
+    });
 
     // Build per-window stream maps from the flat history slice.
-    let mut window_streams: Vec<HashMap<i64, Vec<DateTime<Utc>>>> =
-        vec![HashMap::new(); lookback_windows.len()];
+    let mut window_streams: [HashMap<i64, Vec<DateTime<Utc>>>; 3] =
+        [HashMap::new(), HashMap::new(), HashMap::new()];
     for &(uid, ts) in history {
         if let Some(dt) = DateTime::from_timestamp(ts, 0) {
             for (i, &(win_start, win_end)) in lookback_windows.iter().enumerate() {
@@ -71,47 +51,19 @@ pub fn infer_schedules(
         }
     }
 
-    // Process each channel using only in-memory data.
     let mut inferred = Vec::new();
 
     for (user_id, id_str) in &user_id_map {
         let channel = &channel_lookup[*id_str];
 
-        let earliest = match earliest_map.get(user_id) {
-            Some(e) => *e,
-            None => continue, // No data for this streamer
-        };
-
-        // Determine which lookback windows have data coverage.
-        // A window is "valid" if the streamer had data at or before the window's start.
-        let mut weeks_with_data = 0;
-        let mut valid_windows = Vec::new();
-        for (i, (win_start, _win_end)) in lookback_windows.iter().enumerate() {
-            if *win_start >= earliest {
-                weeks_with_data += 1;
-                valid_windows.push(i);
-            }
-        }
-
-        if weeks_with_data == 0 {
-            continue;
-        }
-
-        // Threshold: max(1, weeks_with_data - 1)
-        let threshold = std::cmp::max(1, weeks_with_data - 1);
-
-        // Project each historical stream forward by N weeks to get predicted
-        // absolute times. This makes results stable regardless of when the
-        // computation runs (no dependence on window_start).
+        // Project each stream from each lookback window forward into the prediction window.
         let mut projected_pairs: Vec<(i64, usize)> = Vec::new();
 
-        for &win_idx in &valid_windows {
-            let week_number = win_idx + 1; // 1-indexed week number
-
+        for (win_idx, _) in lookback_windows.iter().enumerate() {
+            let week_number = win_idx + 1; // 1-indexed
             if let Some(streams) = window_streams[win_idx].get(user_id) {
                 for stream_time in streams {
                     let projected = *stream_time + Duration::weeks(week_number as i64);
-                    // Only include if projected time falls within prediction window
                     if projected >= window_start && projected <= window_end {
                         projected_pairs.push((projected.timestamp(), week_number));
                     }
@@ -127,26 +79,24 @@ pub fn infer_schedules(
         let clusters = cluster_offsets(&projected_pairs, 3600);
 
         for cluster in clusters {
-            // Count distinct weeks in this cluster.
+            // Count distinct weeks represented in this cluster.
             let mut distinct_weeks: Vec<usize> = cluster.iter().map(|&(_, w)| w).collect();
             distinct_weeks.sort_unstable();
             distinct_weeks.dedup();
 
-            if distinct_weeks.len() < threshold {
+            // Require at least 2 distinct weeks to confirm a recurring pattern.
+            if distinct_weeks.len() < 2 {
                 continue;
             }
 
-            // Compute average projected timestamp.
+            // Compute average projected timestamp, rounded to nearest 15 minutes (900s).
             let sum: i64 = cluster.iter().map(|&(ts, _)| ts).sum();
             let avg = sum as f64 / cluster.len() as f64;
-
-            // Round to nearest 15 minutes (900s).
             let rounded = ((avg / 900.0).round() as i64) * 900;
 
             let predicted_time = DateTime::<Utc>::from_timestamp(rounded, 0)
                 .expect("valid inferred schedule timestamp");
 
-            // Skip if outside the display window.
             if predicted_time < window_start {
                 continue;
             }
@@ -316,14 +266,14 @@ mod tests {
     }
 
     #[test]
-    fn two_weeks_one_stream_predicted() {
+    fn two_weeks_one_stream_not_predicted() {
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
         let (start, end) = schedule_window(now);
 
-        // Data goes back 2 weeks, but only week 1 has a stream in window.
-        // threshold = max(1, 2-1) = 1, so 1 match is enough.
+        // Data goes back 2 weeks, but only week 1 has a stream in the window.
+        // threshold = weeks_with_data = 2 (sparse coverage), so 1 match is NOT enough.
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
-        // w2 has a stream but outside the window (to establish data coverage).
+        // w2 has a stream but outside the window (establishes data coverage only).
         let w2_outside = Utc.with_ymd_and_hms(2025, 7, 2, 3, 0, 0).unwrap();
 
         let history = vec![h(100, w1), h(100, w2_outside)];
@@ -332,30 +282,31 @@ mod tests {
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
         let result = infer_schedules(&history, &channels, start, end);
-        assert_eq!(
-            result.len(),
-            1,
-            "Should predict with 1 match when threshold is 1"
+        assert!(
+            result.is_empty(),
+            "Should not predict with only 1/2 weeks matching — single sighting is not a pattern"
         );
     }
 
     #[test]
-    fn one_week_data_predicted() {
+    fn one_week_data_not_predicted() {
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
         let (start, end) = schedule_window(now);
 
-        // Week 1 lookback starts at start-7d = July 9 13:45.
-        // Need earliest record at or before that to have coverage.
-        let early = Utc.with_ymd_and_hms(2025, 7, 9, 13, 0, 0).unwrap();
+        // Only one stream, appearing in a single lookback window.
+        // 1 distinct week < 2 → not predicted.
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
 
-        let history = vec![h(100, early), h(100, w1)];
+        let history = vec![h(100, w1)];
 
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
         let result = infer_schedules(&history, &channels, start, end);
-        assert_eq!(result.len(), 1, "Should predict with 1 week of data");
+        assert!(
+            result.is_empty(),
+            "A single occurrence is not a pattern — should not predict"
+        );
     }
 
     #[test]
@@ -401,7 +352,9 @@ mod tests {
 
         let earliest = Utc.with_ymd_and_hms(2025, 7, 2, 12, 0, 0).unwrap();
 
-        // Two streams 61 minutes apart in different weeks should NOT cluster.
+        // Two streams 61 minutes apart land in separate clusters (don't merge),
+        // but with only 2 valid weeks and each time appearing in just 1 week,
+        // neither meets the threshold of 2 — so nothing is predicted.
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
         let w2 = Utc.with_ymd_and_hms(2025, 7, 2, 16, 1, 0).unwrap();
 
@@ -411,12 +364,12 @@ mod tests {
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
         let result = infer_schedules(&history, &channels, start, end);
-        // Each cluster has only 1 distinct week, threshold for 2 weeks data is 1.
-        // So both should be predicted separately.
-        assert_eq!(
-            result.len(),
-            2,
-            "61min apart should be two separate predictions"
+        // To confirm clustering is still separate: use 3 weeks of data so threshold
+        // drops to 2, and give each time a match in week 3 as well.
+        // This test just validates the sparse-coverage (2-week) case is not predicted.
+        assert!(
+            result.is_empty(),
+            "With 2 valid weeks and each time appearing only once, nothing should predict"
         );
     }
 
@@ -515,24 +468,54 @@ mod tests {
     }
 
     #[test]
-    fn weeks_with_data_excludes_before_earliest() {
+    fn stream_in_one_lookback_window_only_not_predicted() {
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
         let (start, end) = schedule_window(now);
 
-        // Week 1 lookback starts at start-7d = July 9 13:45.
-        // Week 2 lookback starts at start-14d = July 2 13:45.
-        // Earliest record is July 6 (10 days ago) → week 1 valid, week 2 not.
-        let earliest = Utc.with_ymd_and_hms(2025, 7, 6, 12, 0, 0).unwrap();
+        // Stream appears only in the week-1 lookback window; nothing in weeks 2 or 3.
+        // 1 distinct week < 2 → not predicted, regardless of how far back the data goes.
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
 
-        let history = vec![h(100, earliest), h(100, w1)];
+        let history = vec![h(100, w1)];
 
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
         let result = infer_schedules(&history, &channels, start, end);
-        // Only 1 week of data → threshold = max(1, 1-1) = 1. 1 match >= 1 → predicted.
-        assert_eq!(result.len(), 1);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn clustering_61min_apart_produces_two_separate_predictions_with_full_coverage() {
+        // Use 3 weeks of full coverage so threshold is 2.
+        // Each slot (15:00 and 16:01) appears in 2 of the 3 weeks → both predicted separately.
+        let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
+        let (start, end) = schedule_window(now);
+
+        let earliest = Utc.with_ymd_and_hms(2025, 6, 24, 12, 0, 0).unwrap();
+
+        let w1_a = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
+        let w2_a = Utc.with_ymd_and_hms(2025, 7, 2, 15, 0, 0).unwrap();
+        let w1_b = Utc.with_ymd_and_hms(2025, 7, 9, 16, 1, 0).unwrap();
+        let w2_b = Utc.with_ymd_and_hms(2025, 7, 2, 16, 1, 0).unwrap();
+
+        let history = vec![
+            h(100, earliest),
+            h(100, w1_a),
+            h(100, w2_a),
+            h(100, w1_b),
+            h(100, w2_b),
+        ];
+
+        let mut channels = HashMap::new();
+        channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
+
+        let result = infer_schedules(&history, &channels, start, end);
+        assert_eq!(
+            result.len(),
+            2,
+            "61min apart with full coverage should produce two separate predictions"
+        );
     }
 
     // === cluster_offsets unit tests ===

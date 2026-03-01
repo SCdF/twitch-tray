@@ -8,10 +8,11 @@ This is the only file a human has edited.
 - free() corrupted unsorted chunks
 - version when starting and tag version (used for creating builds in CI) are different. What is the idiomatic rust way of solving this? I want to set the version once. We can create a CI task for releasing if that's appropriate
 
+- broadcaster_name vs broadcaster_login, what is this? Why are there two? Surely we only need one.
+
 
 ## TODO:
 
-- add general setting for how many followed and how many scheduled to show in main dropdown
 - add a streamer setting to hide their schedule, and this should filter at the menu level, hiding scheuled and inferred streams
 
 - ask it about the security of the user's credential. How is it stored, can we take another crack at storing it in the keychain?
@@ -21,12 +22,11 @@ This is the only file a human has edited.
 - refactor DB usage so it handles logout / login. Maybe name the DB the logged in user's id?
 
 - RUST: do we really need a makefile now? If we need an external build, is there something better than make?
-- RUST: can we move cargo.toml etc to the root?
 
 ## Doing:
 
-
 - inferred magic schedules
+  I'm not convinced this is correct, but I think we need a debug view or something? We're a few weeks in and there is just way too many predicted streams for it to be accurate. 
 
 ## Done:
 
@@ -68,3 +68,4 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 - better schedule. Currently we only check the "first" 50. Instead, how about we check everyone once every 24hrs, with a max of 10 a minute, drip fed into the database. It's not going to change that much, and we can cache and cover everything. menu should also update schedule much fast once it's decoupled, we shouldn't see schduled streams for overnight when we wake up
 - make sure we are detecting wake ups and instantly refreshing if we've been asleep. This should be magic if we schedule our refreshes on a timer?
 - consider a schdeuled stream live if the streamer is live within 60min of the schedule time
+- add general setting for how many followed and how many scheduled to show in main dropdown

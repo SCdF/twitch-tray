@@ -32,6 +32,15 @@ const streamerListDiv = document.getElementById('streamer_list');
 const streamerDetailDiv = document.getElementById('streamer_detail');
 const closeBtn = document.getElementById('close_btn');
 
+// === Debug tab state ===
+const WEEK_SECS = 7 * 24 * 3600;
+let debugWindowStart = Math.floor(Date.now() / 1000) - 3 * WEEK_SECS;
+let debugWindowEnd = Math.floor(Date.now() / 1000) + 86400;
+let debugAllEntries = [];
+let debugFilter = '';
+let debugLoading = false;
+let debugDataLoaded = false;
+
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
   await loadConfig();
@@ -45,6 +54,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   } else {
     await loadFollowedChannels();
     setupEventListeners();
+
+    // Show debug tab in debug builds
+    try {
+      const isDebug = await invoke('is_debug_build');
+      if (isDebug) {
+        document.getElementById('tab-debug').style.display = '';
+      }
+    } catch (e) {
+      console.error('Failed to check debug build:', e);
+    }
   }
 });
 
@@ -289,7 +308,7 @@ function searchStreamers(query) {
 function setupEventListeners() {
   // Tab switching
   tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
+    tab.addEventListener('click', async () => {
       const targetId = tab.dataset.tab;
 
       tabs.forEach(t => t.classList.remove('active'));
@@ -297,6 +316,13 @@ function setupEventListeners() {
 
       tab.classList.add('active');
       document.getElementById(targetId).classList.add('active');
+
+      // Load initial debug data on first open, then scroll to now
+      if (targetId === 'debug' && !debugDataLoaded) {
+        debugDataLoaded = true;
+        await loadDebugChunk(debugWindowStart, debugWindowEnd);
+        scrollToNow();
+      }
     });
   });
 
@@ -463,3 +489,155 @@ window.selectStreamer = selectStreamer;
 window.addStreamer = addStreamer;
 window.removeStreamer = removeStreamer;
 window.updateStreamerImportance = updateStreamerImportance;
+
+// === Debug tab functions ===
+
+function debounce(fn, delayMs) {
+  let timer = null;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), delayMs);
+  };
+}
+
+async function loadDebugChunk(start, end) {
+  try {
+    const chunk = await invoke('get_debug_schedule_data', { start, end });
+
+    // Build a dedup key set from existing entries
+    const seen = new Set(
+      debugAllEntries.map(e => `${e.is_inferred}|${e.broadcaster_login}|${e.started_at}`)
+    );
+
+    for (const entry of chunk) {
+      const key = `${entry.is_inferred}|${entry.broadcaster_login}|${entry.started_at}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        debugAllEntries.push(entry);
+      }
+    }
+
+    // Keep sorted by started_at
+    debugAllEntries.sort((a, b) => a.started_at - b.started_at);
+
+    renderDebugTable();
+  } catch (e) {
+    console.error('Failed to load debug data:', e);
+  }
+}
+
+function formatDebugRow(entry) {
+  const nowSecs = Date.now() / 1000;
+
+  // Week number (7-day periods relative to now; negative = past, positive = future)
+  const weekN = Math.floor((entry.started_at - nowSecs) / WEEK_SECS);
+
+  // Wall-clock date (YYYY-MM-DD local), time (HH:MM local), and day abbreviation
+  const d = new Date(entry.started_at * 1000);
+  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thur', 'Fri', 'Sat'][d.getDay()];
+
+  const icon = entry.is_inferred ? '\u2728' : '';
+
+  return { icon, name: entry.broadcaster_name, date, time, day, weekN };
+}
+
+function renderDebugTable() {
+  const tbody = document.getElementById('debug-tbody');
+  if (!tbody) return;
+
+  const lowerFilter = debugFilter.toLowerCase();
+  const filtered = lowerFilter
+    ? debugAllEntries.filter(
+        e =>
+          e.broadcaster_name.toLowerCase().includes(lowerFilter) ||
+          e.broadcaster_login.toLowerCase().includes(lowerFilter)
+      )
+    : debugAllEntries;
+
+  tbody.innerHTML = filtered
+    .map(entry => {
+      const { icon, name, date, time, day, weekN } = formatDebugRow(entry);
+      return `<tr>
+        <td>${icon}</td>
+        <td>${escapeHtml(name)}</td>
+        <td>${date}</td>
+        <td>${time}</td>
+        <td>${day}</td>
+        <td>${weekN >= 0 ? '+' : ''}${weekN}</td>
+      </tr>`;
+    })
+    .join('');
+}
+
+function scrollToNow() {
+  const nowSecs = Date.now() / 1000;
+  const container = document.getElementById('debug-table-container');
+  const tbody = document.getElementById('debug-tbody');
+  if (!tbody || !container) return;
+
+  const rows = tbody.querySelectorAll('tr');
+  if (rows.length === 0) return;
+
+  const lowerFilter = debugFilter.toLowerCase();
+  const filtered = lowerFilter
+    ? debugAllEntries.filter(
+        e =>
+          e.broadcaster_name.toLowerCase().includes(lowerFilter) ||
+          e.broadcaster_login.toLowerCase().includes(lowerFilter)
+      )
+    : debugAllEntries;
+
+  // First row at or after now; fall back to last row if all entries are in the past
+  const firstFutureIdx = filtered.findIndex(e => e.started_at >= nowSecs);
+  const targetIdx = firstFutureIdx >= 0 ? firstFutureIdx : rows.length - 1;
+  const targetRow = rows[targetIdx];
+  if (!targetRow) return;
+
+  // Use getBoundingClientRect so the calculation works regardless of offsetParent chain
+  const containerRect = container.getBoundingClientRect();
+  const rowRect = targetRow.getBoundingClientRect();
+  const rowOffsetInContainer = rowRect.top - containerRect.top + container.scrollTop;
+  container.scrollTop = Math.max(0, rowOffsetInContainer - container.clientHeight / 3);
+}
+
+// Set up debug filter and scroll handlers once the DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+  const filterInput = document.getElementById('debug-filter');
+  if (filterInput) {
+    filterInput.addEventListener('input', e => {
+      debugFilter = e.target.value;
+      renderDebugTable();
+    });
+  }
+
+  const container = document.getElementById('debug-table-container');
+  if (container) {
+    container.addEventListener(
+      'scroll',
+      debounce(async () => {
+        if (debugLoading) return;
+        debugLoading = true;
+        try {
+          if (container.scrollTop < 200) {
+            const newStart = debugWindowStart - 86400;
+            const prevHeight = container.scrollHeight;
+            await loadDebugChunk(newStart, debugWindowStart);
+            container.scrollTop += container.scrollHeight - prevHeight;
+            debugWindowStart = newStart;
+          } else if (
+            container.scrollTop + container.clientHeight >
+            container.scrollHeight - 200
+          ) {
+            const newEnd = debugWindowEnd + 86400;
+            await loadDebugChunk(debugWindowEnd, newEnd);
+            debugWindowEnd = newEnd;
+          }
+        } finally {
+          debugLoading = false;
+        }
+      }, 150)
+    );
+  }
+});

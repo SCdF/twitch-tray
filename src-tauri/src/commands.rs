@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::app_services::AppServices;
+use crate::app_services::{AppServices, DebugStreamEntry};
 use crate::config::{Config, FollowedCategory};
 use crate::twitch::{Category, FollowedChannel};
 
@@ -44,6 +44,24 @@ pub async fn get_followed_channels_list(
     app: State<'_, Arc<dyn AppServices>>,
 ) -> Result<Vec<FollowedChannel>, String> {
     Ok(app.get_followed_channels().await)
+}
+
+/// Returns true when the binary was compiled with debug assertions enabled.
+///
+/// The frontend uses this to decide whether to show the Debug tab.
+#[tauri::command]
+pub fn is_debug_build() -> bool {
+    cfg!(debug_assertions)
+}
+
+/// Returns raw history and inferred schedule entries for the given Unix timestamp window.
+#[tauri::command]
+pub async fn get_debug_schedule_data(
+    app: State<'_, Arc<dyn AppServices>>,
+    start: i64,
+    end: i64,
+) -> Result<Vec<DebugStreamEntry>, String> {
+    Ok(app.get_debug_schedule_data(start, end).await)
 }
 
 #[cfg(test)]
@@ -155,5 +173,35 @@ mod tests {
         let channels = services.get_followed_channels().await;
         assert_eq!(channels.len(), 1);
         assert_eq!(channels[0].broadcaster_login, "streamer");
+    }
+
+    // =========================================================
+    // get_debug_schedule_data
+    // =========================================================
+
+    #[tokio::test]
+    async fn debug_schedule_data_delegates_to_services() {
+        use crate::app_services::DebugStreamEntry;
+
+        let services = MockAppServices::new();
+        let entry = DebugStreamEntry {
+            is_inferred: false,
+            broadcaster_name: "TestStreamer".to_string(),
+            broadcaster_login: "teststreamer".to_string(),
+            started_at: 1_000_000,
+        };
+        services.set_debug_entries(vec![entry]);
+        let result = services.get_debug_schedule_data(0, 2_000_000).await;
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].broadcaster_login, "teststreamer");
+        assert!(!result[0].is_inferred);
+    }
+
+    #[tokio::test]
+    async fn debug_schedule_data_increments_call_count() {
+        let services = MockAppServices::new();
+        services.get_debug_schedule_data(100, 200).await;
+        services.get_debug_schedule_data(200, 300).await;
+        assert_eq!(services.debug_call_count(), 2);
     }
 }

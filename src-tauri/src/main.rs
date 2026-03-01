@@ -49,6 +49,8 @@ fn main() {
             commands::search_categories,
             commands::get_followed_categories,
             commands::get_followed_channels_list,
+            commands::is_debug_build,
+            commands::get_debug_schedule_data,
         ])
         .setup(|app| {
             // Create the application state

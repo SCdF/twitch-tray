@@ -86,33 +86,6 @@ impl Database {
         Ok(())
     }
 
-    /// Returns the earliest recorded stream time for each of the given users.
-    pub fn get_earliest_streams(
-        &self,
-        user_ids: &[i64],
-    ) -> anyhow::Result<HashMap<i64, DateTime<Utc>>> {
-        if user_ids.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let conn = self.conn.lock().unwrap();
-        let sql = format!(
-            "SELECT user_id, MIN(started_at) FROM stream_history WHERE user_id IN ({}) GROUP BY user_id",
-            repeat_vars(user_ids.len())
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(user_ids.iter()), |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-        })?;
-        let mut result = HashMap::new();
-        for row in rows {
-            let (uid, ts) = row?;
-            if let Some(dt) = DateTime::from_timestamp(ts, 0) {
-                result.insert(uid, dt);
-            }
-        }
-        Ok(result)
-    }
-
     /// Returns stream start times for all given users within the given time range,
     /// grouped by user_id.
     pub fn get_streams_in_range(
@@ -331,9 +304,9 @@ impl Database {
 
     /// Infers future schedules from historical stream data.
     ///
-    /// Thin wrapper around `schedule_inference::infer_schedules`. Loads the
-    /// relevant history rows with exactly 4 SQL queries (1 for earliest records,
-    /// 3 for each lookback window) then delegates to the pure function.
+    /// Thin wrapper around `schedule_inference::infer_schedules`. Loads streams
+    /// from the three lookback windows (3 SQL queries) then delegates to the
+    /// pure function.
     pub fn infer_schedules(
         &self,
         channel_lookup: &HashMap<String, FollowedChannel>,
@@ -351,13 +324,6 @@ impl Database {
 
         let mut history: Vec<(i64, i64)> = Vec::new();
 
-        // Include earliest record per user so the pure function can determine
-        // data coverage for each lookback window.
-        for (uid, earliest) in self.get_earliest_streams(&all_user_ids)? {
-            history.push((uid, earliest.timestamp()));
-        }
-
-        // Include streams in each of the 3 lookback windows for projection.
         for weeks in 1..=3i64 {
             let shift = Duration::weeks(weeks);
             for (uid, timestamps) in
@@ -375,6 +341,65 @@ impl Database {
             start,
             end,
         ))
+    }
+
+    /// Returns all followed channels as a HashMap keyed by broadcaster_id string.
+    pub fn get_followed_channel_lookup(&self) -> anyhow::Result<HashMap<String, FollowedChannel>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT broadcaster_id, broadcaster_login, broadcaster_name, followed_at FROM followed",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })?;
+        let mut result = HashMap::new();
+        for row in rows {
+            let (id, login, name, followed_at_ts) = row?;
+            let channel = FollowedChannel {
+                broadcaster_id: id.to_string(),
+                broadcaster_login: login,
+                broadcaster_name: name,
+                followed_at: DateTime::from_timestamp(followed_at_ts, 0).unwrap_or_else(Utc::now),
+            };
+            result.insert(id.to_string(), channel);
+        }
+        Ok(result)
+    }
+
+    /// Returns raw stream history rows within `[start, end)` for currently-followed channels.
+    ///
+    /// Returns `(broadcaster_name, broadcaster_login, started_at_unix)` tuples,
+    /// ordered by `started_at`. Channels not in the `followed` table are excluded.
+    pub fn get_raw_history_in_window(
+        &self,
+        start: i64,
+        end: i64,
+    ) -> anyhow::Result<Vec<(String, String, i64)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT f.broadcaster_name, f.broadcaster_login, h.started_at
+             FROM stream_history h
+             JOIN followed f ON h.user_id = f.broadcaster_id
+             WHERE h.started_at >= ?1 AND h.started_at < ?2
+             ORDER BY h.started_at",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![start, end], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
     }
 }
 
@@ -759,6 +784,118 @@ mod tests {
         let upcoming = db.get_upcoming_schedules(start, end).unwrap();
         assert_eq!(upcoming.len(), 1);
         assert_eq!(upcoming[0].broadcaster_id, "100");
+    }
+
+    // === get_followed_channel_lookup tests ===
+
+    #[test]
+    fn channel_lookup_returns_all_followed() {
+        let db = in_memory_db();
+        db.sync_followed(&[
+            make_channel("100", "StreamerA"),
+            make_channel("200", "StreamerB"),
+        ])
+        .unwrap();
+
+        let lookup = db.get_followed_channel_lookup().unwrap();
+        assert_eq!(lookup.len(), 2);
+        assert!(lookup.contains_key("100"));
+        assert!(lookup.contains_key("200"));
+        assert_eq!(lookup["100"].broadcaster_name, "StreamerA");
+        assert_eq!(lookup["200"].broadcaster_login, "streamerb");
+    }
+
+    #[test]
+    fn channel_lookup_empty_when_no_followed() {
+        let db = in_memory_db();
+        let lookup = db.get_followed_channel_lookup().unwrap();
+        assert!(lookup.is_empty());
+    }
+
+    // === get_raw_history_in_window tests ===
+
+    #[test]
+    fn raw_history_returns_entries_within_range() {
+        let db = in_memory_db();
+        db.sync_followed(&[make_channel("100", "StreamerA")])
+            .unwrap();
+
+        let base = Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap();
+        let s1 = make_test_stream("100", base);
+        let s2 = make_test_stream("100", base + Duration::hours(1));
+        db.record_streams(&[s1, s2]).unwrap();
+
+        let start = base.timestamp();
+        let end = (base + Duration::hours(2)).timestamp();
+        let rows = db.get_raw_history_in_window(start, end).unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn raw_history_excludes_entries_outside_range() {
+        let db = in_memory_db();
+        db.sync_followed(&[make_channel("100", "StreamerA")])
+            .unwrap();
+
+        let base = Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap();
+        // Inside range
+        db.record_streams(&[make_test_stream("100", base + Duration::hours(1))])
+            .unwrap();
+        // Outside range (at end boundary — exclusive)
+        db.record_streams(&[make_test_stream("100", base + Duration::hours(3))])
+            .unwrap();
+
+        let start = base.timestamp();
+        let end = (base + Duration::hours(3)).timestamp(); // exclusive
+        let rows = db.get_raw_history_in_window(start, end).unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn raw_history_joins_followed_for_broadcaster_names() {
+        let db = in_memory_db();
+        db.sync_followed(&[make_channel("100", "StreamerA")])
+            .unwrap();
+
+        let base = Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap();
+        db.record_streams(&[make_test_stream("100", base)]).unwrap();
+
+        let rows = db
+            .get_raw_history_in_window(base.timestamp(), base.timestamp() + 3600)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        let (name, login, _ts) = &rows[0];
+        assert_eq!(name, "StreamerA");
+        assert_eq!(login, "streamera");
+    }
+
+    #[test]
+    fn raw_history_excludes_unfollowed_channels() {
+        let db = in_memory_db();
+        // Only follow channel 100, not 200
+        db.sync_followed(&[make_channel("100", "StreamerA")])
+            .unwrap();
+
+        let base = Utc.with_ymd_and_hms(2025, 6, 15, 12, 0, 0).unwrap();
+        db.record_streams(&[make_test_stream("100", base)]).unwrap();
+        // Record history for unfollowed channel 200
+        db.record_streams(&[make_test_stream("200", base)]).unwrap();
+
+        let rows = db
+            .get_raw_history_in_window(base.timestamp(), base.timestamp() + 3600)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1, "streamera"); // login of followed channel
+    }
+
+    #[test]
+    fn raw_history_empty_when_no_data() {
+        let db = in_memory_db();
+        db.sync_followed(&[make_channel("100", "StreamerA")])
+            .unwrap();
+
+        let rows = db.get_raw_history_in_window(0, 9_999_999_999).unwrap();
+        assert!(rows.is_empty());
     }
 
     #[test]

@@ -492,6 +492,50 @@ impl App {
     pub async fn handle_logout(&self) {
         self.session.handle_logout().await;
     }
+
+    /// Returns raw history entries and inferred schedule entries within the given window.
+    ///
+    /// This is pure wiring: fetches two DB results, merges them, sorts by time.
+    /// Exposed via `AppServices` so Tauri commands can call it without knowing about `App`.
+    pub async fn get_debug_schedule_data(
+        &self,
+        start: i64,
+        end: i64,
+    ) -> Vec<crate::app_services::DebugStreamEntry> {
+        use crate::app_services::DebugStreamEntry;
+
+        let start_dt = DateTime::from_timestamp(start, 0).unwrap_or_default();
+        let end_dt = DateTime::from_timestamp(end, 0).unwrap_or_default();
+
+        let mut entries: Vec<DebugStreamEntry> = self
+            .db
+            .get_raw_history_in_window(start, end)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, login, ts)| DebugStreamEntry {
+                is_inferred: false,
+                broadcaster_name: name,
+                broadcaster_login: login,
+                started_at: ts,
+            })
+            .collect();
+
+        if let Ok(channel_lookup) = self.db.get_followed_channel_lookup() {
+            if let Ok(inferred) = self.db.infer_schedules(&channel_lookup, start_dt, end_dt) {
+                for s in inferred {
+                    entries.push(DebugStreamEntry {
+                        is_inferred: true,
+                        broadcaster_name: s.broadcaster_name,
+                        broadcaster_login: s.broadcaster_login,
+                        started_at: s.start_time.timestamp(),
+                    });
+                }
+            }
+        }
+
+        entries.sort_by_key(|e| e.started_at);
+        entries
+    }
 }
 
 #[async_trait::async_trait]
@@ -529,6 +573,14 @@ impl AppServices for App {
 
     async fn refresh_schedules_from_db(&self) {
         App::refresh_schedules_from_db(self).await
+    }
+
+    async fn get_debug_schedule_data(
+        &self,
+        start: i64,
+        end: i64,
+    ) -> Vec<crate::app_services::DebugStreamEntry> {
+        App::get_debug_schedule_data(self, start, end).await
     }
 }
 

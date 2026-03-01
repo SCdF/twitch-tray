@@ -12,6 +12,7 @@
       <button class="tab active" data-tab="general">General</button>
       <button class="tab" data-tab="categories">Categories</button>
       <button class="tab" data-tab="streamers">Streamers</button>
+      <button class="tab" id="tab-debug" data-tab="debug" style="display:none">Debug</button>
     </nav>
 
     <main class="content">
@@ -99,6 +100,28 @@
           <div class="streamers-right-panel" id="streamer_detail">
             <div class="empty-detail-state">Select a streamer to configure</div>
           </div>
+        </div>
+      </section>
+      <!-- Debug Pane (only shown in debug builds) -->
+      <section id="debug" class="pane">
+        <h2>Debug: Schedule View</h2>
+        <div class="form-group">
+          <input type="text" id="debug-filter" placeholder="Filter by streamer...">
+        </div>
+        <div id="debug-table-container">
+          <table id="debug-table">
+            <thead>
+              <tr>
+                <th class="debug-col-icon"></th>
+                <th>Streamer</th>
+                <th>Date</th>
+                <th>Time</th>
+                <th>Day</th>
+                <th>Week</th>
+              </tr>
+            </thead>
+            <tbody id="debug-tbody"></tbody>
+          </table>
         </div>
       </section>
     </main>

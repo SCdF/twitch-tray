@@ -3,6 +3,14 @@ use async_trait::async_trait;
 use crate::config::{Config, FollowedCategory};
 use crate::twitch::{ApiError, Category, FollowedChannel};
 
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+pub struct DebugStreamEntry {
+    pub is_inferred: bool,
+    pub broadcaster_name: String,
+    pub broadcaster_login: String,
+    pub started_at: i64, // Unix timestamp (seconds)
+}
+
 /// Input port for Tauri command handlers.
 ///
 /// Commands take `State<'_, Arc<dyn AppServices>>` so they can be tested
@@ -20,6 +28,7 @@ pub trait AppServices: Send + Sync {
     async fn get_followed_channels(&self) -> Vec<FollowedChannel>;
     async fn refresh_category_streams(&self);
     async fn refresh_schedules_from_db(&self);
+    async fn get_debug_schedule_data(&self, start: i64, end: i64) -> Vec<DebugStreamEntry>;
 }
 
 #[cfg(test)]
@@ -36,9 +45,11 @@ pub mod mock {
         config: Mutex<Config>,
         search_results: Mutex<Vec<Category>>,
         channels: Mutex<Vec<FollowedChannel>>,
+        debug_entries: Mutex<Vec<super::DebugStreamEntry>>,
         save_config_count: AtomicUsize,
         refresh_category_count: AtomicUsize,
         refresh_schedules_count: AtomicUsize,
+        debug_call_count: AtomicUsize,
     }
 
     impl MockAppServices {
@@ -47,9 +58,11 @@ pub mod mock {
                 config: Mutex::new(Config::default()),
                 search_results: Mutex::new(Vec::new()),
                 channels: Mutex::new(Vec::new()),
+                debug_entries: Mutex::new(Vec::new()),
                 save_config_count: AtomicUsize::new(0),
                 refresh_category_count: AtomicUsize::new(0),
                 refresh_schedules_count: AtomicUsize::new(0),
+                debug_call_count: AtomicUsize::new(0),
             }
         }
 
@@ -63,6 +76,11 @@ pub mod mock {
             *self.channels.lock().unwrap() = channels;
         }
 
+        /// Pre-configure the debug entries that `get_debug_schedule_data` will return.
+        pub fn set_debug_entries(&self, entries: Vec<super::DebugStreamEntry>) {
+            *self.debug_entries.lock().unwrap() = entries;
+        }
+
         pub fn save_config_count(&self) -> usize {
             self.save_config_count.load(Ordering::SeqCst)
         }
@@ -73,6 +91,10 @@ pub mod mock {
 
         pub fn refresh_schedules_count(&self) -> usize {
             self.refresh_schedules_count.load(Ordering::SeqCst)
+        }
+
+        pub fn debug_call_count(&self) -> usize {
+            self.debug_call_count.load(Ordering::SeqCst)
         }
     }
 
@@ -108,6 +130,15 @@ pub mod mock {
 
         async fn refresh_schedules_from_db(&self) {
             self.refresh_schedules_count.fetch_add(1, Ordering::SeqCst);
+        }
+
+        async fn get_debug_schedule_data(
+            &self,
+            _start: i64,
+            _end: i64,
+        ) -> Vec<super::DebugStreamEntry> {
+            self.debug_call_count.fetch_add(1, Ordering::SeqCst);
+            self.debug_entries.lock().unwrap().clone()
         }
     }
 }
