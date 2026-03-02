@@ -1,9 +1,6 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod app_services;
-mod commands;
-
 #[cfg(test)]
 mod test_helpers;
 
@@ -29,13 +26,13 @@ fn main() {
     // Build the Tauri application
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            commands::get_config,
-            commands::save_config,
-            commands::search_categories,
-            commands::get_followed_categories,
-            commands::get_followed_channels_list,
-            commands::is_debug_build,
-            commands::get_debug_schedule_data,
+            twitch_settings_tauri::commands::get_config,
+            twitch_settings_tauri::commands::save_config,
+            twitch_settings_tauri::commands::search_categories,
+            twitch_settings_tauri::commands::get_followed_categories,
+            twitch_settings_tauri::commands::get_followed_channels_list,
+            twitch_settings_tauri::commands::is_debug_build,
+            twitch_settings_tauri::commands::get_debug_schedule_data,
         ])
         .setup(|app| {
             // Start the backend (spawns all polling/notification tasks)

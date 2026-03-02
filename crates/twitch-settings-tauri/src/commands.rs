@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::app_services::{AppServices, DebugStreamEntry};
+use twitch_backend::app_services::{AppServices, DebugStreamEntry};
 use twitch_backend::config::{Config, FollowedCategory};
 use twitch_backend::twitch::{Category, FollowedChannel};
 
@@ -67,7 +67,7 @@ pub async fn get_debug_schedule_data(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_services::mock::MockAppServices;
+    use crate::mock::MockAppServices;
     use twitch_backend::config::DEFAULT_POLL_INTERVAL_SEC;
     use twitch_backend::twitch::Category;
 
