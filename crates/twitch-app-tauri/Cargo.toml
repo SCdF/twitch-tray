@@ -11,6 +11,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 twitch-backend = { path = "../twitch-backend" }
+twitch-menu-tauri = { path = "../twitch-menu-tauri" }
 tauri = { version = "2", features = ["tray-icon"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
 serde = { version = "1", features = ["derive"] }
@@ -18,9 +19,7 @@ chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
-png = "0.17"
 async-trait = "0.1"
-open = "5"
 serde_json = "1"
 
 [dev-dependencies]

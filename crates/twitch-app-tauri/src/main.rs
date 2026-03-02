@@ -3,23 +3,19 @@
 
 mod app_services;
 mod commands;
-mod display;
-mod display_state;
-mod tray;
 
 #[cfg(test)]
 mod test_helpers;
 
-use chrono::Utc;
 use std::sync::Arc;
 use tauri::{Listener, Manager};
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use crate::display::DisplayBackend;
-use crate::display_state::{compute_display_state, DisplayConfig, DisplayState};
-use crate::tray::{handle_menu_event, open_streamer_settings_window, TrayBackend};
 use twitch_backend::{AuthCommand, BackendEvent};
+use twitch_menu_tauri::display::DisplayBackend;
+use twitch_menu_tauri::display_state::DisplayState;
+use twitch_menu_tauri::tray::{handle_menu_event, open_streamer_settings_window, TrayBackend};
 
 fn main() {
     // Initialize logging
@@ -69,36 +65,8 @@ fn main() {
                 handle_menu_event(app, event.id().as_ref());
             });
 
-            // Display update listener: watch for RawDisplayData changes and render
-            let mut display_rx = handle.display_rx;
-            let tray_for_display = tray_backend.clone();
-            tauri::async_runtime::spawn(async move {
-                while display_rx.changed().await.is_ok() {
-                    let raw = display_rx.borrow().clone();
-                    let display_config = DisplayConfig {
-                        streamer_settings: raw.config.streamer_settings.clone(),
-                        schedule_lookahead_hours: raw.config.schedule_lookahead_hours,
-                        live_limit: raw.config.live_menu_limit,
-                        schedule_limit: raw.config.schedule_menu_limit,
-                    };
-                    let state = if raw.is_authenticated {
-                        compute_display_state(
-                            raw.live_streams,
-                            raw.scheduled_streams,
-                            raw.schedules_loaded,
-                            raw.followed_categories,
-                            raw.category_streams,
-                            &display_config,
-                            Utc::now(),
-                        )
-                    } else {
-                        DisplayState::unauthenticated()
-                    };
-                    if let Err(e) = tray_for_display.update(state) {
-                        tracing::error!("Failed to update tray: {}", e);
-                    }
-                }
-            });
+            // Start display listener: converts RawDisplayData → DisplayState → tray update
+            twitch_menu_tauri::start_listener(handle.display_rx, tray_backend);
 
             // Event listener: open streamer settings window on request
             let mut event_rx = handle.event_tx.subscribe();

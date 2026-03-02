@@ -5,5 +5,14 @@ edition = "2021"
 rust-version = "1.91"
 
 [dependencies]
+twitch-backend = { path = "../twitch-backend" }
+tauri = { version = "2", features = ["tray-icon"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+anyhow = "1"
+png = "0.17"
+open = "5"
 
 [dev-dependencies]
+tokio-test = "0.4"

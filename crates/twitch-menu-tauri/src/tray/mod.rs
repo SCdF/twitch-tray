@@ -10,8 +10,14 @@ use tauri::{
 use crate::display::DisplayBackend;
 use crate::display_state::DisplayState;
 
-const ICON_BYTES: &[u8] = include_bytes!("../../icons/icon.png");
-const ICON_GREY_BYTES: &[u8] = include_bytes!("../../icons/icon_grey.png");
+const ICON_BYTES: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../twitch-app-tauri/icons/icon.png"
+));
+const ICON_GREY_BYTES: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../twitch-app-tauri/icons/icon_grey.png"
+));
 
 /// Width of the settings window in logical pixels
 const SETTINGS_WINDOW_SIZE: f64 = 975.0;

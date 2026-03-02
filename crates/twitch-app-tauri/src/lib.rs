@@ -2,11 +2,13 @@
 pub use twitch_backend::state;
 pub use twitch_backend::twitch;
 
-// Local modules that stay in this crate (move to twitch-menu-tauri in Phase 3)
+// Re-export menu modules so integration test helpers can access them
+pub use twitch_menu_tauri::display;
+pub use twitch_menu_tauri::display_state;
+pub use twitch_menu_tauri::tray;
+
+// Local wrapper for AppServices mock (cfg(test) can't cross crate boundaries)
 pub mod app_services;
-pub mod display;
-pub mod display_state;
-pub mod tray;
 
 #[cfg(test)]
 mod test_helpers;
