@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "crates/twitch-backend",
+    "crates/twitch-menu-tauri",
+    "crates/twitch-settings-tauri",
+    "crates/twitch-app-tauri",
+]
+resolver = "2"

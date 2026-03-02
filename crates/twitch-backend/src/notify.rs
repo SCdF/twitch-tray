@@ -291,7 +291,7 @@ impl Notifier for DesktopNotifier {
 }
 
 /// Truncates a string to max byte length with ellipsis, respecting char boundaries
-pub(crate) fn truncate(s: &str, max: usize) -> String {
+pub fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else if max <= 3 {

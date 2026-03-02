@@ -7,45 +7,45 @@ all: build
 
 # Install dependencies
 deps:
-	cd src-tauri && cargo fetch
+	cargo fetch
 
 # Development build
 build:
-	cd src-tauri && cargo build
+	cd crates/twitch-app-tauri && cargo build
 
 # Release build
 release:
-	cd src-tauri && cargo build --release
+	cd crates/twitch-app-tauri && cargo build --release
 
 # Development with hot reload
 dev:
-	cd src-tauri && cargo tauri dev
+	cd crates/twitch-app-tauri && cargo tauri dev
 
 # Run the built binary
 run: build
-	./src-tauri/target/debug/twitch-tray
+	./crates/twitch-app-tauri/target/debug/twitch-tray
 
 # Clean build artifacts
 clean:
-	cd src-tauri && cargo clean
+	cargo clean
 	rm -rf $(DIST)
 
 # Run lints
 lint:
-	cd src-tauri && cargo fmt --check
-	cd src-tauri && cargo clippy -- -D warnings
+	cargo fmt --check
+	cargo clippy --workspace -- -D warnings
 
 # Run tests
 test:
-	cd src-tauri && cargo test
+	cargo test --workspace
 
 # Format code
 fmt:
-	cd src-tauri && cargo fmt
+	cargo fmt
 
 # Build for distribution (uses Tauri bundler)
 dist:
-	cd src-tauri && cargo tauri build
+	cd crates/twitch-app-tauri && cargo tauri build
 
 # Install platform-specific dependencies
 install-deps:

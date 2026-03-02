@@ -1,0 +1,28 @@
+[package]
+name = "twitch-backend"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+keyring = "3"
+dirs = "5"
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+thiserror = "2"
+anyhow = "1"
+open = "5"
+urlencoding = "2"
+async-trait = "0.1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+notify-rust = "4"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3"

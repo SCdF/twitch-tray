@@ -3,8 +3,8 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::app_services::{AppServices, DebugStreamEntry};
-use crate::config::{Config, FollowedCategory};
-use crate::twitch::{Category, FollowedChannel};
+use twitch_backend::config::{Config, FollowedCategory};
+use twitch_backend::twitch::{Category, FollowedChannel};
 
 /// Gets the current configuration.
 #[tauri::command]
@@ -68,8 +68,8 @@ pub async fn get_debug_schedule_data(
 mod tests {
     use super::*;
     use crate::app_services::mock::MockAppServices;
-    use crate::config::DEFAULT_POLL_INTERVAL_SEC;
-    use crate::twitch::Category;
+    use twitch_backend::config::DEFAULT_POLL_INTERVAL_SEC;
+    use twitch_backend::twitch::Category;
 
     // =========================================================
     // get_config
@@ -181,7 +181,7 @@ mod tests {
 
     #[tokio::test]
     async fn debug_schedule_data_delegates_to_services() {
-        use crate::app_services::DebugStreamEntry;
+        use twitch_backend::app_services::DebugStreamEntry;
 
         let services = MockAppServices::new();
         let entry = DebugStreamEntry {

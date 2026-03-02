@@ -1,15 +1,15 @@
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, watch, Mutex};
+use tokio::sync::{broadcast, mpsc, watch, Mutex};
 use tokio::time::Duration;
 
 use crate::app_services::AppServices;
 use crate::auth::{TokenStore, CLIENT_ID};
 use crate::config::ConfigManager;
 use crate::db::Database;
-use crate::display::DisplayBackend;
-use crate::display_state::{compute_display_state, DisplayConfig};
+use crate::events::BackendEvent;
+use crate::handle::{AuthCommand, BackendHandle, RawDisplayData};
 use crate::notification_dispatcher::NotificationDispatcher;
 use crate::notify::{DesktopNotifier, Notifier, SnoozeRequest, StreamerSettingsRequest};
 use crate::schedule_walker::ScheduleWalker;
@@ -18,39 +18,30 @@ use crate::state::AppState;
 use crate::twitch::TwitchClient;
 use tokio::task::JoinHandle;
 
-/// Main application orchestrator
-pub struct App {
-    pub state: Arc<AppState>,
-    pub config: Arc<ConfigManager>,
-    pub client: TwitchClient,
-    pub notifier: Arc<dyn Notifier>,
-    pub db: Database,
+/// Internal backend orchestrator.
+pub(crate) struct Backend {
+    pub(crate) state: Arc<AppState>,
+    pub(crate) config: Arc<ConfigManager>,
+    pub(crate) client: TwitchClient,
+    pub(crate) notifier: Arc<dyn Notifier>,
+    pub(crate) db: Database,
 
-    // Auth lifecycle (session restore, login, logout, token refresh)
     session: SessionManager,
-
-    // Schedule queue walker
     walker: Arc<ScheduleWalker>,
-
-    // Notification dispatcher
     dispatcher: Arc<NotificationDispatcher>,
 
-    // Cancellation for auth flow
     auth_cancel_tx: watch::Sender<bool>,
     auth_cancel_rx: watch::Receiver<bool>,
 
-    // Snooze notification channel
     snooze_tx: mpsc::UnboundedSender<SnoozeRequest>,
     snooze_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<SnoozeRequest>>>>,
 
-    // Streamer settings notification channel
     settings_tx: mpsc::UnboundedSender<StreamerSettingsRequest>,
     settings_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<StreamerSettingsRequest>>>>,
 }
 
-impl App {
-    /// Creates a new application instance
-    pub fn new() -> anyhow::Result<Self> {
+impl Backend {
+    fn new() -> anyhow::Result<Self> {
         use std::sync::atomic::AtomicBool;
         use tokio::sync::RwLock;
 
@@ -106,12 +97,6 @@ impl App {
         })
     }
 
-    /// Tries to restore a session from stored token.
-    pub async fn restore_session(&self) -> anyhow::Result<()> {
-        self.session.restore_session().await
-    }
-
-    /// Calls `f()`, and on `ApiError::Unauthorized` refreshes the token and retries once.
     async fn with_retry<F, Fut, T>(&self, f: F) -> Result<T, crate::twitch::ApiError>
     where
         F: Fn() -> Fut,
@@ -120,37 +105,79 @@ impl App {
         crate::twitch::with_retry(f, || self.session.try_refresh_token()).await
     }
 
-    /// Starts the polling tasks and returns their join handles.
-    pub fn start_polling(
+    /// Starts all background tasks, wiring the display watch channel and event broadcast.
+    fn start_tasks(
         self: &Arc<Self>,
-        display: Arc<dyn DisplayBackend>,
+        display_tx: watch::Sender<RawDisplayData>,
+        event_tx: broadcast::Sender<BackendEvent>,
+        auth_cmd_rx: mpsc::UnboundedReceiver<AuthCommand>,
     ) -> Vec<JoinHandle<()>> {
         let mut handles = Vec::new();
 
-        // Stream polling task - uses wall-clock time to handle sleep correctly
-        let app = self.clone();
+        // Session restore + initial data fetch
+        let backend = self.clone();
+        let display_tx_init = display_tx.clone();
+        let event_tx_init = event_tx.clone();
         handles.push(tokio::spawn(async move {
-            // Use a short tick interval to detect wake-from-sleep quickly
-            let tick_duration = Duration::from_secs(1);
-            loop {
-                tokio::time::sleep(tick_duration).await;
-                app.tick_stream_poll(Utc::now()).await;
+            match backend.session.restore_session().await {
+                Ok(()) => {
+                    tracing::info!("Session restored");
+                    let _ = event_tx_init.send(BackendEvent::AuthStateChanged {
+                        is_authenticated: true,
+                    });
+                    backend.refresh_all_data().await;
+                }
+                Err(e) => {
+                    tracing::info!("No stored session: {}", e);
+                }
+            }
+            // Initial display push (unauthenticated or authenticated after restore)
+            backend.push_display_state(&display_tx_init).await;
+        }));
+
+        // Auth command handler (login / logout)
+        let backend = self.clone();
+        let event_tx_auth = event_tx.clone();
+        let display_tx_auth = display_tx.clone();
+        handles.push(tokio::spawn(async move {
+            let mut rx = auth_cmd_rx;
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    AuthCommand::Login => {
+                        backend.handle_login(&event_tx_auth, &display_tx_auth).await;
+                    }
+                    AuthCommand::Logout => {
+                        backend
+                            .handle_logout(&event_tx_auth, &display_tx_auth)
+                            .await;
+                    }
+                }
             }
         }));
 
-        // Schedule queue walker — checks one broadcaster at a time
+        // Stream polling task
+        let backend = self.clone();
+        handles.push(tokio::spawn(async move {
+            let tick_duration = Duration::from_secs(1);
+            loop {
+                tokio::time::sleep(tick_duration).await;
+                backend.tick_stream_poll(Utc::now()).await;
+            }
+        }));
+
+        // Schedule queue walker
         handles.push(self.walker.clone().start());
 
         // Followed channels refresh task
-        let app = self.clone();
+        let backend = self.clone();
         handles.push(tokio::spawn(async move {
             let tick_duration = Duration::from_secs(1);
             let mut last_refresh: Option<DateTime<Utc>> = None;
             loop {
                 tokio::time::sleep(tick_duration).await;
                 let now = Utc::now();
-                let interval_secs = app.config.get().followed_refresh_min * 60;
-                if app
+                let interval_secs = backend.config.get().followed_refresh_min * 60;
+                if backend
                     .tick_followed_channels(now, last_refresh, interval_secs)
                     .await
                 {
@@ -160,10 +187,9 @@ impl App {
         }));
 
         // Snooze notification task
-        let app = self.clone();
+        let backend = self.clone();
         handles.push(tokio::spawn(async move {
-            // Take the receiver out of the Arc<Mutex<Option<...>>>
-            let mut rx = match app.snooze_rx.lock().await.take() {
+            let mut rx = match backend.snooze_rx.lock().await.take() {
                 Some(rx) => rx,
                 None => {
                     tracing::warn!("Snooze receiver already taken");
@@ -177,15 +203,13 @@ impl App {
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
 
-                // Drain new snooze requests
                 while let Ok(request) = rx.try_recv() {
                     tracing::info!(
                         "Snooze registered for {} (remind at {})",
                         request.user_name,
                         request.remind_at
                     );
-                    // Look up the current stream data to store with the snooze
-                    let streams = app.state.get_followed_streams().await;
+                    let streams = backend.state.get_followed_streams().await;
                     if let Some(stream) = streams.iter().find(|s| s.user_id == request.user_id) {
                         snoozed.insert(request.user_id.clone(), (request, stream.clone()));
                     }
@@ -196,7 +220,7 @@ impl App {
                 }
 
                 let now = Utc::now();
-                let live_streams = app.state.get_followed_streams().await;
+                let live_streams = backend.state.get_followed_streams().await;
 
                 let mut to_remove = Vec::new();
                 for (user_id, (request, stream)) in &snoozed {
@@ -205,12 +229,11 @@ impl App {
                         tracing::debug!("Snooze cancelled for {} (stream offline)", user_id);
                         to_remove.push(user_id.clone());
                     } else if now >= request.remind_at {
-                        // Update stream data with latest info
                         let current_stream = live_streams
                             .iter()
                             .find(|s| s.user_id == *user_id)
                             .unwrap_or(stream);
-                        if let Err(e) = app.notifier.stream_reminder(current_stream) {
+                        if let Err(e) = backend.notifier.stream_reminder(current_stream) {
                             tracing::error!("Snooze reminder notification error: {}", e);
                         }
                         to_remove.push(user_id.clone());
@@ -223,11 +246,11 @@ impl App {
             }
         }));
 
-        // Streamer settings task
-        let app = self.clone();
-        let disp_settings = display.clone();
+        // Settings request task — auto-adds streamer to config, then emits BackendEvent
+        let backend = self.clone();
+        let event_tx_settings = event_tx.clone();
         handles.push(tokio::spawn(async move {
-            let mut rx = match app.settings_rx.lock().await.take() {
+            let mut rx = match backend.settings_rx.lock().await.take() {
                 Some(rx) => rx,
                 None => {
                     tracing::warn!("Settings receiver already taken");
@@ -243,7 +266,7 @@ impl App {
                 );
 
                 // Auto-add streamer to config if not already present
-                let mut cfg = app.config.get();
+                let mut cfg = backend.config.get();
                 if !cfg.streamer_settings.contains_key(&request.user_login) {
                     cfg.streamer_settings.insert(
                         request.user_login.clone(),
@@ -252,85 +275,53 @@ impl App {
                             importance: crate::config::StreamerImportance::Normal,
                         },
                     );
-                    if let Err(e) = app.config.save(cfg) {
+                    if let Err(e) = backend.config.save(cfg) {
                         tracing::error!("Failed to save config with new streamer: {}", e);
                     }
                 }
 
-                disp_settings
-                    .open_streamer_settings_window(&request.user_login, &request.display_name);
+                let _ = event_tx_settings.send(BackendEvent::OpenSettingsRequested {
+                    user_login: request.user_login,
+                    display_name: request.display_name,
+                });
             }
         }));
 
-        // State change listener task — rebuilds menu on any state change
-        let app = self.clone();
-        let disp = display.clone();
+        // State change listener task — pushes RawDisplayData on any state change
+        let backend = self.clone();
+        let display_tx_state = display_tx.clone();
         handles.push(tokio::spawn(async move {
-            let mut rx = app.state.subscribe();
+            let mut rx = backend.state.subscribe();
 
             while rx.changed().await.is_ok() {
                 if rx.borrow().is_none() {
                     continue;
                 }
 
-                // Debounce: wait for rapid-fire state changes to settle.
-                // A single poll cycle triggers multiple state updates (streams,
-                // categories, schedules) — coalesce them into one menu rebuild
-                // to avoid visible flicker on Linux where set_menu() destroys
-                // and recreates the GTK popup.
+                // Debounce: coalesce rapid-fire state changes
                 tokio::time::sleep(Duration::from_millis(500)).await;
-
-                // Mark the latest value as seen so changes during the debounce
-                // window don't trigger another immediate rebuild.
                 let _ = *rx.borrow_and_update();
 
-                let authenticated = app.state.is_authenticated().await;
-                let display_state = if authenticated {
-                    let streams = app.state.get_followed_streams().await;
-                    let scheduled = app.state.get_scheduled_streams().await;
-                    let schedules_loaded = app.state.schedules_loaded().await;
-                    let cfg = app.config.get();
-                    let category_streams = app.state.get_category_streams().await;
-                    compute_display_state(
-                        streams,
-                        scheduled,
-                        schedules_loaded,
-                        cfg.followed_categories,
-                        category_streams,
-                        &DisplayConfig {
-                            streamer_settings: cfg.streamer_settings,
-                            schedule_lookahead_hours: cfg.schedule_lookahead_hours,
-                            live_limit: cfg.live_menu_limit,
-                            schedule_limit: cfg.schedule_menu_limit,
-                        },
-                        Utc::now(),
-                    )
-                } else {
-                    crate::display_state::DisplayState::unauthenticated()
-                };
-
-                if let Err(e) = disp.update(display_state) {
-                    tracing::error!("Failed to rebuild menu on state change: {}", e);
-                }
+                backend.push_display_state(&display_tx_state).await;
             }
         }));
 
-        // Notification listener task — reacts to stream update events
+        // Notification listener task
         handles.push(
             self.dispatcher
                 .clone()
                 .start(self.state.subscribe_streams()),
         );
 
-        // History recording listener task — records stream data on every update
-        let app = self.clone();
+        // History recording listener task
+        let backend = self.clone();
         handles.push(tokio::spawn(async move {
-            let mut rx = app.state.subscribe_streams();
+            let mut rx = backend.state.subscribe_streams();
 
             loop {
                 match rx.recv().await {
                     Ok(event) => {
-                        if let Err(e) = app.db.record_streams(&event.streams) {
+                        if let Err(e) = backend.db.record_streams(&event.streams) {
                             tracing::error!("Failed to record stream history: {}", e);
                         }
                     }
@@ -347,8 +338,22 @@ impl App {
         handles
     }
 
-    /// Checks if a streams refresh is due and runs it.
-    /// Returns true if a refresh was triggered.
+    /// Collects current state and sends a RawDisplayData snapshot.
+    async fn push_display_state(&self, display_tx: &watch::Sender<RawDisplayData>) {
+        let cfg = self.config.get();
+        let raw = RawDisplayData {
+            is_authenticated: self.state.is_authenticated().await,
+            live_streams: self.state.get_followed_streams().await,
+            scheduled_streams: self.state.get_scheduled_streams().await,
+            schedules_loaded: self.state.schedules_loaded().await,
+            followed_channels: self.state.get_followed_channels().await,
+            followed_categories: cfg.followed_categories.clone(),
+            category_streams: self.state.get_category_streams().await,
+            config: cfg,
+        };
+        let _ = display_tx.send(raw);
+    }
+
     async fn tick_stream_poll(&self, now: DateTime<Utc>) -> bool {
         if !self.state.is_authenticated().await {
             return false;
@@ -371,8 +376,6 @@ impl App {
         should_refresh
     }
 
-    /// Checks if a followed-channels refresh is due and runs it.
-    /// Returns true if the refresh completed successfully.
     async fn tick_followed_channels(
         &self,
         now: DateTime<Utc>,
@@ -400,8 +403,7 @@ impl App {
         }
     }
 
-    /// Performs initial data refresh
-    pub async fn refresh_all_data(&self) {
+    pub(crate) async fn refresh_all_data(&self) {
         self.refresh_followed_streams().await;
         self.refresh_schedules_from_db().await;
         self.refresh_category_streams().await;
@@ -422,20 +424,15 @@ impl App {
             }
         };
 
-        // Update last successful refresh time
         self.session.record_live_refresh().await;
-
-        // Write to state — this broadcasts the StreamsUpdated event
         self.state.set_followed_streams(streams).await;
     }
 
-    /// Reads upcoming schedules from DB, merges with inferred schedules, and updates state.
-    pub async fn refresh_schedules_from_db(&self) {
+    pub(crate) async fn refresh_schedules_from_db(&self) {
         self.walker.refresh_schedules_from_db().await;
     }
 
-    /// Refreshes streams for all followed categories
-    pub async fn refresh_category_streams(&self) {
+    pub(crate) async fn refresh_category_streams(&self) {
         let categories = self.config.get().followed_categories;
         if categories.is_empty() {
             return;
@@ -464,40 +461,44 @@ impl App {
         }
     }
 
-    /// Handles a login request.
-    ///
-    /// Spawns the OAuth device flow in the background. On success the session
-    /// is initialized and `refresh_all_data` is called. On failure an error
-    /// notification is sent.
-    pub async fn handle_login(&self) {
+    async fn handle_login(
+        &self,
+        event_tx: &broadcast::Sender<BackendEvent>,
+        display_tx: &watch::Sender<RawDisplayData>,
+    ) {
         let _ = self.auth_cancel_tx.send(false);
         let cancel_rx = self.auth_cancel_rx.clone();
-        let session = self.session.clone();
-        let app = self.clone();
 
-        tokio::spawn(async move {
-            match session.handle_login(cancel_rx).await {
-                Ok(()) => {
-                    app.refresh_all_data().await;
-                }
-                Err(e) => {
-                    tracing::error!("Authentication failed: {}", e);
-                    let _ = app.notifier.error(&format!("Authentication failed: {}", e));
-                }
+        match self.session.handle_login(cancel_rx).await {
+            Ok(()) => {
+                let _ = event_tx.send(BackendEvent::AuthStateChanged {
+                    is_authenticated: true,
+                });
+                self.refresh_all_data().await;
+                self.push_display_state(display_tx).await;
             }
-        });
+            Err(e) => {
+                tracing::error!("Authentication failed: {}", e);
+                let _ = self
+                    .notifier
+                    .error(&format!("Authentication failed: {}", e));
+            }
+        }
     }
 
-    /// Handles a logout request.
-    pub async fn handle_logout(&self) {
+    async fn handle_logout(
+        &self,
+        event_tx: &broadcast::Sender<BackendEvent>,
+        display_tx: &watch::Sender<RawDisplayData>,
+    ) {
         self.session.handle_logout().await;
+        let _ = event_tx.send(BackendEvent::AuthStateChanged {
+            is_authenticated: false,
+        });
+        self.push_display_state(display_tx).await;
     }
 
-    /// Returns raw history entries and inferred schedule entries within the given window.
-    ///
-    /// This is pure wiring: fetches two DB results, merges them, sorts by time.
-    /// Exposed via `AppServices` so Tauri commands can call it without knowing about `App`.
-    pub async fn get_debug_schedule_data(
+    pub(crate) async fn get_debug_schedule_data(
         &self,
         start: i64,
         end: i64,
@@ -539,14 +540,13 @@ impl App {
 }
 
 #[async_trait::async_trait]
-impl AppServices for App {
+impl AppServices for Backend {
     fn get_config(&self) -> crate::config::Config {
         self.config.get()
     }
 
     async fn save_config(&self, config: crate::config::Config) -> anyhow::Result<()> {
         self.config.save(config)?;
-        // Use trait dispatch so the trait methods are used and testable via mock
         AppServices::refresh_category_streams(self).await;
         AppServices::refresh_schedules_from_db(self).await;
         Ok(())
@@ -568,11 +568,11 @@ impl AppServices for App {
     }
 
     async fn refresh_category_streams(&self) {
-        App::refresh_category_streams(self).await
+        Backend::refresh_category_streams(self).await
     }
 
     async fn refresh_schedules_from_db(&self) {
-        App::refresh_schedules_from_db(self).await
+        Backend::refresh_schedules_from_db(self).await
     }
 
     async fn get_debug_schedule_data(
@@ -580,11 +580,11 @@ impl AppServices for App {
         start: i64,
         end: i64,
     ) -> Vec<crate::app_services::DebugStreamEntry> {
-        App::get_debug_schedule_data(self, start, end).await
+        Backend::get_debug_schedule_data(self, start, end).await
     }
 }
 
-impl Clone for App {
+impl Clone for Backend {
     fn clone(&self) -> Self {
         Self {
             state: self.state.clone(),
@@ -603,4 +603,25 @@ impl Clone for App {
             settings_rx: self.settings_rx.clone(),
         }
     }
+}
+
+/// Creates and starts the backend, returning a handle for the app layer.
+pub fn start() -> anyhow::Result<BackendHandle> {
+    let backend = Arc::new(Backend::new()?);
+
+    let (display_tx, display_rx) = watch::channel(RawDisplayData::default());
+    let (event_tx, _) = broadcast::channel(64);
+    let (auth_cmd_tx, auth_cmd_rx) = mpsc::unbounded_channel();
+
+    let tasks = backend.start_tasks(display_tx, event_tx.clone(), auth_cmd_rx);
+
+    let services: Arc<dyn AppServices> = backend;
+
+    Ok(BackendHandle {
+        display_rx,
+        event_tx,
+        services,
+        auth_cmd_tx,
+        tasks,
+    })
 }

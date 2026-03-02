@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Duration, Utc};
 
-use crate::config::{FollowedCategory, StreamerImportance, StreamerSettings};
-use crate::notify::truncate;
-use crate::twitch::{format_viewer_count, ScheduledStream, Stream};
+use twitch_backend::config::{FollowedCategory, StreamerImportance, StreamerSettings};
+use twitch_backend::notify::truncate;
+use twitch_backend::twitch::{format_viewer_count, ScheduledStream, Stream};
 
 /// Scheduled stream within this many minutes of a live broadcast is "covered" by the live stream
 /// and hidden from the schedule section.
