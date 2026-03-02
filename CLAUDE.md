@@ -6,58 +6,71 @@ A cross-platform system tray application for Twitch viewers built with Rust and 
 
 ```
 twitch-tray/
-├── src-tauri/
-│   ├── Cargo.toml
-│   ├── tauri.conf.json
-│   ├── build.rs
-│   ├── icons/
-│   │   ├── icon.png                    # Tray icon (64x64 RGBA)
-│   │   └── icon_grey.png               # Dimmed icon for unauthenticated state
-│   ├── src/
-│   │   ├── main.rs                     # Entry point, Tauri setup
-│   │   ├── lib.rs                      # Library root, module declarations
-│   │   ├── app.rs                      # Thin wiring layer; implements AppServices
-│   │   ├── commands.rs                 # Tauri command handlers (thin adapters)
-│   │   ├── state.rs                    # AppState: thread-safe view of live data
-│   │   ├── config.rs                   # ConfigManager, Config, named defaults
-│   │   ├── db.rs                       # Database: SQLite persistence (no domain logic)
-│   │   ├── notify.rs                   # DesktopNotifier: implements Notifier trait
-│   │   ├── test_helpers.rs             # Shared test helper types (cfg(test))
-│   │   │
-│   │   ├── # Domain logic (no Tauri/GTK imports)
-│   │   ├── display_state.rs            # DisplayState, compute_display_state()
-│   │   ├── notification_filter.rs      # Pure notification suppression policy
-│   │   ├── schedule_inference.rs       # Pure schedule inference algorithm
-│   │   │
-│   │   ├── # Output ports (traits)
-│   │   ├── display.rs                  # DisplayBackend trait + RecordingDisplayBackend
-│   │   ├── app_services.rs             # AppServices trait + MockAppServices
-│   │   │
-│   │   ├── # Orchestration
-│   │   ├── session.rs                  # SessionManager: auth lifecycle
-│   │   ├── schedule_walker.rs          # ScheduleWalker: schedule queue
-│   │   ├── notification_dispatcher.rs  # NotificationDispatcher: event → notify
-│   │   │
-│   │   ├── auth/
-│   │   │   ├── mod.rs                  # CLIENT_ID constant, module declarations
-│   │   │   ├── store.rs                # Keyring token storage
-│   │   │   └── deviceflow.rs          # OAuth Device Code Flow
-│   │   ├── tray/
-│   │   │   └── mod.rs                  # TrayBackend: implements DisplayBackend (AppHandle lives here only)
-│   │   └── twitch/
-│   │       ├── mod.rs                  # with_retry helper, re-exports
-│   │       ├── http.rs                 # HttpClient trait, ReqwestClient, MockHttpClient
-│   │       ├── client.rs               # TwitchClient: reqwest-based Helix API client
-│   │       └── types.rs                # Stream, ScheduledStream, FollowedChannel, etc.
-│   └── tests/
-│       └── common/
-│           └── mod.rs                  # Integration test helpers (make_stream, etc.)
-├── src/                                # Frontend (empty - tray-only app)
-├── .github/workflows/
-│   ├── ci.yml                          # Clippy, tests on every push
-│   └── release.yml                     # Build binaries on git tag push
+├── Cargo.toml                         # Workspace root
 ├── Makefile
-└── README.md
+├── README.md
+├── src/                               # Frontend placeholder (Tauri requires it)
+└── crates/
+    ├── twitch-backend/                # Pure Rust — no Tauri, no GTK
+    │   ├── Cargo.toml
+    │   └── src/
+    │       ├── lib.rs                 # Public API surface (re-exports)
+    │       ├── backend.rs             # start() — spawns all polling/notification tasks
+    │       ├── handle.rs              # BackendHandle, RawDisplayData, AuthCommand
+    │       ├── events.rs              # BackendEvent enum
+    │       ├── state.rs               # AppState: thread-safe view of live data
+    │       ├── config.rs              # ConfigManager, Config, named defaults
+    │       ├── db.rs                  # Database: SQLite persistence (no domain logic)
+    │       ├── notify.rs              # DesktopNotifier: implements Notifier trait
+    │       ├── app_services.rs        # AppServices trait (consumed by settings commands)
+    │       ├── session.rs             # SessionManager: auth lifecycle
+    │       ├── schedule_walker.rs     # ScheduleWalker: schedule queue
+    │       ├── notification_dispatcher.rs  # NotificationDispatcher: event → notify
+    │       ├── notification_filter.rs # Pure notification suppression policy
+    │       ├── schedule_inference.rs  # Pure schedule inference algorithm
+    │       ├── test_helpers.rs        # Shared test helper types (cfg(test))
+    │       ├── auth/
+    │       │   ├── mod.rs             # CLIENT_ID constant, module declarations
+    │       │   ├── store.rs           # Keyring token storage
+    │       │   └── deviceflow.rs      # OAuth Device Code Flow
+    │       └── twitch/
+    │           ├── mod.rs             # with_retry helper, re-exports
+    │           ├── http.rs            # HttpClient trait, ReqwestClient, MockHttpClient
+    │           ├── client.rs          # TwitchClient: reqwest-based Helix API client
+    │           └── types.rs           # Stream, ScheduledStream, FollowedChannel, etc.
+    │
+    ├── twitch-menu-tauri/             # Tauri system tray menu
+    │   ├── Cargo.toml                 # deps: tauri, twitch-backend
+    │   └── src/
+    │       ├── lib.rs                 # start_listener() — display update pump
+    │       ├── display_state.rs       # DisplayState, compute_display_state()
+    │       ├── display.rs             # DisplayBackend trait + RecordingDisplayBackend
+    │       ├── test_helpers.rs        # Shared test helpers (cfg(test))
+    │       └── tray/
+    │           └── mod.rs             # TrayBackend: implements DisplayBackend (AppHandle lives here only)
+    │
+    ├── twitch-settings-tauri/         # Tauri settings command handlers
+    │   ├── Cargo.toml                 # deps: tauri, twitch-backend
+    │   └── src/
+    │       ├── lib.rs
+    │       ├── commands.rs            # Tauri command handlers (thin adapters)
+    │       └── mock.rs                # MockAppServices for command unit tests (cfg(test))
+    │
+    └── twitch-app-tauri/              # Binary — pure wiring, no business logic
+        ├── Cargo.toml                 # deps: tauri + all three crates above
+        ├── tauri.conf.json
+        ├── build.rs
+        ├── icons/
+        │   ├── icon.png               # Tray icon (64x64 RGBA)
+        │   └── icon_grey.png          # Dimmed icon for unauthenticated state
+        ├── src/
+        │   ├── main.rs                # Entry point: start backend → wire menu → wire settings → run
+        │   ├── lib.rs                 # Re-exports for integration tests
+        │   └── test_helpers.rs        # Integration test helpers (cfg(test))
+        └── tests/
+            ├── common/
+            │   └── mod.rs             # Integration test helpers (make_stream, etc.)
+            └── state_management.rs    # Integration tests
 ```
 
 ## Build Commands
@@ -68,8 +81,8 @@ make release   # Release build
 make run       # Build and run
 make dev       # Development with hot reload
 make clean     # Remove build artifacts
-make lint      # Run clippy and fmt check
-make test      # Run tests
+make lint      # Run clippy and fmt check (workspace-wide)
+make test      # Run tests (workspace-wide)
 make fmt       # Format code
 make dist      # Build for distribution (Tauri bundler)
 ```
@@ -115,7 +128,7 @@ Config file: `~/.config/twitch-tray/config.json`
 - `schedule_check_interval_sec`: How often the schedule queue walker checks the next channel (default: 10 seconds)
 - `followed_refresh_min`: How often to refresh the followed channels list from the API (default: 15 minutes)
 
-**Note**: Client ID is hardcoded in `src-tauri/src/auth/mod.rs`. No user configuration needed.
+**Note**: Client ID is hardcoded in `crates/twitch-backend/src/auth/mod.rs`. No user configuration needed.
 
 Token storage: System keyring with file fallback at `~/.config/twitch-tray/token.json`
 
@@ -162,40 +175,56 @@ Required scope: `user:read:follows`
 ## Data Flow
 
 ```
-Polling (60s)           → GetFollowedStreams      → state.set_followed_streams()
-                                                       ├─ watch channel → compute_display_state()
-                                                       │                → DisplayBackend.update()
-                                                       └─ broadcast StreamsUpdated
-                                                            → NotificationDispatcher.listen()
-                                                            → NotificationFilter (suppression policy)
-                                                            → Notifier.stream_live() / .category_change()
+twitch_backend::start()
+  └── BackendHandle {
+        display_rx,    ← watch channel: RawDisplayData (all state for menu)
+        event_tx,      ← broadcast channel: BackendEvent
+        services,      ← Arc<dyn AppServices> (settings commands)
+        auth_cmd_tx,   ← mpsc: AuthCommand::Login / Logout
+      }
 
-Queue walker (10s)      → GetSchedule(1 ch)       → db.replace_future_schedules()
-                                                   → state.set_scheduled_streams()
-                                                       └─ watch channel → DisplayBackend.update()
+Polling (60s)      → GetFollowedStreams  → state.set_followed_streams()
+                                              ├─ display_tx.send(RawDisplayData)
+                                              │    → start_listener() (menu crate)
+                                              │    → compute_display_state()
+                                              │    → TrayBackend.update()
+                                              └─ event_tx.send(StreamsUpdated)
+                                                   → NotificationDispatcher.listen()
+                                                   → NotificationFilter (suppression)
+                                                   → Notifier.stream_live() / .category_change()
 
-Followed refresh (15m)  → GetAllFollowedChannels   → db.sync_followed()
-                                                   → state.set_followed_channels()
+Queue walker (10s) → GetSchedule(1 ch)  → db.replace_future_schedules()
+                                         → state.set_scheduled_streams()
+                                              └─ display_tx.send(RawDisplayData)
+
+Followed (15m)     → GetAllFollowed     → db.sync_followed()
+                                         → state.set_followed_channels()
+
+Notification click → Settings button   → event_tx.send(OpenSettingsRequested)
+                                              → main.rs subscribes
+                                              → open_streamer_settings_window()
 ```
 
 ### Hexagonal layer boundaries
 
 ```
-┌──────────────────────────────────────────────┐
-│  Domain logic (pure Rust, no framework deps) │
-│  display_state.rs, notification_filter.rs,   │
-│  schedule_inference.rs, state.rs, config.rs  │
-└──────────────┬───────────────────────────────┘
-               │ uses traits (ports)
-       ┌───────┴────────┐
-       ▼                ▼
-DisplayBackend       Notifier          ← output ports
-       ▲                ▲
-       │                │ implements
-TrayBackend      DesktopNotifier       ← adapters (tray/, notify.rs)
+┌─────────────────────────────────────────────────────────────┐
+│  twitch-backend (pure Rust — no Tauri / GTK)                │
+│  state.rs, config.rs, notification_filter.rs,               │
+│  schedule_inference.rs, session.rs, schedule_walker.rs       │
+└──────────────┬──────────────────────────────────────────────┘
+               │ BackendHandle (watch + broadcast + Arc<dyn>)
+       ┌───────┼──────────────────────────────────┐
+       ▼       ▼                                  ▼
+twitch-menu-tauri         twitch-settings-tauri   twitch-app-tauri
+  DisplayBackend trait      AppServices trait       main.rs wiring
+  TrayBackend (AppHandle)   commands.rs             login/logout events
+  start_listener()          Tauri invoke_handler    OpenSettingsRequested
 
-HttpClient  ←── ReqwestClient / MockHttpClient
-AppServices ←── App (wiring) / MockAppServices
+DisplayBackend  ←── TrayBackend / RecordingDisplayBackend
+Notifier        ←── DesktopNotifier
+HttpClient      ←── ReqwestClient / MockHttpClient
+AppServices     ←── App (wiring) / MockAppServices
 ```
 
 Schedule fetching uses a queue-based approach: instead of bulk-fetching all channels at once,
@@ -209,7 +238,7 @@ Notifications only fire for streams that go live AFTER initial load (no startup 
 
 ### Thread Safety
 - `state.rs`: `tokio::sync::RwLock` protects all state access
-- State changes trigger menu rebuilds via watch channel
+- State changes trigger menu rebuilds via watch channel (last-value-wins, idempotent)
 
 ### API Endpoints Used
 - `GET /channels/followed` - channels user follows (for schedules)
@@ -217,11 +246,12 @@ Notifications only fire for streams that go live AFTER initial load (no startup 
 - `GET /schedule` - broadcaster schedules
 
 ### Icon Assets
-Icons are loaded at runtime from embedded PNG bytes. Must be 64x64 RGBA format.
+Icons are loaded at compile time via `include_bytes!` in `tray/mod.rs`.
+They reference `crates/twitch-app-tauri/icons/` via `CARGO_MANIFEST_DIR`. Must be 64x64 RGBA format.
 
 To regenerate icons:
 ```bash
-cd src-tauri/icons
+cd crates/twitch-app-tauri/icons
 convert original.png -resize 64x64 -define png:color-type=6 icon.png
 convert original.png -resize 64x64 -channel A -evaluate Multiply 0.4 +channel -define png:color-type=6 icon_grey.png
 ```
@@ -230,9 +260,15 @@ convert original.png -resize 64x64 -channel A -evaluate Multiply 0.4 +channel -d
 
 ```bash
 make lint    # Run clippy and fmt check
-make test    # Run tests
+make test    # Run tests (all workspace crates)
 make build   # Build check
 ```
+
+Tests are organized per-crate:
+- `twitch-backend`: unit tests for all business logic (no Tauri required)
+- `twitch-menu-tauri`: unit tests for display state computation
+- `twitch-settings-tauri`: unit tests for command handlers
+- `twitch-app-tauri`: integration tests (`tests/state_management.rs`)
 
 ## Definition of Done
 
@@ -245,7 +281,7 @@ Before considering any code change complete:
 
 ## Versioning & Releases
 
-Version is set in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`.
+Version is set in `crates/twitch-app-tauri/Cargo.toml` and `crates/twitch-app-tauri/tauri.conf.json`.
 
 **To release a new version:**
 1. Update version in both files
@@ -261,10 +297,15 @@ This triggers the release workflow which:
 
 ## Architecture
 
-- **Tauri 2.0**: Provides system tray, menu API, and cross-platform support. Confined to `TrayBackend` and `main.rs`.
+The project is a **Cargo workspace** with four crates enforcing hard compile-time boundaries:
+
+- **`twitch-backend`**: All business logic, state, config, DB, auth, notifications. Zero Tauri/GTK dependency — confirmed by `cargo tree -p twitch-backend | grep tauri` returning nothing.
+- **`twitch-menu-tauri`**: Tauri system tray menu. Subscribes to `BackendHandle.display_rx`, computes `DisplayState`, calls `TrayBackend.update()`. `AppHandle` is confined here.
+- **`twitch-settings-tauri`**: Tauri `invoke_handler` commands. Receives `Arc<dyn AppServices>` from `BackendHandle`.
+- **`twitch-app-tauri`**: Binary entry point. Pure wiring — starts backend, wires menu listener, registers settings commands, routes login/logout and `OpenSettingsRequested` events.
+
 - **Tokio**: Multi-threaded async runtime for concurrent polling tasks.
-- **State Management**: `Arc<AppState>` with `RwLock`; a watch channel drives reactive menu rebuilds, a broadcast channel carries `StreamsUpdated` events to the notification path.
-- **`App`**: Thin wiring layer. Constructs `SessionManager`, `ScheduleWalker`, `NotificationDispatcher`, wires them to shared state, and starts polling tasks via `start_polling()`.
+- **State Management**: `Arc<AppState>` with `RwLock`; a watch channel (`display_tx`) drives reactive menu rebuilds; a broadcast channel carries `BackendEvent` to the notification path and the app layer.
 - **No Frontend**: This is a tray-only app — the `src/` directory contains only a placeholder HTML file.
 
 ## Architectural Principles
@@ -281,7 +322,11 @@ Business logic must have **no dependency** on Tauri, GTK, D-Bus, or any display 
 - `HttpClient` — production: `ReqwestClient`; tests: `MockHttpClient`
 - `AppServices` — consumed by Tauri command handlers
 
-**Rule:** `AppHandle` must not appear outside of `tray/mod.rs` (the `TrayBackend`) and `main.rs`. If you need UI behaviour in domain code, add a method to `DisplayBackend` instead.
+**Rule:** `AppHandle` must not appear outside of `tray/mod.rs` (the `TrayBackend`) and `main.rs`. If you need UI behaviour in domain code, emit a `BackendEvent` instead and subscribe in `main.rs`.
+
+### Crate boundaries enforce the architecture
+
+Because `twitch-backend` has no `tauri` in its dependency tree, it is a **compile-time guarantee** that no Tauri calls can leak into the domain. Any attempt to use `AppHandle` in backend code will fail to compile.
 
 ### Single Responsibility Principle
 
@@ -295,7 +340,7 @@ Each type has one reason to change:
 ### Dependency Direction
 
 ```
-Domain code → Traits (ports) ← Adapters
+Domain code (twitch-backend) → Traits (ports) ← Adapters (menu/settings/app crates)
 ```
 
 Domain code never imports adapter types directly.
@@ -312,19 +357,22 @@ This codebase follows **Red → Green → Refactor** TDD. Before writing product
 
 **Unit tests** (`#[cfg(test)]` inline modules) — test a single function or type in isolation.
 Use mocks for all external dependencies:
-- `MockHttpClient` — `twitch/http.rs`
-- `RecordingNotifier` — `notify.rs` (mod mock)
-- `RecordingDisplayBackend` — `display.rs` (mod mock)
-- `MockAppServices` — `app_services.rs` (mod mock)
-- Test helpers (`make_stream` etc.) — `tests/common/mod.rs`
+- `MockHttpClient` — `twitch-backend/twitch/http.rs`
+- `RecordingNotifier` — `twitch-backend/notify.rs` (mod mock)
+- `RecordingDisplayBackend` — `twitch-menu-tauri/display.rs` (mod mock)
+- `MockAppServices` — `twitch-settings-tauri/mock.rs` (for command tests)
+- Test helpers (`make_stream` etc.) — `twitch-app-tauri/tests/common/mod.rs`
 
-**Integration tests** (`tests/`) — test collaboration between two or more real components.
+**Note on `cfg(test)` and crate boundaries**: `#[cfg(test)]` code is not visible across crate
+boundaries. Each crate that needs a mock type must define its own copy.
+
+**Integration tests** (`twitch-app-tauri/tests/`) — test collaboration between real components.
 
 ### Do not test through the wiring layer
 
-`App` is a wiring layer. Tests that construct `App` to test notification logic or display
-state are testing the wrong layer. Test `NotificationFilter`, `compute_display_state`,
-`ScheduleWalker::tick` directly.
+`main.rs` is a wiring layer. Tests that construct the full app to test notification logic or
+display state are testing the wrong layer. Test `NotificationFilter`, `compute_display_state`,
+`ScheduleWalker::tick` directly in the crate where they live.
 
 ### Test naming
 

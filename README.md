@@ -62,9 +62,12 @@ Config file location: `~/.config/twitch-tray/config.json`
 ```json
 {
   "poll_interval_sec": 60,
-  "schedule_poll_min": 5,
   "notify_on_live": true,
-  "notify_on_category": true
+  "notify_on_category": true,
+  "notify_max_gap_min": 10,
+  "schedule_stale_hours": 24,
+  "schedule_check_interval_sec": 10,
+  "followed_refresh_min": 15
 }
 ```
 
