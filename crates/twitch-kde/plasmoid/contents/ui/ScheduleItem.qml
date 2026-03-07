@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls as Controls
 import QtQuick.Layouts
 
 Item {
@@ -28,28 +29,28 @@ Item {
         anchors.margins: 4
         spacing: 4
 
-        Text {
+        Controls.Label {
             id: favouriteStar
             objectName: "favouriteStar"
             text: "\u2605"
             visible: root.isFavourite
         }
 
-        Text {
+        Controls.Label {
             id: inferredIndicator
             objectName: "inferredIndicator"
             text: "\u2728"
             visible: root.isInferred
         }
 
-        Text {
+        Controls.Label {
             id: broadcasterNameLabel
             objectName: "broadcasterNameLabel"
             text: root.broadcasterName
             font.bold: true
         }
 
-        Text {
+        Controls.Label {
             id: startTimeLabel
             objectName: "startTimeLabel"
             text: root.startTimeFormatted

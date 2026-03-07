@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls as Controls
 import QtQuick.Layouts
 
 ColumnLayout {
@@ -24,13 +25,13 @@ ColumnLayout {
             anchors.fill: parent
             anchors.leftMargin: 4
 
-            Text {
+            Controls.Label {
                 id: chevron
                 text: root.expanded ? "\u25BC" : "\u25B6"
                 font.pixelSize: 10
             }
 
-            Text {
+            Controls.Label {
                 id: headerLabel
                 objectName: "headerLabel"
                 text: root.heading + " (" + root.count + ")"

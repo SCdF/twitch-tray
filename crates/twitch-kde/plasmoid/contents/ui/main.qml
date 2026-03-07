@@ -8,6 +8,7 @@ import org.kde.kirigami as Kirigami
 PlasmoidItem {
     id: root
 
+    property bool daemonRunning: false
     property var state: ({
         "authenticated": false,
         "login_state": { "type": "Idle" },
@@ -29,9 +30,13 @@ PlasmoidItem {
                 if (out.length > 0) {
                     try {
                         root.state = JSON.parse(out)
+                        root.daemonRunning = true
                     } catch (e) {
                         console.warn("TwitchTray: failed to parse state:", e)
+                        root.daemonRunning = false
                     }
+                } else {
+                    root.daemonRunning = false
                 }
             }
         }
@@ -66,7 +71,8 @@ PlasmoidItem {
     }
 
     compactRepresentation: CompactRepresentation {
-        liveCount: root.state.live.visible.length + root.state.live.overflow.length
+        daemonRunning: root.daemonRunning
+        authenticated: root.state.authenticated
     }
 
     fullRepresentation: Controls.ScrollView {
@@ -79,9 +85,18 @@ PlasmoidItem {
             padding: 8
             spacing: 4
 
-            // --- Unauthenticated ---
+            // --- Daemon not running ---
+            Controls.Label {
+                visible: !root.daemonRunning
+                width: parent.width - 16
+                text: "Daemon not running"
+                horizontalAlignment: Text.AlignHCenter
+                opacity: 0.7
+            }
+
+            // --- Unauthenticated (daemon running but not logged in) ---
             LoginView {
-                visible: !root.state.authenticated
+                visible: root.daemonRunning && !root.state.authenticated
                 width: parent.width - 16
                 loginState: root.state.login_state.type
                 userCode: root.state.login_state.user_code || ""
@@ -93,7 +108,7 @@ PlasmoidItem {
 
             // --- Authenticated ---
             Column {
-                visible: root.state.authenticated
+                visible: root.daemonRunning && root.state.authenticated
                 width: parent.width - 16
                 spacing: 2
 
@@ -167,13 +182,13 @@ PlasmoidItem {
                                     anchors.fill: parent
                                     anchors.margins: 4
 
-                                    Text {
+                                    Controls.Label {
                                         text: modelData.user_name
                                         font.bold: true
                                         Layout.fillWidth: true
                                     }
 
-                                    Text {
+                                    Controls.Label {
                                         text: modelData.viewer_count_formatted
                                         opacity: 0.7
                                     }

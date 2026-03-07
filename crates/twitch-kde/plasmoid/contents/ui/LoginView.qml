@@ -31,7 +31,7 @@ ColumnLayout {
         spacing: 4
         Layout.fillWidth: true
 
-        Text {
+        Controls.Label {
             objectName: "uriLabel"
             text: "Visit: " + root.verificationUri
             Layout.alignment: Qt.AlignHCenter
@@ -41,11 +41,11 @@ ColumnLayout {
             Layout.alignment: Qt.AlignHCenter
             spacing: 8
 
-            Text {
+            Controls.Label {
                 text: "Enter code:"
             }
 
-            Text {
+            Controls.Label {
                 id: codeLabel
                 objectName: "codeLabel"
                 text: root.userCode
@@ -61,7 +61,7 @@ ColumnLayout {
             }
         }
 
-        Text {
+        Controls.Label {
             text: "Browser opened \u00B7 Waiting..."
             opacity: 0.7
             Layout.alignment: Qt.AlignHCenter
@@ -81,7 +81,7 @@ ColumnLayout {
             Layout.alignment: Qt.AlignHCenter
         }
 
-        Text {
+        Controls.Label {
             text: "Waiting for confirmation..."
             Layout.alignment: Qt.AlignHCenter
         }

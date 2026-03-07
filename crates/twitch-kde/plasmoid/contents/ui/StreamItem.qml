@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls as Controls
 import QtQuick.Layouts
 
 Item {
@@ -29,7 +30,7 @@ Item {
         anchors.margins: 4
         spacing: 4
 
-        Text {
+        Controls.Label {
             id: favouriteStar
             objectName: "favouriteStar"
             text: "\u2605"
@@ -40,7 +41,7 @@ Item {
             Layout.fillWidth: true
             spacing: 0
 
-            Text {
+            Controls.Label {
                 id: userNameLabel
                 objectName: "userNameLabel"
                 text: root.userName
@@ -48,7 +49,7 @@ Item {
                 Layout.fillWidth: true
             }
 
-            Text {
+            Controls.Label {
                 id: subtitleLabel
                 objectName: "subtitleLabel"
                 text: root.gameName + " \u00B7 " + root.viewerCountFormatted + " \u00B7 " + root.durationFormatted

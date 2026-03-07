@@ -8,7 +8,8 @@ Item {
 
     CompactRepresentation {
         id: compact
-        liveCount: 0
+        daemonRunning: false
+        authenticated: false
     }
 
     TestCase {
@@ -16,32 +17,37 @@ Item {
         when: windowShown
 
         function init() {
-            compact.liveCount = 0
-        }
-
-        function test_no_badge_when_zero_live_streams() {
-            compact.liveCount = 0
-            wait(10)
-            var badge = findChild(compact, "badge")
-            verify(badge, "badge element should exist")
-            verify(!badge.visible, "badge should be hidden when no live streams")
-        }
-
-        function test_badge_shows_correct_live_count() {
-            compact.liveCount = 7
-            wait(10)
-            var badge = findChild(compact, "badge")
-            verify(badge, "badge element should exist")
-            verify(badge.visible, "badge should be visible when streams are live")
-            var badgeText = findChild(compact, "badgeText")
-            verify(badgeText, "badgeText should exist")
-            compare(badgeText.text, "7")
+            compact.daemonRunning = false
+            compact.authenticated = false
         }
 
         function test_icon_always_visible() {
             var icon = findChild(compact, "twitchIcon")
             verify(icon, "twitchIcon should exist")
             verify(icon.visible, "icon should always be visible")
+        }
+
+        function test_icon_dimmed_when_daemon_not_running() {
+            compact.daemonRunning = false
+            wait(10)
+            var icon = findChild(compact, "twitchIcon")
+            compare(icon.opacity, 0.4)
+        }
+
+        function test_icon_dimmed_when_not_authenticated() {
+            compact.daemonRunning = true
+            compact.authenticated = false
+            wait(10)
+            var icon = findChild(compact, "twitchIcon")
+            compare(icon.opacity, 0.4)
+        }
+
+        function test_icon_full_opacity_when_authenticated() {
+            compact.daemonRunning = true
+            compact.authenticated = true
+            wait(10)
+            var icon = findChild(compact, "twitchIcon")
+            compare(icon.opacity, 1.0)
         }
     }
 }
