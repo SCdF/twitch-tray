@@ -15,7 +15,7 @@ jobs:
       - name: Install Qt6 dependencies (for QML tests)
         run: |
           sudo apt-get update
-          sudo apt-get install -y qt6-declarative-dev qt6-base-dev qml6-module-qttest qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qtqml-workerscript libkirigami-dev
+          sudo apt-get install -y qt6-declarative-dev qt6-base-dev qml6-module-qttest qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qtqml-workerscript kirigami2-dev
 
       - name: Run QML plasmoid tests
         env:
