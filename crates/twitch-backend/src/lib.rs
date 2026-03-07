@@ -23,4 +23,4 @@ pub(crate) mod test_helpers;
 // Primary public API
 pub use backend::start;
 pub use events::BackendEvent;
-pub use handle::{AuthCommand, BackendHandle, RawDisplayData};
+pub use handle::{AuthCommand, BackendHandle, LoginProgress, RawDisplayData};

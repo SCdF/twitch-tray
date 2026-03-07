@@ -9,7 +9,7 @@ use crate::auth::{TokenStore, CLIENT_ID};
 use crate::config::ConfigManager;
 use crate::db::Database;
 use crate::events::BackendEvent;
-use crate::handle::{AuthCommand, BackendHandle, RawDisplayData};
+use crate::handle::{AuthCommand, BackendHandle, LoginProgress, RawDisplayData};
 use crate::notification_dispatcher::NotificationDispatcher;
 use crate::notify::{DesktopNotifier, Notifier, SnoozeRequest, StreamerSettingsRequest};
 use crate::schedule_walker::ScheduleWalker;
@@ -33,6 +33,8 @@ pub(crate) struct Backend {
     auth_cancel_tx: watch::Sender<bool>,
     auth_cancel_rx: watch::Receiver<bool>,
 
+    login_progress_rx: watch::Receiver<Option<LoginProgress>>,
+
     snooze_tx: mpsc::UnboundedSender<SnoozeRequest>,
     snooze_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<SnoozeRequest>>>>,
 
@@ -55,7 +57,7 @@ impl Backend {
         let db = Database::new(ConfigManager::config_dir()?.join("data.db"))?;
         let (auth_cancel_tx, auth_cancel_rx) = watch::channel(false);
 
-        let session = SessionManager::new(
+        let (session, login_progress_rx) = SessionManager::new(
             TokenStore::new()?,
             client.clone(),
             state.clone(),
@@ -90,6 +92,7 @@ impl Backend {
             dispatcher,
             auth_cancel_tx,
             auth_cancel_rx,
+            login_progress_rx,
             snooze_tx,
             snooze_rx: Arc::new(Mutex::new(Some(snooze_rx))),
             settings_tx,
@@ -597,6 +600,7 @@ impl Clone for Backend {
             dispatcher: self.dispatcher.clone(),
             auth_cancel_tx: self.auth_cancel_tx.clone(),
             auth_cancel_rx: self.auth_cancel_rx.clone(),
+            login_progress_rx: self.login_progress_rx.clone(),
             snooze_tx: self.snooze_tx.clone(),
             snooze_rx: self.snooze_rx.clone(),
             settings_tx: self.settings_tx.clone(),
@@ -613,6 +617,7 @@ pub fn start() -> anyhow::Result<BackendHandle> {
     let (event_tx, _) = broadcast::channel(64);
     let (auth_cmd_tx, auth_cmd_rx) = mpsc::unbounded_channel();
 
+    let login_progress_rx = backend.login_progress_rx.clone();
     let tasks = backend.start_tasks(display_tx, event_tx.clone(), auth_cmd_rx);
 
     let services: Arc<dyn AppServices> = backend;
@@ -622,6 +627,7 @@ pub fn start() -> anyhow::Result<BackendHandle> {
         event_tx,
         services,
         auth_cmd_tx,
+        login_progress_rx,
         tasks,
     })
 }

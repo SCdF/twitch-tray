@@ -32,6 +32,23 @@ pub enum AuthCommand {
     Logout,
 }
 
+/// Progress updates during the OAuth device code login flow.
+///
+/// Published on `BackendHandle.login_progress_rx` (a watch channel, last-value-wins).
+/// `None` means no login is in progress.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LoginProgress {
+    /// Device code obtained; user should visit the URI and enter the code shown.
+    PendingCode {
+        user_code: String,
+        verification_uri: String,
+    },
+    /// Token confirmed; the user has authorized the application.
+    Confirmed,
+    /// Login failed with the given reason.
+    Failed(String),
+}
+
 /// Everything the app layer needs to interact with the backend.
 ///
 /// Returned from `twitch_backend::start()`.
@@ -44,6 +61,9 @@ pub struct BackendHandle {
     pub services: Arc<dyn AppServices>,
     /// Auth commands (login / logout) go through this.
     pub auth_cmd_tx: mpsc::UnboundedSender<AuthCommand>,
+    /// Login progress updates (device code flow).
+    /// `None` = no login in progress; `Some(LoginProgress::PendingCode { .. })` = code shown.
+    pub login_progress_rx: watch::Receiver<Option<LoginProgress>>,
     /// Background task handles (so main can join/abort on shutdown).
     pub tasks: Vec<JoinHandle<()>>,
 }

@@ -11,6 +11,7 @@ use tokio::sync::{watch, Mutex, RwLock};
 
 use crate::auth::{DeviceFlow, Token, TokenStore, CLIENT_ID};
 use crate::db::Database;
+use crate::handle::LoginProgress;
 use crate::state::AppState;
 use crate::twitch::TwitchClient;
 
@@ -27,9 +28,15 @@ pub struct SessionManager {
     pub(crate) initial_load_done: Arc<AtomicBool>,
     /// Timestamp of the last successful live-stream API call (for sleep-aware polling).
     pub(crate) last_live_refresh: Arc<RwLock<Option<DateTime<Utc>>>>,
+    /// Publishes device code flow progress so the KDE plasmoid (and other consumers) can
+    /// show the pending code to the user.
+    pub(crate) login_progress_tx: watch::Sender<Option<LoginProgress>>,
 }
 
 impl SessionManager {
+    /// Creates a new `SessionManager` and returns it together with the receiver
+    /// end of the login-progress watch channel (for callers that need to observe
+    /// the device code flow state).
     pub fn new(
         store: TokenStore,
         client: TwitchClient,
@@ -38,16 +45,21 @@ impl SessionManager {
         initial_load_done: Arc<AtomicBool>,
         last_live_refresh: Arc<RwLock<Option<DateTime<Utc>>>>,
         refresh_mutex: Arc<Mutex<()>>,
-    ) -> Self {
-        Self {
-            store,
-            client,
-            state,
-            db,
-            initial_load_done,
-            last_live_refresh,
-            refresh_mutex,
-        }
+    ) -> (Self, watch::Receiver<Option<LoginProgress>>) {
+        let (login_progress_tx, login_progress_rx) = watch::channel(None);
+        (
+            Self {
+                store,
+                client,
+                state,
+                db,
+                initial_load_done,
+                last_live_refresh,
+                refresh_mutex,
+                login_progress_tx,
+            },
+            login_progress_rx,
+        )
     }
 
     /// Tries to restore a session from a stored token.
@@ -158,16 +170,17 @@ impl SessionManager {
     pub async fn handle_login(&self, cancel: watch::Receiver<bool>) -> anyhow::Result<()> {
         let flow = DeviceFlow::new(CLIENT_ID.to_string());
 
-        let token = flow
-            .authenticate(
-                |_user_code, verification_uri| {
-                    if let Err(e) = open::that(verification_uri) {
-                        tracing::error!("Failed to open browser: {}", e);
-                    }
-                },
-                cancel,
-            )
-            .await?;
+        let token = run_device_flow(
+            flow,
+            cancel,
+            self.login_progress_tx.clone(),
+            |verification_uri| {
+                if let Err(e) = open::that(verification_uri) {
+                    tracing::error!("Failed to open browser: {}", e);
+                }
+            },
+        )
+        .await?;
 
         self.store.save_token(&token)?;
         self.initialize_session(&token).await?;
@@ -203,6 +216,49 @@ impl SessionManager {
     }
 }
 
+/// Runs the device code flow, emitting `LoginProgress` updates on `progress_tx`.
+///
+/// Calls `on_browser` with the `verification_uri` once the device code is obtained
+/// (e.g. to open the URL in the system browser).
+/// Sends `PendingCode` with both the user code and URI, `Confirmed` on success,
+/// `Failed` on error. Returns the token on success.
+async fn run_device_flow<H, F>(
+    flow: DeviceFlow<H>,
+    cancel: watch::Receiver<bool>,
+    progress_tx: watch::Sender<Option<LoginProgress>>,
+    on_browser: F,
+) -> anyhow::Result<Token>
+where
+    H: crate::twitch::http::HttpClient,
+    F: FnOnce(&str),
+{
+    let tx_for_callback = progress_tx.clone();
+
+    let result = flow
+        .authenticate(
+            |user_code, verification_uri| {
+                let _ = tx_for_callback.send(Some(LoginProgress::PendingCode {
+                    user_code: user_code.to_string(),
+                    verification_uri: verification_uri.to_string(),
+                }));
+                on_browser(verification_uri);
+            },
+            cancel,
+        )
+        .await;
+
+    match result {
+        Ok(token) => {
+            let _ = progress_tx.send(Some(LoginProgress::Confirmed));
+            Ok(token)
+        }
+        Err(e) => {
+            let _ = progress_tx.send(Some(LoginProgress::Failed(e.to_string())));
+            Err(e)
+        }
+    }
+}
+
 impl Clone for SessionManager {
     fn clone(&self) -> Self {
         Self {
@@ -213,6 +269,142 @@ impl Clone for SessionManager {
             refresh_mutex: self.refresh_mutex.clone(),
             initial_load_done: self.initial_load_done.clone(),
             last_live_refresh: self.last_live_refresh.clone(),
+            login_progress_tx: self.login_progress_tx.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::DeviceFlow;
+    use crate::twitch::http::mock::MockHttpClient;
+    use serde::Serialize;
+    use tokio::sync::watch;
+
+    const DEVICE_CODE_URL: &str = "https://id.twitch.tv/oauth2/device";
+    const TOKEN_URL: &str = "https://id.twitch.tv/oauth2/token";
+    const VALIDATE_URL: &str = "https://id.twitch.tv/oauth2/validate";
+
+    #[derive(Serialize)]
+    struct DeviceCodeBody {
+        device_code: String,
+        user_code: String,
+        verification_uri: String,
+        expires_in: i64,
+        interval: i64,
+    }
+
+    #[derive(Serialize)]
+    struct TokenBody {
+        access_token: String,
+        refresh_token: String,
+        expires_in: i64,
+        scope: Vec<String>,
+    }
+
+    #[derive(Serialize)]
+    struct ValidateBody {
+        login: String,
+        user_id: String,
+    }
+
+    fn device_code_body(user_code: &str) -> DeviceCodeBody {
+        DeviceCodeBody {
+            device_code: "dev_code".into(),
+            user_code: user_code.into(),
+            verification_uri: "https://twitch.tv/activate".into(),
+            expires_in: 600,
+            interval: 1,
+        }
+    }
+
+    fn token_body() -> TokenBody {
+        TokenBody {
+            access_token: "tok_abc".into(),
+            refresh_token: "ref_def".into(),
+            expires_in: 3600,
+            scope: vec!["user:read:follows".into()],
+        }
+    }
+
+    fn validate_body() -> ValidateBody {
+        ValidateBody {
+            login: "testuser".into(),
+            user_id: "99999".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn login_progress_sends_pending_code_with_user_code() {
+        // Mock: device code succeeds, token poll returns access_denied (non-retryable → fast fail)
+        let mock = MockHttpClient::new()
+            .on_post_json(DEVICE_CODE_URL, &device_code_body("ABC-123"))
+            .on_post(TOKEN_URL, 400, r#"{"message":"access_denied"}"#);
+        let flow = DeviceFlow::with_http_client("client_id".into(), mock);
+
+        let (progress_tx, mut progress_rx) = watch::channel(None::<LoginProgress>);
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        // Spawn the flow so we can observe intermediate channel states
+        let task = tokio::spawn(run_device_flow(flow, cancel_rx, progress_tx, |_| {}));
+
+        // Wait for the first progress update (PendingCode)
+        progress_rx.changed().await.unwrap();
+        let value = progress_rx.borrow().clone();
+
+        let _ = task.await;
+
+        assert!(
+            matches!(value, Some(LoginProgress::PendingCode { ref user_code, .. }) if user_code == "ABC-123"),
+            "expected PendingCode with user_code ABC-123, got {:?}",
+            value
+        );
+    }
+
+    #[tokio::test]
+    async fn login_progress_sends_confirmed_on_success() {
+        let mock = MockHttpClient::new()
+            .on_post_json(DEVICE_CODE_URL, &device_code_body("XYZ"))
+            .on_post_json(TOKEN_URL, &token_body())
+            .on_get(
+                VALIDATE_URL,
+                200,
+                serde_json::to_string(&validate_body()).unwrap(),
+            );
+        let flow = DeviceFlow::with_http_client("client_id".into(), mock);
+
+        let (progress_tx, progress_rx) = watch::channel(None::<LoginProgress>);
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        let result = run_device_flow(flow, cancel_rx, progress_tx, |_| {}).await;
+
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+        assert_eq!(
+            *progress_rx.borrow(),
+            Some(LoginProgress::Confirmed),
+            "expected Confirmed after successful flow"
+        );
+    }
+
+    #[tokio::test]
+    async fn login_progress_sends_failed_on_error() {
+        // access_denied is returned immediately after device code
+        let mock = MockHttpClient::new()
+            .on_post_json(DEVICE_CODE_URL, &device_code_body("XYZ"))
+            .on_post(TOKEN_URL, 400, r#"{"message":"access_denied"}"#);
+        let flow = DeviceFlow::with_http_client("client_id".into(), mock);
+
+        let (progress_tx, progress_rx) = watch::channel(None::<LoginProgress>);
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        let result = run_device_flow(flow, cancel_rx, progress_tx, |_| {}).await;
+
+        assert!(result.is_err(), "expected Err");
+        assert!(
+            matches!(*progress_rx.borrow(), Some(LoginProgress::Failed(_))),
+            "expected Failed, got {:?}",
+            *progress_rx.borrow()
+        );
     }
 }
