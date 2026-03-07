@@ -12,10 +12,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Qt6 dependencies (for QML tests)
+      - name: Install Qt6/KDE dependencies (for QML tests)
         run: |
+          wget -qO - 'https://archive.neon.kde.org/public.key' | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/kde-neon.gpg
+          echo 'deb https://archive.neon.kde.org/user noble main' | sudo tee /etc/apt/sources.list.d/kde-neon.list
           sudo apt-get update
-          sudo apt-get install -y qt6-declarative-dev qt6-base-dev qml6-module-qttest qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qtqml-workerscript kirigami2-dev
+          sudo apt-get install -y qt6-declarative-dev qml6-module-org-kde-kirigami qml6-module-qttest qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qtqml-workerscript
 
       - name: Run QML plasmoid tests
         env:
