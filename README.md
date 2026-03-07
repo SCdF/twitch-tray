@@ -39,6 +39,8 @@ sudo pacman -S qt6-declarative libplasma kirigami
 sudo apt-get install -y qt6-declarative-dev plasma-framework-dev kirigami2-dev
 ```
 
+> `qt6-declarative` / `qt6-declarative-dev` provides `qmltestrunner`, which is required for `make test-plasmoid`.
+
 **macOS:**
 
 ```bash

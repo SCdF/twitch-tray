@@ -1,4 +1,4 @@
-.PHONY: all build build-kde dev run run-kde clean lint test test-plasmoid test-all install-deps install-plasmoid
+.PHONY: all build build-kde dev run run-kde clean lint lint-kde test test-plasmoid test-all install-deps install-plasmoid
 
 # Build directory
 DIST=dist
@@ -46,6 +46,10 @@ clean:
 lint:
 	cargo fmt --check
 	cargo clippy --workspace -- -D warnings
+
+# Run lints for KDE crate only
+lint-kde:
+	cargo clippy -p twitch-kde -- -D warnings
 
 # Run Rust tests
 test:
