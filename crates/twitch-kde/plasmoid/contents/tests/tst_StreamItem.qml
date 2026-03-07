@@ -51,15 +51,16 @@ Item {
             var label = findChild(item, "titleLabel")
             verify(label, "titleLabel should exist")
             compare(label.text, "Competitive ranked grind")
-            verify(label.visible, "title should be visible when set")
+            var clip = findChild(item, "titleClip")
+            verify(clip.visible, "title should be visible when set")
         }
 
         function test_title_hidden_when_empty() {
             item.title = ""
             wait(10)
-            var label = findChild(item, "titleLabel")
-            verify(label, "titleLabel should exist")
-            verify(!label.visible, "title should be hidden when empty")
+            var clip = findChild(item, "titleClip")
+            verify(clip, "titleClip should exist")
+            verify(!clip.visible, "title should be hidden when empty")
         }
 
         function test_viewer_count_displayed() {
