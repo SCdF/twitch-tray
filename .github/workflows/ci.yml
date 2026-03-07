@@ -7,7 +7,27 @@ on:
     branches: [main]
 
 jobs:
-  check:
+  kde:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt6 dependencies (for QML tests)
+        run: |
+          sudo apt-get install -y qt6-declarative-dev qt6-base-dev qml6-module-qttest qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qtqml-workerscript kirigami2-dev plasma-framework-dev
+
+      - name: Run QML plasmoid tests
+        run: |
+          QMLTESTRUNNER=$(find /usr/lib/qt6 -name qmltestrunner -type f 2>/dev/null | head -1)
+          if [ -z "$QMLTESTRUNNER" ]; then
+            QMLTESTRUNNER=$(which qmltestrunner 2>/dev/null || true)
+          fi
+          if [ -z "$QMLTESTRUNNER" ]; then
+            echo "FAIL: qmltestrunner not found, skipping QML tests"
+            exit 1
+          fi
+          QT_QPA_PLATFORM=offscreen "$QMLTESTRUNNER" -input crates/twitch-kde/plasmoid/contents/tests -import crates/twitch-kde/plasmoid/contents
+  main:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +44,7 @@ jobs:
 
       - name: Install Qt6 dependencies (for QML tests)
         run: |
-          sudo apt-get install -y qt6-declarative-dev qt6-base-dev qml6-module-qttest qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qtqml-workerscript kirigami2-dev
+          sudo apt-get install -y qt6-declarative-dev qt6-base-dev qml6-module-qttest qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qtqml-workerscript kirigami2-dev plasma-framework-dev
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
