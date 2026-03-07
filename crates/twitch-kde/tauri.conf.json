@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Twitch KDE",
+  "version": "0.1.0",
+  "identifier": "com.twitch-tray.kde",
+  "build": {
+    "beforeBuildCommand": "",
+    "beforeDevCommand": "",
+    "frontendDist": "../../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": []
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all",
+    "icon": ["../twitch-app-tauri/icons/icon.png"]
+  }
+}
