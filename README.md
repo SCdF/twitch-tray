@@ -36,7 +36,7 @@ sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicat
 sudo pacman -S qt6-declarative libplasma kirigami
 
 # Debian/Ubuntu
-sudo apt-get install -y qt6-declarative-dev plasma-framework-dev kirigami2-dev
+sudo apt-get install -y qt6-declarative-dev kirigami2-dev
 ```
 
 > `qt6-declarative` / `qt6-declarative-dev` provides `qmltestrunner`, which is required for `make test-plasmoid`.

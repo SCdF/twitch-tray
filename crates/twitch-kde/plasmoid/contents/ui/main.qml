@@ -3,7 +3,7 @@ import QtQuick.Controls as Controls
 import QtQuick.Layouts
 import org.kde.plasma.plasmoid
 import org.kde.plasma.plasma5support as P5Support
-import org.kde.kirigami as Kirigami
+import org.kde.kirigami 2.3 as Kirigami
 
 PlasmoidItem {
     id: root

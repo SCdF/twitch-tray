@@ -1,5 +1,5 @@
 import QtQuick
-import org.kde.kirigami as Kirigami
+import org.kde.kirigami 2.3 as Kirigami
 
 Item {
     id: root

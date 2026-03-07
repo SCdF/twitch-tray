@@ -1,6 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
-import org.kde.kirigami as Kirigami
+import org.kde.kirigami 2.3 as Kirigami
 
 ColumnLayout {
     property alias text: heading.text
