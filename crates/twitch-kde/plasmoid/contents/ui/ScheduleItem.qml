@@ -48,6 +48,7 @@ Item {
             objectName: "broadcasterNameLabel"
             text: root.broadcasterName
             font.bold: true
+            Layout.fillWidth: true
         }
 
         Controls.Label {
@@ -55,6 +56,7 @@ Item {
             objectName: "startTimeLabel"
             text: root.startTimeFormatted
             opacity: 0.7
+            horizontalAlignment: Text.AlignRight
         }
     }
 }

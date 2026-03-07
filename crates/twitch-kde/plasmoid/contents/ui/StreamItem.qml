@@ -37,9 +37,11 @@ Item {
             visible: root.isFavourite
         }
 
-        ColumnLayout {
+        GridLayout {
+            columns: 2
+            rowSpacing: 0
+            columnSpacing: 4
             Layout.fillWidth: true
-            spacing: 0
 
             Controls.Label {
                 id: userNameLabel
@@ -50,11 +52,27 @@ Item {
             }
 
             Controls.Label {
-                id: subtitleLabel
-                objectName: "subtitleLabel"
-                text: root.gameName + " \u00B7 " + root.viewerCountFormatted + " \u00B7 " + root.durationFormatted
+                id: viewerCountLabel
+                objectName: "viewerCountLabel"
+                text: root.viewerCountFormatted
+                opacity: 0.7
+                horizontalAlignment: Text.AlignRight
+            }
+
+            Controls.Label {
+                id: gameNameLabel
+                objectName: "gameNameLabel"
+                text: root.gameName
                 opacity: 0.7
                 Layout.fillWidth: true
+            }
+
+            Controls.Label {
+                id: durationLabel
+                objectName: "durationLabel"
+                text: root.durationFormatted
+                opacity: 0.7
+                horizontalAlignment: Text.AlignRight
             }
         }
     }

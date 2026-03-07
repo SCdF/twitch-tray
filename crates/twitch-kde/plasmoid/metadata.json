@@ -10,7 +10,8 @@
             }
         ],
         "Category": "Online Services",
-        "License": "MIT"
+        "License": "MIT",
+        "EnabledByDefault": true
     },
     "KPackageStructure": "Plasma/Applet",
     "X-Plasma-API": "declarativeappletscript",

@@ -6,3 +6,4 @@ StreamItem 1.0 StreamItem.qml
 ScheduleItem 1.0 ScheduleItem.qml
 LoginView 1.0 LoginView.qml
 CompactRepresentation 1.0 CompactRepresentation.qml
+FullRepresentation 1.0 FullRepresentation.qml

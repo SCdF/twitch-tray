@@ -37,12 +37,22 @@ Item {
             compare(label.text, "Streamer One")
         }
 
-        function test_subtitle_contains_game_and_viewers() {
-            var subtitle = findChild(item, "subtitleLabel")
-            verify(subtitle, "subtitleLabel should exist")
-            verify(subtitle.text.indexOf("Overwatch 2") >= 0, "should contain game name")
-            verify(subtitle.text.indexOf("1.2k") >= 0, "should contain viewer count")
-            verify(subtitle.text.indexOf("2h 15m") >= 0, "should contain duration")
+        function test_game_name_displayed() {
+            var label = findChild(item, "gameNameLabel")
+            verify(label, "gameNameLabel should exist")
+            compare(label.text, "Overwatch 2")
+        }
+
+        function test_viewer_count_displayed() {
+            var label = findChild(item, "viewerCountLabel")
+            verify(label, "viewerCountLabel should exist")
+            compare(label.text, "1.2k")
+        }
+
+        function test_duration_displayed() {
+            var label = findChild(item, "durationLabel")
+            verify(label, "durationLabel should exist")
+            compare(label.text, "2h 15m")
         }
 
         function test_star_visible_when_favourite() {

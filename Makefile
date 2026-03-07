@@ -94,3 +94,8 @@ dist-kde: release-kde
 install-plasmoid:
 	kpackagetool6 --type Plasma/Applet --install crates/twitch-kde/plasmoid 2>/dev/null || \
 		kpackagetool6 --type Plasma/Applet --upgrade crates/twitch-kde/plasmoid
+	@# Remove from knownItems so system tray re-discovers it with EnabledByDefault on next restart
+	@APPLETS_RC=~/.config/plasma-org.kde.plasma.desktop-appletsrc; \
+	if [ -f "$$APPLETS_RC" ]; then \
+		sed -i 's/,info.sdufresne.TwitchTray//g; s/info.sdufresne.TwitchTray,//g; s/info.sdufresne.TwitchTray//g' "$$APPLETS_RC"; \
+	fi
