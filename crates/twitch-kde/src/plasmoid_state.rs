@@ -48,6 +48,8 @@ fn live_stream_to_dto(s: Stream, settings: &HashMap<String, StreamerSettings>) -
         user_login: s.user_login,
         user_name: s.user_name,
         game_name: s.game_name,
+        title: s.title,
+        profile_image_url: s.profile_image_url,
         viewer_count_formatted,
         duration_formatted,
         is_favourite,
@@ -240,6 +242,7 @@ mod tests {
             started_at: Utc::now() - Duration::hours(1),
             thumbnail_url: "https://example.com/thumb.jpg".to_string(),
             tags: vec![],
+            profile_image_url: String::new(),
         }
     }
 
@@ -397,6 +400,25 @@ mod tests {
     // =========================================================
     // Live section — formatted fields
     // =========================================================
+
+    #[test]
+    fn title_mapped_to_dto() {
+        let mut s = make_stream("1", "streamer");
+        s.title = "Playing chess with viewers!".to_string();
+        let state = compute_plasmoid_state(raw(vec![s], vec![]), None, Utc::now());
+        assert_eq!(state.live.visible[0].title, "Playing chess with viewers!");
+    }
+
+    #[test]
+    fn profile_image_url_mapped_to_dto() {
+        let mut s = make_stream("1", "streamer");
+        s.profile_image_url = "https://example.com/avatar.jpg".to_string();
+        let state = compute_plasmoid_state(raw(vec![s], vec![]), None, Utc::now());
+        assert_eq!(
+            state.live.visible[0].profile_image_url,
+            "https://example.com/avatar.jpg"
+        );
+    }
 
     #[test]
     fn viewer_count_formatted_correctly() {

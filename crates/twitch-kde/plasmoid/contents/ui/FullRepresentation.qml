@@ -78,6 +78,8 @@ Controls.ScrollView {
                     userLogin: modelData.user_login
                     userName: modelData.user_name
                     gameName: modelData.game_name
+                    title: modelData.title || ""
+                    profileImageUrl: modelData.profile_image_url || ""
                     viewerCountFormatted: modelData.viewer_count_formatted
                     durationFormatted: modelData.duration_formatted
                     isFavourite: modelData.is_favourite
@@ -98,6 +100,8 @@ Controls.ScrollView {
                         userLogin: modelData.user_login
                         userName: modelData.user_name
                         gameName: modelData.game_name
+                        title: modelData.title || ""
+                        profileImageUrl: modelData.profile_image_url || ""
                         viewerCountFormatted: modelData.viewer_count_formatted
                         durationFormatted: modelData.duration_formatted
                         isFavourite: modelData.is_favourite

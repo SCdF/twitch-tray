@@ -257,6 +257,23 @@ impl<H: HttpClient> TwitchClient<H> {
     }
 }
 
+// User-related methods
+impl<H: HttpClient> TwitchClient<H> {
+    /// Gets users by their IDs (up to 100 per request)
+    ///
+    /// Returns `ApiError::Unauthorized` if the token has expired.
+    pub async fn get_users_by_ids(&self, user_ids: &[&str]) -> Result<Vec<User>, ApiError> {
+        if user_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let params: Vec<String> = user_ids.iter().map(|id| format!("id={}", id)).collect();
+        let endpoint = format!("/users?{}", params.join("&"));
+        let response: UsersResponse = self.get(&endpoint).await?;
+        Ok(response.data)
+    }
+}
+
 // Schedule-related methods
 impl<H: HttpClient> TwitchClient<H> {
     /// Gets scheduled streams for a broadcaster
@@ -402,6 +419,54 @@ mod tests {
 
         let client_id_header = requests[0].headers.get("Client-Id").unwrap();
         assert_eq!(client_id_header.to_str().unwrap(), "my_client_id");
+    }
+
+    // === get_users_by_ids tests ===
+
+    #[tokio::test]
+    async fn get_users_by_ids_returns_users() {
+        let response = UsersResponse {
+            data: vec![
+                User {
+                    id: "123".to_string(),
+                    login: "streamer1".to_string(),
+                    display_name: "Streamer1".to_string(),
+                    profile_image_url: "https://example.com/avatar1.jpg".to_string(),
+                },
+                User {
+                    id: "456".to_string(),
+                    login: "streamer2".to_string(),
+                    display_name: "Streamer2".to_string(),
+                    profile_image_url: "https://example.com/avatar2.jpg".to_string(),
+                },
+            ],
+        };
+
+        let mock = MockHttpClient::new()
+            .on_get_json("https://api.twitch.tv/helix/users?id=123&id=456", &response);
+
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+        client.set_access_token("test_token".to_string()).await;
+
+        let result = client.get_users_by_ids(&["123", "456"]).await.unwrap();
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].id, "123");
+        assert_eq!(
+            result[0].profile_image_url,
+            "https://example.com/avatar1.jpg"
+        );
+        assert_eq!(result[1].id, "456");
+    }
+
+    #[tokio::test]
+    async fn get_users_by_ids_empty_returns_empty() {
+        let mock = MockHttpClient::new();
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+        client.set_access_token("test_token".to_string()).await;
+
+        let result = client.get_users_by_ids(&[]).await.unwrap();
+        assert!(result.is_empty());
     }
 
     // === search_categories tests ===

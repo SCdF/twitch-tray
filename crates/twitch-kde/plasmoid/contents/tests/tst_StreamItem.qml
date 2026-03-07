@@ -11,6 +11,8 @@ Item {
         userLogin: "streamer1"
         userName: "Streamer One"
         gameName: "Overwatch 2"
+        title: "Competitive ranked grind"
+        profileImageUrl: ""
         viewerCountFormatted: "1.2k"
         durationFormatted: "2h 15m"
         isFavourite: false
@@ -28,6 +30,8 @@ Item {
 
         function init() {
             item.isFavourite = false
+            item.profileImageUrl = ""
+            item.title = "Competitive ranked grind"
             clickSpy.clear()
         }
 
@@ -37,10 +41,25 @@ Item {
             compare(label.text, "Streamer One")
         }
 
-        function test_game_name_displayed() {
+        function test_game_name_beside_user_name() {
             var label = findChild(item, "gameNameLabel")
             verify(label, "gameNameLabel should exist")
-            compare(label.text, "Overwatch 2")
+            compare(label.text, "\u00B7 Overwatch 2")
+        }
+
+        function test_title_displayed_below_name() {
+            var label = findChild(item, "titleLabel")
+            verify(label, "titleLabel should exist")
+            compare(label.text, "Competitive ranked grind")
+            verify(label.visible, "title should be visible when set")
+        }
+
+        function test_title_hidden_when_empty() {
+            item.title = ""
+            wait(10)
+            var label = findChild(item, "titleLabel")
+            verify(label, "titleLabel should exist")
+            verify(!label.visible, "title should be hidden when empty")
         }
 
         function test_viewer_count_displayed() {
@@ -55,20 +74,50 @@ Item {
             compare(label.text, "2h 15m")
         }
 
-        function test_star_visible_when_favourite() {
-            item.isFavourite = true
-            wait(10)
-            var star = findChild(item, "favouriteStar")
-            verify(star, "favouriteStar should exist")
-            verify(star.visible, "star should be visible when favourite")
+        function test_avatar_container_exists() {
+            var container = findChild(item, "avatarContainer")
+            verify(container, "avatarContainer should exist")
+            compare(container.width, 40)
+            compare(container.height, 40)
         }
 
-        function test_star_hidden_when_not_favourite() {
+        function test_avatar_placeholder_shown_when_no_url() {
+            item.profileImageUrl = ""
+            wait(10)
+            var placeholder = findChild(item, "avatarPlaceholder")
+            verify(placeholder, "avatarPlaceholder should exist")
+            verify(placeholder.visible, "placeholder should be visible when no URL")
+
+            var image = findChild(item, "avatarImage")
+            verify(image, "avatarImage should exist")
+            verify(!image.visible, "image should be hidden when no URL")
+        }
+
+        function test_avatar_image_shown_when_url_set() {
+            item.profileImageUrl = "https://example.com/avatar.jpg"
+            wait(10)
+            var image = findChild(item, "avatarImage")
+            verify(image, "avatarImage should exist")
+            verify(image.visible, "image should be visible when URL set")
+
+            var placeholder = findChild(item, "avatarPlaceholder")
+            verify(!placeholder.visible, "placeholder should be hidden when URL set")
+        }
+
+        function test_favourite_shows_border_on_avatar() {
+            item.isFavourite = true
+            wait(10)
+            var container = findChild(item, "avatarContainer")
+            verify(container, "avatarContainer should exist")
+            compare(container.border.width, 2, "favourite should have 2px border")
+        }
+
+        function test_not_favourite_no_border() {
             item.isFavourite = false
             wait(10)
-            var star = findChild(item, "favouriteStar")
-            verify(star, "favouriteStar should exist")
-            verify(!star.visible, "star should be hidden when not favourite")
+            var container = findChild(item, "avatarContainer")
+            verify(container, "avatarContainer should exist")
+            compare(container.border.width, 0, "non-favourite should have no border")
         }
 
         function test_click_emits_user_login() {

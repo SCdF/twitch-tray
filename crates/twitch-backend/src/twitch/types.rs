@@ -16,6 +16,9 @@ pub struct Stream {
     pub thumbnail_url: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Profile image URL (not returned by /streams — populated separately via /users)
+    #[serde(default)]
+    pub profile_image_url: String,
 }
 
 /// Formats a viewer count with k suffix for thousands
@@ -172,6 +175,22 @@ pub struct ScheduleResponse {
     pub data: ScheduleData,
 }
 
+/// Represents a Twitch user (from /users endpoint)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct User {
+    pub id: String,
+    pub login: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub profile_image_url: String,
+}
+
+/// Users response from Helix API
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsersResponse {
+    pub data: Vec<User>,
+}
+
 /// Represents a Twitch category/game
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Category {
@@ -206,6 +225,7 @@ mod tests {
             started_at: Utc::now() - Duration::hours(1),
             thumbnail_url: "https://example.com/thumb.jpg".to_string(),
             tags: vec![],
+            profile_image_url: String::new(),
         }
     }
 
@@ -223,6 +243,7 @@ mod tests {
             started_at,
             thumbnail_url: "https://example.com/thumb.jpg".to_string(),
             tags: vec![],
+            profile_image_url: String::new(),
         }
     }
 

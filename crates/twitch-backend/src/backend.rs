@@ -419,7 +419,7 @@ impl Backend {
             return;
         }
 
-        let streams = match self.with_retry(|| self.client.get_followed_streams()).await {
+        let mut streams = match self.with_retry(|| self.client.get_followed_streams()).await {
             Ok(streams) => streams,
             Err(e) => {
                 tracing::error!("Failed to get followed streams: {}", e);
@@ -427,8 +427,43 @@ impl Backend {
             }
         };
 
+        // Enrich streams with profile image URLs from the Users API
+        self.enrich_with_profile_images(&mut streams).await;
+
         self.session.record_live_refresh().await;
         self.state.set_followed_streams(streams).await;
+    }
+
+    async fn enrich_with_profile_images(&self, streams: &mut [crate::twitch::Stream]) {
+        if streams.is_empty() {
+            return;
+        }
+
+        let user_ids: Vec<&str> = streams.iter().map(|s| s.user_id.as_str()).collect();
+
+        // Batch in groups of 100 (Twitch API limit)
+        let mut profile_map = std::collections::HashMap::new();
+        for chunk in user_ids.chunks(100) {
+            match self
+                .with_retry(|| self.client.get_users_by_ids(chunk))
+                .await
+            {
+                Ok(users) => {
+                    for user in users {
+                        profile_map.insert(user.id, user.profile_image_url);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to fetch user profiles: {}", e);
+                }
+            }
+        }
+
+        for stream in streams.iter_mut() {
+            if let Some(url) = profile_map.get(&stream.user_id) {
+                stream.profile_image_url = url.clone();
+            }
+        }
     }
 
     pub(crate) async fn refresh_schedules_from_db(&self) {

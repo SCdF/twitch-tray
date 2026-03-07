@@ -428,6 +428,7 @@ mod tests {
             started_at,
             thumbnail_url: "https://example.com/thumb.jpg".to_string(),
             tags: vec![],
+            profile_image_url: String::new(),
         }
     }
 

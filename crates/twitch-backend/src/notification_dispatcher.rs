@@ -114,6 +114,7 @@ mod tests {
             started_at: Utc::now() - chrono::Duration::hours(1),
             thumbnail_url: String::new(),
             tags: vec![],
+            profile_image_url: String::new(),
         }
     }
 

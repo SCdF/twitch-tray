@@ -460,6 +460,7 @@ mod tests {
             started_at: Utc::now() - chrono::Duration::hours(1),
             thumbnail_url: "https://example.com/thumb.jpg".to_string(),
             tags: vec![],
+            profile_image_url: String::new(),
         }
     }
 

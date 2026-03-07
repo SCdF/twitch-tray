@@ -20,6 +20,7 @@ pub fn make_stream(user_id: &str, user_name: &str) -> Stream {
         started_at: Utc::now() - Duration::hours(1),
         thumbnail_url: "https://example.com/thumb.jpg".to_string(),
         tags: vec![],
+        profile_image_url: String::new(),
     }
 }
 

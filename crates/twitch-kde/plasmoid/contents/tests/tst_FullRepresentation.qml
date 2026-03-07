@@ -15,6 +15,8 @@ Item {
                     "user_login": "streamer1",
                     "user_name": "Streamer One",
                     "game_name": "Overwatch 2",
+                    "title": "Competitive ranked grind",
+                    "profile_image_url": "https://example.com/avatar1.jpg",
                     "viewer_count_formatted": "1.2k",
                     "duration_formatted": "2h 15m",
                     "is_favourite": true
@@ -23,6 +25,8 @@ Item {
                     "user_login": "streamer2",
                     "user_name": "Streamer Two",
                     "game_name": "Minecraft",
+                    "title": "Building a castle",
+                    "profile_image_url": "",
                     "viewer_count_formatted": "500",
                     "duration_formatted": "45m",
                     "is_favourite": false
