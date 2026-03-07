@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Layouts
 
-Item {
+Controls.ItemDelegate {
     id: root
 
     property string broadcasterLogin: ""
@@ -11,22 +11,12 @@ Item {
     property bool isInferred: false
     property bool isFavourite: false
 
-    signal clicked(string broadcasterLogin)
+    signal scheduleClicked(string broadcasterLogin)
 
-    implicitHeight: row.implicitHeight + 8
-    implicitWidth: row.implicitWidth
+    onClicked: root.scheduleClicked(root.broadcasterLogin)
 
-    MouseArea {
-        id: clickArea
-        objectName: "clickArea"
-        anchors.fill: parent
-        onClicked: root.clicked(root.broadcasterLogin)
-    }
-
-    RowLayout {
+    contentItem: RowLayout {
         id: row
-        anchors.fill: parent
-        anchors.margins: 4
         spacing: 4
 
         Controls.Label {

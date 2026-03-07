@@ -81,7 +81,7 @@ Controls.ScrollView {
                     viewerCountFormatted: modelData.viewer_count_formatted
                     durationFormatted: modelData.duration_formatted
                     isFavourite: modelData.is_favourite
-                    onClicked: (login) => scrollView.openStream(login)
+                    onStreamClicked: (login) => scrollView.openStream(login)
                 }
             }
 
@@ -101,7 +101,7 @@ Controls.ScrollView {
                         viewerCountFormatted: modelData.viewer_count_formatted
                         durationFormatted: modelData.duration_formatted
                         isFavourite: modelData.is_favourite
-                        onClicked: (login) => scrollView.openStream(login)
+                        onStreamClicked: (login) => scrollView.openStream(login)
                     }
                 }
             }
@@ -116,19 +116,12 @@ Controls.ScrollView {
 
                     Repeater {
                         model: modelData.streams
-                        delegate: Item {
+                        delegate: Controls.ItemDelegate {
                             width: parent.width
-                            implicitHeight: catRow.implicitHeight + 8
+                            onClicked: scrollView.openStream(modelData.user_login)
 
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: scrollView.openStream(modelData.user_login)
-                            }
-
-                            RowLayout {
-                                id: catRow
-                                anchors.fill: parent
-                                anchors.margins: 4
+                            contentItem: RowLayout {
+                                spacing: 4
 
                                 Controls.Label {
                                     text: modelData.user_name
@@ -168,7 +161,7 @@ Controls.ScrollView {
                     startTimeFormatted: modelData.start_time_formatted
                     isInferred: modelData.is_inferred
                     isFavourite: modelData.is_favourite
-                    onClicked: (login) => scrollView.openStreamerSettings(
+                    onScheduleClicked: (login) => scrollView.openStreamerSettings(
                         login, modelData.broadcaster_name
                     )
                 }

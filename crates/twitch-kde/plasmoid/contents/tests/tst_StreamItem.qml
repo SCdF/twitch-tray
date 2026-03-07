@@ -19,7 +19,7 @@ Item {
     SignalSpy {
         id: clickSpy
         target: item
-        signalName: "clicked"
+        signalName: "streamClicked"
     }
 
     TestCase {
@@ -72,9 +72,7 @@ Item {
         }
 
         function test_click_emits_user_login() {
-            var clickArea = findChild(item, "clickArea")
-            verify(clickArea, "clickArea should exist")
-            mouseClick(clickArea)
+            mouseClick(item)
             compare(clickSpy.count, 1)
             compare(clickSpy.signalArguments[0][0], "streamer1")
         }

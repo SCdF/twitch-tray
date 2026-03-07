@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Layouts
 
-Item {
+Controls.ItemDelegate {
     id: root
 
     property string userLogin: ""
@@ -12,22 +12,12 @@ Item {
     property string durationFormatted: ""
     property bool isFavourite: false
 
-    signal clicked(string userLogin)
+    signal streamClicked(string userLogin)
 
-    implicitHeight: row.implicitHeight + 8
-    implicitWidth: row.implicitWidth
+    onClicked: root.streamClicked(root.userLogin)
 
-    MouseArea {
-        id: clickArea
-        objectName: "clickArea"
-        anchors.fill: parent
-        onClicked: root.clicked(root.userLogin)
-    }
-
-    RowLayout {
+    contentItem: RowLayout {
         id: row
-        anchors.fill: parent
-        anchors.margins: 4
         spacing: 4
 
         Controls.Label {
@@ -37,42 +27,48 @@ Item {
             visible: root.isFavourite
         }
 
-        GridLayout {
-            columns: 2
-            rowSpacing: 0
-            columnSpacing: 4
+        ColumnLayout {
             Layout.fillWidth: true
+            spacing: 0
 
-            Controls.Label {
-                id: userNameLabel
-                objectName: "userNameLabel"
-                text: root.userName
-                font.bold: true
+            RowLayout {
                 Layout.fillWidth: true
+
+                Controls.Label {
+                    id: userNameLabel
+                    objectName: "userNameLabel"
+                    text: root.userName
+                    font.bold: true
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                }
+
+                Controls.Label {
+                    id: viewerCountLabel
+                    objectName: "viewerCountLabel"
+                    text: root.viewerCountFormatted
+                    opacity: 0.7
+                }
             }
 
-            Controls.Label {
-                id: viewerCountLabel
-                objectName: "viewerCountLabel"
-                text: root.viewerCountFormatted
-                opacity: 0.7
-                horizontalAlignment: Text.AlignRight
-            }
-
-            Controls.Label {
-                id: gameNameLabel
-                objectName: "gameNameLabel"
-                text: root.gameName
-                opacity: 0.7
+            RowLayout {
                 Layout.fillWidth: true
-            }
 
-            Controls.Label {
-                id: durationLabel
-                objectName: "durationLabel"
-                text: root.durationFormatted
-                opacity: 0.7
-                horizontalAlignment: Text.AlignRight
+                Controls.Label {
+                    id: gameNameLabel
+                    objectName: "gameNameLabel"
+                    text: root.gameName
+                    opacity: 0.7
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                }
+
+                Controls.Label {
+                    id: durationLabel
+                    objectName: "durationLabel"
+                    text: root.durationFormatted
+                    opacity: 0.7
+                }
             }
         }
     }

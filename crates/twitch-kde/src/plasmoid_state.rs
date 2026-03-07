@@ -4,7 +4,6 @@ use chrono::{DateTime, Duration, Utc};
 use twitch_backend::{
     config::{StreamerImportance, StreamerSettings},
     handle::{LoginProgress, RawDisplayData},
-    notify::truncate,
     twitch::{format_viewer_count, ScheduledStream, Stream},
 };
 
@@ -43,13 +42,12 @@ fn map_login_state(login_progress: Option<&LoginProgress>) -> LoginStateDto {
 
 fn live_stream_to_dto(s: Stream, settings: &HashMap<String, StreamerSettings>) -> LiveStreamDto {
     let is_favourite = get_importance(&s.user_login, settings) == StreamerImportance::Favourite;
-    let game_name = truncate(&s.game_name, 20);
     let viewer_count_formatted = s.format_viewer_count();
     let duration_formatted = s.format_duration();
     LiveStreamDto {
         user_login: s.user_login,
         user_name: s.user_name,
-        game_name,
+        game_name: s.game_name,
         viewer_count_formatted,
         duration_formatted,
         is_favourite,
