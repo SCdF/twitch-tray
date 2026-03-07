@@ -2,9 +2,8 @@ import QtQuick
 import QtQuick.Controls as Controls
 import QtQuick.Layouts
 import org.kde.plasma.plasmoid
-import org.kde.plasma.core as PlasmaCore
+import org.kde.plasma.plasma5support as P5Support
 import org.kde.kirigami as Kirigami
-import ui
 
 PlasmoidItem {
     id: root
@@ -18,7 +17,7 @@ PlasmoidItem {
     })
 
     // D-Bus communication via qdbus6 through the executable DataEngine
-    PlasmaCore.DataSource {
+    P5Support.DataSource {
         id: dbusExec
         engine: "executable"
         connectedSources: []

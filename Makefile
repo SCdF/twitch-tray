@@ -87,13 +87,13 @@ dist-kde: release-kde
 	@echo "KDE plasmoid package: $(DIST)/twitch-kde-plasmoid/"
 	@echo "KDE daemon binary:    $(DIST)/twitch-kde"
 	@echo ""
-	@echo "Install plasmoid:  kpackagetool6 --install $(DIST)/twitch-kde-plasmoid"
+	@echo "Install plasmoid:  kpackagetool6 --type Plasma/Applet --install $(DIST)/twitch-kde-plasmoid"
 	@echo "Install daemon:    sudo cp $(DIST)/twitch-kde /usr/bin/twitch-kde"
 
 # Install plasmoid to local KDE (development)
 install-plasmoid:
-	kpackagetool6 --install crates/twitch-kde/plasmoid 2>/dev/null || \
-		kpackagetool6 --upgrade crates/twitch-kde/plasmoid
+	kpackagetool6 --type Plasma/Applet --install crates/twitch-kde/plasmoid 2>/dev/null || \
+		kpackagetool6 --type Plasma/Applet --upgrade crates/twitch-kde/plasmoid
 
 # Install platform-specific dependencies
 install-deps:

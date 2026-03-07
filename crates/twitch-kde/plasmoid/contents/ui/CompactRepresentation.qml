@@ -1,4 +1,5 @@
 import QtQuick
+import org.kde.kirigami as Kirigami
 
 Item {
     id: root
@@ -8,12 +9,14 @@ Item {
     implicitWidth: 24
     implicitHeight: 24
 
-    Text {
+    Kirigami.Icon {
         id: twitchIcon
         objectName: "twitchIcon"
         anchors.centerIn: parent
-        text: "\uD83D\uDCFA"
-        font.pixelSize: 16
+        width: 22
+        height: 22
+        source: Qt.resolvedUrl("../../icon.png")
+        isMask: false
     }
 
     Rectangle {

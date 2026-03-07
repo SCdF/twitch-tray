@@ -3,7 +3,7 @@
         "Id": "info.sdufresne.TwitchTray",
         "Name": "Twitch Tray",
         "Description": "Shows live Twitch streams and schedules from followed channels",
-        "Icon": "applications-multimedia",
+        "Icon": "icon",
         "Authors": [
             {
                 "Name": "Twitch Tray"
@@ -14,7 +14,7 @@
     },
     "KPackageStructure": "Plasma/Applet",
     "X-Plasma-API": "declarativeappletscript",
+    "X-Plasma-API-Minimum-Version": "6.0",
     "X-Plasma-MainScript": "ui/main.qml",
-    "X-Plasma-NotificationArea": "true",
-    "X-Plasma-CompactRepresentation": "ui/CompactRepresentation.qml"
+    "X-Plasma-NotificationAreaCategory": "ApplicationStatus"
 }
