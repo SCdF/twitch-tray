@@ -1,4 +1,4 @@
-.PHONY: all build build-kde dev run run-kde clean lint lint-kde test test-plasmoid test-all install-deps install-plasmoid
+.PHONY: all build build-kde dev run run-kde clean lint lint-kde test test-plasmoid test-all install-plasmoid
 
 # Build directory
 DIST=dist
@@ -94,20 +94,3 @@ dist-kde: release-kde
 install-plasmoid:
 	kpackagetool6 --type Plasma/Applet --install crates/twitch-kde/plasmoid 2>/dev/null || \
 		kpackagetool6 --type Plasma/Applet --upgrade crates/twitch-kde/plasmoid
-
-# Install platform-specific dependencies
-install-deps:
-	@echo "Platform-specific dependencies:"
-	@echo ""
-	@echo "Linux (Debian/Ubuntu):"
-	@echo "  sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev"
-	@echo ""
-	@echo "Linux (KDE target, additional):"
-	@echo "  Arch: qt6-declarative libplasma kirigami"
-	@echo "  Debian/Ubuntu: qt6-declarative-dev plasma-framework-dev kirigami2-dev"
-	@echo ""
-	@echo "macOS:"
-	@echo "  xcode-select --install"
-	@echo ""
-	@echo "Windows:"
-	@echo "  Install Visual Studio Build Tools with C++ workload"
