@@ -12,7 +12,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 use twitch_backend::{AuthCommand, BackendEvent};
 use twitch_menu_tauri::display::DisplayBackend;
 use twitch_menu_tauri::display_state::DisplayState;
-use twitch_menu_tauri::tray::{handle_menu_event, open_streamer_settings_window, TrayBackend};
+use twitch_menu_tauri::tray::{handle_menu_event, TrayBackend};
+use twitch_settings_tauri::window::open_streamer_settings_window;
 
 fn main() {
     // Initialize logging

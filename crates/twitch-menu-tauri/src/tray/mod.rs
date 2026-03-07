@@ -4,7 +4,7 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     tray::{TrayIcon, TrayIconBuilder},
-    AppHandle, Emitter, Manager, WebviewWindowBuilder,
+    AppHandle, Emitter,
 };
 
 use crate::display::DisplayBackend;
@@ -18,9 +18,6 @@ const ICON_GREY_BYTES: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../twitch-app-tauri/icons/icon_grey.png"
 ));
-
-/// Width of the settings window in logical pixels
-const SETTINGS_WINDOW_SIZE: f64 = 975.0;
 
 /// Menu item IDs
 mod ids {
@@ -142,52 +139,6 @@ impl DisplayBackend for TrayBackend {
                 }
             })
             .map_err(anyhow::Error::from)
-    }
-}
-
-/// Opens the settings window
-pub fn open_settings_window(app: &AppHandle) {
-    // Check if window already exists
-    if let Some(window) = app.get_webview_window("settings") {
-        let _ = window.set_focus();
-        return;
-    }
-
-    // Create new settings window
-    match WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::App("index.html".into()))
-        .title("Twitch Tray Settings")
-        .inner_size(SETTINGS_WINDOW_SIZE, SETTINGS_WINDOW_SIZE)
-        .resizable(true)
-        .center()
-        .build()
-    {
-        Ok(_) => tracing::info!("Settings window opened"),
-        Err(e) => tracing::error!("Failed to open settings window: {}", e),
-    }
-}
-
-/// Opens a small settings window for a specific streamer
-pub fn open_streamer_settings_window(app: &AppHandle, user_login: &str, display_name: &str) {
-    let window_id = format!("streamer-settings-{}", user_login);
-
-    // Focus existing window if already open
-    if let Some(window) = app.get_webview_window(&window_id) {
-        let _ = window.set_focus();
-        return;
-    }
-
-    let url = format!("index.html?streamer={}", user_login);
-    let title = format!("{} - Settings", display_name);
-
-    match WebviewWindowBuilder::new(app, &window_id, tauri::WebviewUrl::App(url.into()))
-        .title(&title)
-        .inner_size(SETTINGS_WINDOW_SIZE, SETTINGS_WINDOW_SIZE)
-        .resizable(true)
-        .center()
-        .build()
-    {
-        Ok(_) => tracing::info!("Streamer settings window opened for {}", user_login),
-        Err(e) => tracing::error!("Failed to open streamer settings window: {}", e),
     }
 }
 
@@ -334,7 +285,7 @@ pub fn handle_menu_event(app: &AppHandle, id: &str) {
             app.emit("logout-requested", ()).ok();
         }
         ids::SETTINGS => {
-            open_settings_window(app);
+            twitch_settings_tauri::window::open_settings_window(app);
         }
         ids::QUIT => {
             app.exit(0);

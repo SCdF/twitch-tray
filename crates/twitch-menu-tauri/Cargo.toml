@@ -6,6 +6,7 @@ rust-version = "1.91"
 
 [dependencies]
 twitch-backend = { path = "../twitch-backend" }
+twitch-settings-tauri = { path = "../twitch-settings-tauri" }
 tauri = { version = "2", features = ["tray-icon"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
 chrono = { version = "0.4", features = ["serde"] }
