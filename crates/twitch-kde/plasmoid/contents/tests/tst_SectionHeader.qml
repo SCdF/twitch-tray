@@ -1,6 +1,6 @@
 import QtQuick
 import QtTest
-import org.kde.kirigami 2.3 as Kirigami
+import org.kde.kirigami as Kirigami
 import ui
 
 Item {
