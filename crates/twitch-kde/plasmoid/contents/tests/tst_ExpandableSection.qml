@@ -8,6 +8,7 @@ Item {
 
     ExpandableSection {
         id: section
+        width: 400
         heading: "More"
         count: 3
 
