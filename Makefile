@@ -62,7 +62,6 @@ test-plasmoid:
 		echo "Install: qt6-declarative-dev (Debian/Ubuntu) or qt6-declarative (Arch)"; \
 		exit 1; \
 	}
-	export QT_QPA_PLATFORM=offscreen
 	/usr/lib/qt6/bin/qmltestrunner -input crates/twitch-kde/plasmoid/contents/tests -import crates/twitch-kde/plasmoid/contents
 
 # Run all tests (Rust + QML)
