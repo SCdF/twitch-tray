@@ -8,6 +8,7 @@ A cross-platform system tray application for Twitch viewers. Get notified when y
 - **Quick Access Menu**: Click the tray icon to see who's live and jump directly to their stream
 - **Scheduled Streams**: View upcoming scheduled broadcasts in the next 24 hours
 - **Cross-Platform**: Works on Linux, macOS, and Windows
+- **KDE Plasmoid**: Native KDE Plasma panel widget (Linux/KDE only)
 
 ## Installation
 
@@ -27,6 +28,15 @@ Download the latest release for your platform from the [Releases](https://github
 sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
 ```
 
+**Linux (KDE target, additional):**
+```bash
+# Arch
+sudo pacman -S qt6-declarative libplasma kirigami
+
+# Debian/Ubuntu
+sudo apt-get install -y qt6-declarative-dev plasma-framework-dev kirigami2-dev
+```
+
 **macOS:**
 ```bash
 xcode-select --install
@@ -38,14 +48,20 @@ xcode-select --install
 #### Build
 
 ```bash
-# Development build
+# Development build (system tray)
 make build
+
+# Development build (KDE daemon)
+make build-kde
 
 # Release build
 make release
 
-# Run
+# Run (system tray)
 make run
+
+# Run (KDE daemon)
+make run-kde
 ```
 
 ## Usage
@@ -98,6 +114,26 @@ Config file location: `~/.config/twitch-tray/config.json`
 └── Quit
 ```
 
+### KDE Plasmoid
+
+The KDE target provides a native Plasma panel widget. It runs a background daemon (`twitch-kde`) that exposes state over D-Bus, and a QML plasmoid that displays it.
+
+```bash
+# Build and install the plasmoid package
+make dist-kde
+
+# Install plasmoid to KDE (development — uses source dir directly)
+make install-plasmoid
+
+# Install daemon binary
+sudo cp target/release/twitch-kde /usr/bin/twitch-kde
+```
+
+For D-Bus activation (auto-start when plasmoid connects), install the service file:
+```bash
+sudo cp crates/twitch-kde/org.twitch.TwitchTray1.service /usr/share/dbus-1/services/
+```
+
 ## Development
 
 ```bash
@@ -110,8 +146,14 @@ make dev
 # Run lints
 make lint
 
-# Run tests
+# Run all tests (Rust + QML)
+make test-all
+
+# Run Rust tests only
 make test
+
+# Run QML plasmoid tests only
+make test-plasmoid
 
 # Format code
 make fmt

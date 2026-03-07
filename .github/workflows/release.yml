@@ -21,18 +21,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
 
+      - name: Install Qt6 dependencies (for QML tests)
+        run: |
+          sudo apt-get install -y qt6-declarative-dev qt6-base-dev qml6-module-qttest qml6-module-qtquick-layouts qml6-module-qtquick-controls
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
 
       - name: Clippy
-        working-directory: src-tauri
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --workspace -- -D warnings
 
-      - name: Run tests
-        working-directory: src-tauri
-        run: cargo test
+      - name: Run Rust tests
+        run: cargo test --workspace
+
+      - name: Run QML plasmoid tests
+        run: |
+          QMLTESTRUNNER=$(find /usr/lib/qt6 -name qmltestrunner -type f 2>/dev/null | head -1)
+          if [ -z "$QMLTESTRUNNER" ]; then
+            QMLTESTRUNNER=$(which qmltestrunner 2>/dev/null || true)
+          fi
+          if [ -z "$QMLTESTRUNNER" ]; then
+            echo "WARNING: qmltestrunner not found, skipping QML tests"
+            exit 0
+          fi
+          QT_QPA_PLATFORM=offscreen "$QMLTESTRUNNER" -input crates/twitch-kde/plasmoid/contents/tests -import crates/twitch-kde/plasmoid/contents
 
   release:
     needs: check
@@ -72,33 +84,30 @@ jobs:
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2"
 
-      - name: Build
-        working-directory: src-tauri
-        run: cargo tauri build --target ${{ matrix.target }}
+      - name: Build Tauri app
+        run: cd crates/twitch-app-tauri && cargo tauri build --target ${{ matrix.target }}
 
       - name: Prepare artifacts (Linux)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           mkdir -p dist
-          cp src-tauri/target/${{ matrix.target }}/release/twitch-tray dist/twitch-tray-${{ matrix.suffix }}
+          cp target/${{ matrix.target }}/release/twitch-tray dist/twitch-tray-${{ matrix.suffix }}
 
       - name: Prepare artifacts (macOS)
         if: matrix.platform == 'macos-latest'
         run: |
           mkdir -p dist
-          cp src-tauri/target/${{ matrix.target }}/release/twitch-tray dist/twitch-tray-${{ matrix.suffix }}
+          cp target/${{ matrix.target }}/release/twitch-tray dist/twitch-tray-${{ matrix.suffix }}
 
       - name: Prepare artifacts (Windows)
         if: matrix.platform == 'windows-latest'
         run: |
           mkdir -p dist
-          cp src-tauri/target/${{ matrix.target }}/release/twitch-tray.exe dist/twitch-tray-${{ matrix.suffix }}.exe
+          cp target/${{ matrix.target }}/release/twitch-tray.exe dist/twitch-tray-${{ matrix.suffix }}.exe
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -106,8 +115,44 @@ jobs:
           name: twitch-tray-${{ matrix.suffix }}
           path: dist/*
 
+  release-kde:
+    needs: check
+    permissions:
+      contents: write
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build KDE daemon
+        run: cargo build --release -p twitch-kde
+
+      - name: Package KDE plasmoid
+        run: |
+          mkdir -p dist/twitch-kde-plasmoid/contents/ui
+          cp crates/twitch-kde/plasmoid/metadata.json dist/twitch-kde-plasmoid/
+          cp crates/twitch-kde/plasmoid/contents/ui/*.qml dist/twitch-kde-plasmoid/contents/ui/
+          cp target/release/twitch-kde dist/twitch-kde-linux-amd64
+          cd dist && tar czf twitch-kde-linux-amd64.tar.gz twitch-kde-linux-amd64 twitch-kde-plasmoid/
+
+      - name: Upload KDE artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: twitch-kde-linux-amd64
+          path: dist/twitch-kde-linux-amd64.tar.gz
+
   create-release:
-    needs: release
+    needs: [release, release-kde]
     runs-on: ubuntu-latest
     permissions:
       contents: write

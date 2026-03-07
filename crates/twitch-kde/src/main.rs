@@ -34,6 +34,10 @@ fn main() {
             twitch_settings_tauri::commands::get_debug_schedule_data,
         ])
         .setup(|app| {
+            // Enter the Tauri-managed tokio runtime so tokio::spawn works
+            // throughout setup (needed by twitch_backend::start and spawn_state_watcher)
+            let _guard = tauri::async_runtime::handle().inner().enter();
+
             let handle = twitch_backend::start().expect("Failed to start backend");
 
             // Store services for Tauri settings commands

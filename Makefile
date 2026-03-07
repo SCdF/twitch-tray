@@ -1,4 +1,4 @@
-.PHONY: all build dev run clean lint test install-deps
+.PHONY: all build build-kde dev run run-kde clean lint test test-plasmoid test-all install-deps install-plasmoid
 
 # Build directory
 DIST=dist
@@ -9,21 +9,33 @@ all: build
 deps:
 	cargo fetch
 
-# Development build
+# Development build (Tauri tray target)
 build:
 	cd crates/twitch-app-tauri && cargo build
+
+# Build KDE daemon
+build-kde:
+	cd crates/twitch-kde && cargo build
 
 # Release build
 release:
 	cd crates/twitch-app-tauri && cargo build --release
 
+# Release build (KDE daemon)
+release-kde:
+	cd crates/twitch-kde && cargo build --release
+
 # Development with hot reload
 dev:
 	cd crates/twitch-app-tauri && cargo tauri dev
 
-# Run the built binary
+# Run the Tauri tray binary
 run: build
-	./crates/twitch-app-tauri/target/debug/twitch-tray
+	./target/debug/twitch-tray
+
+# Run the KDE daemon
+run-kde: build-kde
+	./target/debug/twitch-kde
 
 # Clean build artifacts
 clean:
@@ -35,9 +47,21 @@ lint:
 	cargo fmt --check
 	cargo clippy --workspace -- -D warnings
 
-# Run tests
+# Run Rust tests
 test:
 	cargo test --workspace
+
+# Run QML plasmoid tests
+test-plasmoid:
+	@command -v /usr/lib/qt6/bin/qmltestrunner >/dev/null 2>&1 || { \
+		echo "ERROR: qmltestrunner not found."; \
+		echo "Install: qt6-declarative-dev (Debian/Ubuntu) or qt6-declarative (Arch)"; \
+		exit 1; \
+	}
+	/usr/lib/qt6/bin/qmltestrunner -input crates/twitch-kde/plasmoid/contents/tests -import crates/twitch-kde/plasmoid/contents
+
+# Run all tests (Rust + QML)
+test-all: test test-plasmoid
 
 # Format code
 fmt:
@@ -47,12 +71,36 @@ fmt:
 dist:
 	cd crates/twitch-app-tauri && cargo tauri build
 
+# Build KDE plasmoid package for installation
+dist-kde: release-kde
+	@mkdir -p $(DIST)
+	@rm -rf $(DIST)/twitch-kde-plasmoid
+	@mkdir -p $(DIST)/twitch-kde-plasmoid/contents/ui
+	cp crates/twitch-kde/plasmoid/metadata.json $(DIST)/twitch-kde-plasmoid/
+	cp crates/twitch-kde/plasmoid/contents/ui/*.qml crates/twitch-kde/plasmoid/contents/ui/qmldir $(DIST)/twitch-kde-plasmoid/contents/ui/
+	cp target/release/twitch-kde $(DIST)/twitch-kde
+	@echo ""
+	@echo "KDE plasmoid package: $(DIST)/twitch-kde-plasmoid/"
+	@echo "KDE daemon binary:    $(DIST)/twitch-kde"
+	@echo ""
+	@echo "Install plasmoid:  kpackagetool6 --install $(DIST)/twitch-kde-plasmoid"
+	@echo "Install daemon:    sudo cp $(DIST)/twitch-kde /usr/bin/twitch-kde"
+
+# Install plasmoid to local KDE (development)
+install-plasmoid:
+	kpackagetool6 --install crates/twitch-kde/plasmoid 2>/dev/null || \
+		kpackagetool6 --upgrade crates/twitch-kde/plasmoid
+
 # Install platform-specific dependencies
 install-deps:
 	@echo "Platform-specific dependencies:"
 	@echo ""
 	@echo "Linux (Debian/Ubuntu):"
 	@echo "  sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev"
+	@echo ""
+	@echo "Linux (KDE target, additional):"
+	@echo "  Arch: qt6-declarative libplasma kirigami"
+	@echo "  Debian/Ubuntu: qt6-declarative-dev plasma-framework-dev kirigami2-dev"
 	@echo ""
 	@echo "macOS:"
 	@echo "  xcode-select --install"

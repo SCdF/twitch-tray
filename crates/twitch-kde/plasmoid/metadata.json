@@ -1,0 +1,19 @@
+{
+    "KPlugin": {
+        "Id": "org.twitch.TwitchTray",
+        "Name": "Twitch Tray",
+        "Description": "Shows live Twitch streams and schedules from followed channels",
+        "Icon": "applications-multimedia",
+        "Authors": [
+            {
+                "Name": "Twitch Tray"
+            }
+        ],
+        "Category": "Online Services",
+        "License": "MIT"
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API": "declarativeappletscript",
+    "X-Plasma-MainScript": "ui/main.qml",
+    "X-Plasma-CompactRepresentation": "ui/CompactRepresentation.qml"
+}

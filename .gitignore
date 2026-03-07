@@ -19,4 +19,4 @@ Thumbs.db
 config.json
 
 # Tauri
-/src-tauri/gen/
+gen/

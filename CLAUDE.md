@@ -56,35 +56,59 @@ twitch-tray/
     │       ├── commands.rs            # Tauri command handlers (thin adapters)
     │       └── mock.rs                # MockAppServices for command unit tests (cfg(test))
     │
-    └── twitch-app-tauri/              # Binary — pure wiring, no business logic
-        ├── Cargo.toml                 # deps: tauri + all three crates above
+    ├── twitch-app-tauri/              # Binary — pure wiring, no business logic
+    │   ├── Cargo.toml                 # deps: tauri + all three crates above
+    │   ├── tauri.conf.json
+    │   ├── build.rs
+    │   ├── icons/
+    │   │   ├── icon.png               # Tray icon (64x64 RGBA)
+    │   │   └── icon_grey.png          # Dimmed icon for unauthenticated state
+    │   ├── src/
+    │   │   ├── main.rs                # Entry point: start backend → wire menu → wire settings → run
+    │   │   ├── lib.rs                 # Re-exports for integration tests
+    │   │   └── test_helpers.rs        # Integration test helpers (cfg(test))
+    │   └── tests/
+    │       ├── common/
+    │       │   └── mod.rs             # Integration test helpers (make_stream, etc.)
+    │       └── state_management.rs    # Integration tests
+    │
+    └── twitch-kde/                    # KDE daemon + QML plasmoid
+        ├── Cargo.toml                 # deps: tauri, twitch-backend, twitch-settings-tauri, zbus
         ├── tauri.conf.json
-        ├── build.rs
-        ├── icons/
-        │   ├── icon.png               # Tray icon (64x64 RGBA)
-        │   └── icon_grey.png          # Dimmed icon for unauthenticated state
         ├── src/
-        │   ├── main.rs                # Entry point: start backend → wire menu → wire settings → run
-        │   ├── lib.rs                 # Re-exports for integration tests
-        │   └── test_helpers.rs        # Integration test helpers (cfg(test))
-        └── tests/
-            ├── common/
-            │   └── mod.rs             # Integration test helpers (make_stream, etc.)
-            └── state_management.rs    # Integration tests
+        │   ├── main.rs               # Wiring: backend + D-Bus task + window request listener
+        │   ├── lib.rs
+        │   ├── dto.rs                 # PlasmoidState and all DTO types
+        │   ├── plasmoid_state.rs      # compute_plasmoid_state() — pure mapping function
+        │   └── dbus_service.rs        # zbus D-Bus interface (holds channels, no AppHandle)
+        ├── tests/
+        │   └── dbus_integration.rs    # zbus p2p integration tests
+        └── plasmoid/
+            ├── metadata.json          # KDE plasmoid package metadata
+            └── contents/
+                ├── ui/                # QML components (SectionHeader, StreamItem, etc.)
+                │   └── qmldir         # QML module declaration
+                └── tests/             # QML component tests (tst_*.qml)
 ```
 
 ## Build Commands
 
 ```bash
-make build     # Development build
-make release   # Release build
-make run       # Build and run
-make dev       # Development with hot reload
-make clean     # Remove build artifacts
-make lint      # Run clippy and fmt check (workspace-wide)
-make test      # Run tests (workspace-wide)
-make fmt       # Format code
-make dist      # Build for distribution (Tauri bundler)
+make build      # Development build (Tauri tray target)
+make build-kde  # Development build (KDE daemon)
+make release    # Release build
+make run        # Build and run (Tauri tray)
+make run-kde    # Build and run (KDE daemon)
+make dev        # Development with hot reload
+make clean      # Remove build artifacts
+make lint       # Run clippy and fmt check (workspace-wide)
+make test       # Run Rust tests (workspace-wide)
+make test-plasmoid  # Run QML plasmoid tests
+make test-all   # Run all tests (Rust + QML)
+make fmt        # Format code
+make dist       # Build for distribution (Tauri bundler)
+make dist-kde   # Build KDE plasmoid package + daemon binary
+make install-plasmoid  # Install/upgrade plasmoid to local KDE
 ```
 
 ## Dependencies
@@ -100,6 +124,7 @@ Key crates:
 ### Platform-specific build dependencies
 
 - **Linux**: `libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev`
+- **Linux (KDE target)**: All of the above, plus `qt6-declarative` (Arch) or `qt6-declarative-dev` (Debian/Ubuntu) for `qmltestrunner`
 - **macOS**: Xcode command line tools (`xcode-select --install`)
 - **Windows**: Visual Studio Build Tools with C++ workload
 
@@ -259,9 +284,11 @@ convert original.png -resize 64x64 -channel A -evaluate Multiply 0.4 +channel -d
 ## Testing
 
 ```bash
-make lint    # Run clippy and fmt check
-make test    # Run tests (all workspace crates)
-make build   # Build check
+make lint           # Run clippy and fmt check
+make test-all       # Run all tests (Rust + QML) — use this for DoD
+make test           # Run Rust tests only (all workspace crates)
+make test-plasmoid  # Run QML plasmoid tests only
+make build          # Build check
 ```
 
 Tests are organized per-crate:
@@ -269,6 +296,7 @@ Tests are organized per-crate:
 - `twitch-menu-tauri`: unit tests for display state computation
 - `twitch-settings-tauri`: unit tests for command handlers
 - `twitch-app-tauri`: integration tests (`tests/state_management.rs`)
+- `twitch-kde`: unit + integration tests (Rust), QML component tests (`contents/tests/tst_*.qml`)
 
 ## Definition of Done
 
@@ -276,7 +304,7 @@ Before considering any code change complete:
 
 1. **Formatting**: Run `cargo fmt` - code must be formatted
 2. **Linting**: Run `make lint` - no clippy warnings (warnings are errors in CI)
-3. **Tests**: Run `make test` - all tests must pass
+3. **Tests**: Run `make test-all` - all tests must pass (Rust + QML)
 4. **No dead code**: Remove unused code rather than using `#[allow(dead_code)]`
 
 ## Versioning & Releases
