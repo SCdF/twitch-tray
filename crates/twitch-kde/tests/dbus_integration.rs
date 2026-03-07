@@ -78,7 +78,7 @@ async fn state_property_reflects_initial_display_data() {
             OBJECT_PATH,
             Some("org.freedesktop.DBus.Properties"),
             "Get",
-            &("org.twitch.TwitchTray1", "State"),
+            &("info.sdufresne.TwitchTray1", "State"),
         )
         .await
         .unwrap();
@@ -114,7 +114,7 @@ async fn login_method_reachable_over_dbus() {
         .call_method(
             None::<BusName<'_>>,
             OBJECT_PATH,
-            Some("org.twitch.TwitchTray1"),
+            Some("info.sdufresne.TwitchTray1"),
             "Login",
             &(),
         )

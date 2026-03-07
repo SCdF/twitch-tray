@@ -11,7 +11,7 @@ use twitch_backend::{
 
 use crate::{dto::PlasmoidState, plasmoid_state::compute_plasmoid_state};
 
-pub const OBJECT_PATH: &str = "/org/twitch/TwitchTray";
+pub const OBJECT_PATH: &str = "/info/sdufresne/TwitchTray";
 
 /// Request to open a Tauri window, sent to main.rs over a channel.
 pub enum WindowRequest {
@@ -22,7 +22,7 @@ pub enum WindowRequest {
     },
 }
 
-/// D-Bus service implementing `org.twitch.TwitchTray1` at [`OBJECT_PATH`].
+/// D-Bus service implementing `info.sdufresne.TwitchTray1` at [`OBJECT_PATH`].
 ///
 /// Holds channels only — no `AppHandle`, no Tauri types.
 pub struct DbusService {
@@ -34,7 +34,7 @@ pub struct DbusService {
     pub cancel_login_tx: mpsc::Sender<()>,
 }
 
-#[interface(interface = "org.twitch.TwitchTray1")]
+#[interface(interface = "info.sdufresne.TwitchTray1")]
 impl DbusService {
     /// JSON-serialised `PlasmoidState`. Updated whenever state changes.
     /// `emits_changed_signal = "false"` prevents the macro from auto-generating

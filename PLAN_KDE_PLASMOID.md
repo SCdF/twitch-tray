@@ -51,17 +51,17 @@ tells D-Bus which binary to start on first use. The daemon starts automatically 
 plasmoid first connects, and is never started if the plasmoid is not installed.
 
 ```
-# /usr/share/dbus-1/services/org.twitch.TwitchTray1.service
+# /usr/share/dbus-1/services/info.sdufresne.TwitchTray1.service
 [D-BUS Service]
-Name=org.twitch.TwitchTray1
+Name=info.sdufresne.TwitchTray1
 Exec=/usr/bin/twitch-kde
 ```
 
 ### D-Bus interface
 
 ```
-Interface: org.twitch.TwitchTray1
-Path:      /org/twitch/TwitchTray
+Interface: info.sdufresne.TwitchTray1
+Path:      /info/sdufresne/TwitchTray
 
 Properties:
   State: string   (JSON-serialised PlasmoidState — see DTO shapes below)

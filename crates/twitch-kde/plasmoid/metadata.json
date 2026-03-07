@@ -1,6 +1,6 @@
 {
     "KPlugin": {
-        "Id": "org.twitch.TwitchTray",
+        "Id": "info.sdufresne.TwitchTray",
         "Name": "Twitch Tray",
         "Description": "Shows live Twitch streams and schedules from followed channels",
         "Icon": "applications-multimedia",
@@ -15,5 +15,6 @@
     "KPackageStructure": "Plasma/Applet",
     "X-Plasma-API": "declarativeappletscript",
     "X-Plasma-MainScript": "ui/main.qml",
+    "X-Plasma-NotificationArea": "true",
     "X-Plasma-CompactRepresentation": "ui/CompactRepresentation.qml"
 }

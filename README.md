@@ -24,11 +24,13 @@ Download the latest release for your platform from the [Releases](https://github
 - Platform-specific dependencies:
 
 **Linux (Debian/Ubuntu):**
+
 ```bash
 sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
 ```
 
 **Linux (KDE target, additional):**
+
 ```bash
 # Arch
 sudo pacman -S qt6-declarative libplasma kirigami
@@ -38,11 +40,13 @@ sudo apt-get install -y qt6-declarative-dev plasma-framework-dev kirigami2-dev
 ```
 
 **macOS:**
+
 ```bash
 xcode-select --install
 ```
 
 **Windows:**
+
 - Install Visual Studio Build Tools with C++ workload
 
 #### Build
@@ -90,6 +94,7 @@ Config file location: `~/.config/twitch-tray/config.json`
 ## Menu Structure
 
 **Unauthenticated:**
+
 ```
 [Grey Icon]
 ├── Login to Twitch
@@ -97,6 +102,7 @@ Config file location: `~/.config/twitch-tray/config.json`
 ```
 
 **Authenticated:**
+
 ```
 [Icon]
 ├── Following Live (N)         <- header (disabled)
@@ -130,8 +136,9 @@ sudo cp target/release/twitch-kde /usr/bin/twitch-kde
 ```
 
 For D-Bus activation (auto-start when plasmoid connects), install the service file:
+
 ```bash
-sudo cp crates/twitch-kde/org.twitch.TwitchTray1.service /usr/share/dbus-1/services/
+sudo cp crates/twitch-kde/info.sdufresne.TwitchTray1.service /usr/share/dbus-1/services/
 ```
 
 ## Development

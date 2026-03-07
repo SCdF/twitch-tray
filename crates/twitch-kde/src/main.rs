@@ -66,7 +66,7 @@ fn main() {
             // Connect to the session D-Bus and register the service
             let dbus_conn = tauri::async_runtime::block_on(async {
                 zbus::connection::Builder::session()?
-                    .name("org.twitch.TwitchTray1")?
+                    .name("info.sdufresne.TwitchTray1")?
                     .serve_at(OBJECT_PATH, service)?
                     .build()
                     .await
