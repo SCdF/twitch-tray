@@ -4,5 +4,6 @@ members = [
     "crates/twitch-menu-tauri",
     "crates/twitch-settings-tauri",
     "crates/twitch-app-tauri",
+    "crates/twitch-kde",
 ]
 resolver = "2"
