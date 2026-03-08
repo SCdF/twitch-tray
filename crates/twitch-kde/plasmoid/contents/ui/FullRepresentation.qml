@@ -90,8 +90,10 @@ Controls.ScrollView {
             ExpandableSection {
                 visible: scrollView.plasmoidState.live.overflow.length > 0
                 width: parent.width
-                heading: "More"
-                count: scrollView.plasmoidState.live.overflow.length
+                items: scrollView.plasmoidState.live.overflow
+                onAvatarClicked: (index) => scrollView.openStream(
+                    scrollView.plasmoidState.live.overflow[index].user_login
+                )
 
                 Repeater {
                     model: scrollView.plasmoidState.live.overflow
@@ -165,8 +167,11 @@ Controls.ScrollView {
             ExpandableSection {
                 visible: scrollView.plasmoidState.schedule.overflow.length > 0
                 width: parent.width
-                heading: "More"
-                count: scrollView.plasmoidState.schedule.overflow.length
+                items: scrollView.plasmoidState.schedule.overflow
+                onAvatarClicked: (index) => {
+                    var item = scrollView.plasmoidState.schedule.overflow[index]
+                    scrollView.openStreamerSettings(item.broadcaster_login, item.broadcaster_name)
+                }
 
                 Repeater {
                     model: scrollView.plasmoidState.schedule.overflow
