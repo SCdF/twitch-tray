@@ -44,6 +44,7 @@ ColumnLayout {
                             width: 40
                             height: 40
                             cursorShape: Qt.PointingHandCursor
+                            hoverEnabled: true
                             onClicked: (mouse) => {
                                 mouse.accepted = true
                                 root.avatarClicked(index)
@@ -54,6 +55,78 @@ ColumnLayout {
                                 profileImageUrl: modelData.profile_image_url || ""
                                 displayName: modelData.user_name || modelData.broadcaster_name || ""
                                 isFavourite: modelData.is_favourite || false
+                            }
+
+                            Controls.ToolTip {
+                                visible: parent.containsMouse
+                                delay: 500
+
+                                contentItem: ColumnLayout {
+                                    spacing: 2
+
+                                    RowLayout {
+                                        Controls.Label {
+                                            text: modelData.user_name || modelData.broadcaster_name || ""
+                                            font.bold: true
+                                        }
+
+                                        Controls.Label {
+                                            text: (modelData.game_name || modelData.category)
+                                                  ? "\u00B7 " + (modelData.game_name || modelData.category)
+                                                  : ""
+                                            opacity: 0.7
+                                            visible: text !== ""
+                                        }
+
+                                    }
+
+                                    Controls.Label {
+                                        text: modelData.title || ""
+                                        opacity: 0.5
+                                        visible: text !== ""
+                                        Layout.maximumWidth: 280
+                                        wrapMode: Text.WordWrap
+                                    }
+
+                                    RowLayout {
+                                        visible: (modelData.viewer_count_formatted || "") !== ""
+                                                 || (modelData.duration_formatted || "") !== ""
+                                                 || (modelData.start_time_formatted || "") !== ""
+                                                 || (modelData.is_inferred || false)
+
+                                        Controls.Label {
+                                            text: modelData.viewer_count_formatted || ""
+                                            opacity: 0.5
+                                            visible: text !== ""
+                                        }
+
+                                        Controls.Label {
+                                            text: "\u00B7"
+                                            opacity: 0.5
+                                            visible: (modelData.viewer_count_formatted || "") !== ""
+                                                     && (modelData.duration_formatted || "") !== ""
+                                        }
+
+                                        Controls.Label {
+                                            text: modelData.duration_formatted || ""
+                                            opacity: 0.5
+                                            visible: text !== ""
+                                        }
+
+                                        Controls.Label {
+                                            text: modelData.start_time_formatted || ""
+                                            opacity: 0.5
+                                            visible: text !== ""
+                                        }
+
+                                        Controls.Label {
+                                            text: qsTr("(inferred)")
+                                            font.italic: true
+                                            opacity: 0.5
+                                            visible: modelData.is_inferred || false
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
