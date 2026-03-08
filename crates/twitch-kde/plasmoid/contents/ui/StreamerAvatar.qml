@@ -21,6 +21,8 @@ Rectangle {
         anchors.margins: root.isFavourite ? 2 : 0
         source: root.profileImageUrl
         fillMode: Image.PreserveAspectCrop
+        smooth: true
+        mipmap: true
         visible: root.profileImageUrl !== ""
     }
 

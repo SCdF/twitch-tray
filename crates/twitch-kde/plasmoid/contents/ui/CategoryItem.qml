@@ -39,6 +39,8 @@ ColumnLayout {
                     anchors.fill: parent
                     source: root.boxArtUrl
                     fillMode: Image.PreserveAspectCrop
+                    smooth: true
+                    mipmap: true
                     visible: root.boxArtUrl !== ""
                 }
 
