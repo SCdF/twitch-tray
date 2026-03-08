@@ -110,36 +110,24 @@ Controls.ScrollView {
                 }
             }
 
-            // Category sections (one collapsible section per category)
+            // Category sections
+            SectionHeader {
+                objectName: "categoriesHeader"
+                width: parent.width
+                text: "Categories"
+                visible: scrollView.plasmoidState.categories.length > 0
+            }
+
             Repeater {
                 model: scrollView.plasmoidState.categories
-                delegate: ExpandableSection {
+                delegate: CategoryItem {
                     width: parent.width
-                    heading: modelData.name + " \u00B7 " + modelData.total_viewers_formatted
-                    count: modelData.streams.length
-
-                    Repeater {
-                        model: modelData.streams
-                        delegate: Controls.ItemDelegate {
-                            width: parent.width
-                            onClicked: scrollView.openStream(modelData.user_login)
-
-                            contentItem: RowLayout {
-                                spacing: 4
-
-                                Controls.Label {
-                                    text: modelData.user_name
-                                    font.bold: true
-                                    Layout.fillWidth: true
-                                }
-
-                                Controls.Label {
-                                    text: modelData.viewer_count_formatted
-                                    opacity: 0.7
-                                }
-                            }
-                        }
-                    }
+                    categoryId: modelData.id
+                    name: modelData.name
+                    totalViewersFormatted: modelData.total_viewers_formatted
+                    streamCountFormatted: modelData.stream_count_formatted
+                    streams: modelData.streams
+                    onStreamClicked: (login) => scrollView.openStream(login)
                 }
             }
 

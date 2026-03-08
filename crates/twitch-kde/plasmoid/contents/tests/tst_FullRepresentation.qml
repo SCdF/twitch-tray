@@ -165,5 +165,40 @@ Item {
             var col = findChild(rep, "fullColumn")
             verify(col.width > 0, "fullColumn width should be > 0, was: " + col.width)
         }
+
+        function test_categories_header_hidden_when_empty() {
+            rep.daemonRunning = true
+            wait(10)
+            var header = findChild(rep, "categoriesHeader")
+            verify(header, "categoriesHeader should exist")
+            verify(!header.visible, "categories header hidden when no categories")
+        }
+
+        function test_categories_header_shown_when_present() {
+            rep.daemonRunning = true
+            rep.plasmoidState = {
+                "authenticated": true,
+                "login_state": { "type": "Idle" },
+                "live": { "visible": [], "overflow": [] },
+                "categories": [
+                    {
+                        "id": "27471",
+                        "name": "Minecraft",
+                        "total_viewers_formatted": "45k",
+                        "stream_count_formatted": "12 live",
+                        "streams": [
+                            { "user_login": "s1", "user_name": "S1", "viewer_count_formatted": "10k" }
+                        ]
+                    }
+                ],
+                "schedule": { "lookahead_hours": 24, "loaded": true, "visible": [], "overflow": [] }
+            }
+            wait(10)
+            var header = findChild(rep, "categoriesHeader")
+            verify(header, "categoriesHeader should exist")
+            verify(header.visible, "categories header shown when categories present")
+            var heading = findChild(header, "heading")
+            compare(heading.text, "Categories")
+        }
     }
 }

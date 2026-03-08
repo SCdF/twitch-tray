@@ -40,8 +40,10 @@ pub struct LiveStreamDto {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct CategorySectionDto {
+    pub id: String,
     pub name: String,
     pub total_viewers_formatted: String,
+    pub stream_count_formatted: String,
     pub streams: Vec<CategoryStreamDto>,
 }
 

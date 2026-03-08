@@ -158,9 +158,12 @@ pub fn compute_plasmoid_state(
                     })
                     .collect();
 
+                let stream_count = streams_dto.len();
                 categories.push(CategorySectionDto {
+                    id: category.id.clone(),
                     name: category.name.clone(),
                     total_viewers_formatted: format_viewer_count(total_viewers),
+                    stream_count_formatted: format!("{} live", stream_count),
                     streams: streams_dto,
                 });
             }
@@ -554,6 +557,8 @@ mod tests {
         assert_eq!(state.categories.len(), 1);
         // all 15 streams present — no overflow for categories
         assert_eq!(state.categories[0].streams.len(), 15);
+        assert_eq!(state.categories[0].id, "cat1");
+        assert_eq!(state.categories[0].stream_count_formatted, "15 live");
     }
 
     // =========================================================
