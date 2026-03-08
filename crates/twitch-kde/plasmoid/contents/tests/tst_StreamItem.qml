@@ -97,9 +97,9 @@ Item {
         function test_avatar_image_shown_when_url_set() {
             item.profileImageUrl = "https://example.com/avatar.jpg"
             wait(10)
-            var image = findChild(item, "avatarImage")
-            verify(image, "avatarImage should exist")
-            verify(image.visible, "image should be visible when URL set")
+            var masked = findChild(item, "maskedAvatar")
+            verify(masked, "maskedAvatar should exist")
+            verify(masked.visible, "masked avatar should be visible when URL set")
 
             var placeholder = findChild(item, "avatarPlaceholder")
             verify(!placeholder.visible, "placeholder should be hidden when URL set")

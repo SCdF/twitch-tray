@@ -33,16 +33,16 @@ Item {
             verify(placeholder, "avatarPlaceholder should exist")
             verify(placeholder.visible, "placeholder should be visible when no URL")
 
-            var image = findChild(avatar, "avatarImage")
-            verify(image, "avatarImage should exist")
-            verify(!image.visible, "image should be hidden when no URL")
+            var masked = findChild(avatar, "maskedAvatar")
+            verify(masked, "maskedAvatar should exist")
+            verify(!masked.visible, "masked avatar should be hidden when no URL")
         }
 
         function test_image_shown_when_url_set() {
             avatar.profileImageUrl = "https://example.com/avatar.jpg"
             wait(10)
-            var image = findChild(avatar, "avatarImage")
-            verify(image.visible, "image should be visible when URL set")
+            var masked = findChild(avatar, "maskedAvatar")
+            verify(masked.visible, "masked avatar should be visible when URL set")
 
             var placeholder = findChild(avatar, "avatarPlaceholder")
             verify(!placeholder.visible, "placeholder should be hidden when URL set")

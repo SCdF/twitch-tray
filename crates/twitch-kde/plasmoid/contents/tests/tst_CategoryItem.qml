@@ -56,11 +56,16 @@ Item {
             compare(label.text, "12 live")
         }
 
-        function test_icon_container_has_box_art_proportions() {
+        function test_icon_container_matches_avatar_size() {
             var container = findChild(item, "iconContainer")
             verify(container, "iconContainer should exist")
-            compare(container.width, 30)
-            compare(container.height, 40)
+            compare(container.width, 40, "container width matches avatar size")
+            compare(container.height, 40, "container height matches avatar size")
+
+            var inner = findChild(item, "iconInner")
+            verify(inner, "iconInner should exist")
+            compare(inner.width, 30, "inner has box art width")
+            compare(inner.height, 40, "inner has box art height")
         }
 
         function test_placeholder_shown_when_no_url() {

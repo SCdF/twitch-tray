@@ -26,35 +26,43 @@ ColumnLayout {
         contentItem: RowLayout {
             spacing: 8
 
-            Rectangle {
+            Item {
                 id: iconContainer
                 objectName: "iconContainer"
-                width: 30
+                width: 40
                 height: 40
-                color: "transparent"
-
-                Image {
-                    id: boxArtImage
-                    objectName: "boxArtImage"
-                    anchors.fill: parent
-                    source: root.boxArtUrl
-                    fillMode: Image.PreserveAspectCrop
-                    smooth: true
-                    mipmap: true
-                    visible: root.boxArtUrl !== ""
-                }
 
                 Rectangle {
-                    id: iconPlaceholder
-                    objectName: "iconPlaceholder"
-                    anchors.fill: parent
-                    color: root.palette.mid
-                    visible: root.boxArtUrl === ""
+                    id: iconInner
+                    objectName: "iconInner"
+                    width: 30
+                    height: 40
+                    anchors.centerIn: parent
+                    color: "transparent"
 
-                    Controls.Label {
-                        anchors.centerIn: parent
-                        text: root.name.charAt(0)
-                        font.bold: true
+                    Image {
+                        id: boxArtImage
+                        objectName: "boxArtImage"
+                        anchors.fill: parent
+                        source: root.boxArtUrl
+                        fillMode: Image.PreserveAspectCrop
+                        smooth: true
+                        mipmap: true
+                        visible: root.boxArtUrl !== ""
+                    }
+
+                    Rectangle {
+                        id: iconPlaceholder
+                        objectName: "iconPlaceholder"
+                        anchors.fill: parent
+                        color: root.palette.mid
+                        visible: root.boxArtUrl === ""
+
+                        Controls.Label {
+                            anchors.centerIn: parent
+                            text: root.name.charAt(0)
+                            font.bold: true
+                        }
                     }
                 }
             }

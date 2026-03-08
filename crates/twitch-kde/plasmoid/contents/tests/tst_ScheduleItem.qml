@@ -94,9 +94,9 @@ Item {
         function test_avatar_image_shown_when_url_set() {
             item.profileImageUrl = "https://example.com/avatar.jpg"
             wait(10)
-            var img = findChild(item, "avatarImage")
-            verify(img, "avatarImage should exist")
-            verify(img.visible, "image should be visible when URL is set")
+            var masked = findChild(item, "maskedAvatar")
+            verify(masked, "maskedAvatar should exist")
+            verify(masked.visible, "masked avatar should be visible when URL is set")
         }
 
         function test_favourite_shows_border_on_avatar() {
