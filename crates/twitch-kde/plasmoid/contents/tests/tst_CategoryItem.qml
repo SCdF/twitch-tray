@@ -11,6 +11,7 @@ Item {
         width: parent.width
         categoryId: ""
         name: "Minecraft"
+        boxArtUrl: ""
         totalViewersFormatted: "45k"
         streamCountFormatted: "12 live"
         streams: [
@@ -33,6 +34,7 @@ Item {
             item.expanded = false
             item.categoryId = ""
             item.name = "Minecraft"
+            item.boxArtUrl = ""
             clickSpy.clear()
         }
 
@@ -54,41 +56,40 @@ Item {
             compare(label.text, "12 live")
         }
 
-        function test_icon_container_exists() {
+        function test_icon_container_has_box_art_proportions() {
             var container = findChild(item, "iconContainer")
             verify(container, "iconContainer should exist")
-            compare(container.width, 40)
+            compare(container.width, 30)
             compare(container.height, 40)
         }
 
-        function test_placeholder_shown_when_no_id() {
-            item.categoryId = ""
+        function test_placeholder_shown_when_no_url() {
+            item.boxArtUrl = ""
             wait(10)
             var placeholder = findChild(item, "iconPlaceholder")
             verify(placeholder, "iconPlaceholder should exist")
-            verify(placeholder.visible, "placeholder visible when no ID")
+            verify(placeholder.visible, "placeholder visible when no URL")
 
             var image = findChild(item, "boxArtImage")
             verify(image, "boxArtImage should exist")
-            verify(!image.visible, "image hidden when no ID")
+            verify(!image.visible, "image hidden when no URL")
         }
 
-        function test_image_shown_when_id_set() {
-            item.categoryId = "27471"
+        function test_image_shown_when_url_set() {
+            item.boxArtUrl = "https://example.com/boxart.jpg"
             wait(10)
             var image = findChild(item, "boxArtImage")
-            verify(image.visible, "image visible when ID set")
+            verify(image.visible, "image visible when URL set")
 
             var placeholder = findChild(item, "iconPlaceholder")
-            verify(!placeholder.visible, "placeholder hidden when ID set")
+            verify(!placeholder.visible, "placeholder hidden when URL set")
         }
 
-        function test_box_art_url_constructed_from_id() {
-            item.categoryId = "509658"
+        function test_box_art_url_bound_from_property() {
+            item.boxArtUrl = "https://example.com/boxart-144x192.jpg"
             wait(10)
-            verify(item.boxArtUrl.indexOf("https://static-cdn.jtvnw.net/ttv-boxart/509658-") === 0,
-                   "URL should start with CDN base + category ID, got: " + item.boxArtUrl)
-            verify(item.boxArtUrl.indexOf(".jpg") > 0, "URL should end with .jpg")
+            var image = findChild(item, "boxArtImage")
+            compare(image.source.toString(), "https://example.com/boxart-144x192.jpg")
         }
 
         function test_collapsed_by_default() {

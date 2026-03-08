@@ -43,6 +43,9 @@ pub(crate) struct Backend {
 
     /// In-memory cache for profile image URLs (user_id -> (url, fetched_at)).
     profile_image_cache: Arc<std::sync::Mutex<HashMap<String, (String, Instant)>>>,
+
+    /// In-memory cache for box art URLs (game_id -> (url, fetched_at)).
+    box_art_cache: Arc<std::sync::Mutex<HashMap<String, (String, Instant)>>>,
 }
 
 impl Backend {
@@ -101,6 +104,7 @@ impl Backend {
             settings_tx,
             settings_rx: Arc::new(Mutex::new(Some(settings_rx))),
             profile_image_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            box_art_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
         })
     }
 
@@ -364,6 +368,22 @@ impl Backend {
                 .map(|(id, (url, _))| (id.clone(), url.clone()))
                 .collect()
         };
+
+        // Ensure box art is cached for followed categories
+        let cat_ids: Vec<String> = cfg
+            .followed_categories
+            .iter()
+            .map(|c| c.id.clone())
+            .collect();
+        self.ensure_box_art_cached(&cat_ids).await;
+
+        let box_art_urls = {
+            let cache = self.box_art_cache.lock().unwrap();
+            cache
+                .iter()
+                .map(|(id, (url, _))| (id.clone(), url.clone()))
+                .collect()
+        };
         let raw = RawDisplayData {
             is_authenticated: self.state.is_authenticated().await,
             live_streams: self.state.get_followed_streams().await,
@@ -374,6 +394,7 @@ impl Backend {
             category_streams: self.state.get_category_streams().await,
             config: cfg,
             profile_image_urls,
+            box_art_urls,
         };
         let _ = display_tx.send(raw);
     }
@@ -504,6 +525,65 @@ impl Backend {
 
         if !fetched.is_empty() {
             let mut cache = self.profile_image_cache.lock().unwrap();
+            for (id, url) in fetched {
+                cache.insert(id, (url, now));
+            }
+        }
+    }
+
+    /// Ensures all given game/category IDs have box art URLs in the cache.
+    /// Fetches any missing ones from the Twitch Games API.
+    async fn ensure_box_art_cached(&self, game_ids: &[String]) {
+        const CACHE_TTL: Duration = Duration::from_secs(3600);
+
+        if game_ids.is_empty() {
+            return;
+        }
+
+        let now = Instant::now();
+
+        let uncached_ids: Vec<String> = {
+            let cache = self.box_art_cache.lock().unwrap();
+            game_ids
+                .iter()
+                .filter(|id| {
+                    cache
+                        .get(id.as_str())
+                        .is_none_or(|(_, fetched_at)| now.duration_since(*fetched_at) >= CACHE_TTL)
+                })
+                .cloned()
+                .collect()
+        };
+
+        if uncached_ids.is_empty() {
+            return;
+        }
+
+        let uncached_refs: Vec<&str> = uncached_ids.iter().map(|s| s.as_str()).collect();
+        let mut fetched = HashMap::new();
+        for chunk in uncached_refs.chunks(100) {
+            match self
+                .with_retry(|| self.client.get_games_by_ids(chunk))
+                .await
+            {
+                Ok(games) => {
+                    for game in games {
+                        // Replace template placeholders with fixed dimensions (144x192)
+                        let url = game
+                            .box_art_url
+                            .replace("{width}", "144")
+                            .replace("{height}", "192");
+                        fetched.insert(game.id, url);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to fetch game box art: {}", e);
+                }
+            }
+        }
+
+        if !fetched.is_empty() {
+            let mut cache = self.box_art_cache.lock().unwrap();
             for (id, url) in fetched {
                 cache.insert(id, (url, now));
             }
@@ -697,6 +777,7 @@ impl Clone for Backend {
             settings_tx: self.settings_tx.clone(),
             settings_rx: self.settings_rx.clone(),
             profile_image_cache: self.profile_image_cache.clone(),
+            box_art_cache: self.box_art_cache.clone(),
         }
     }
 }

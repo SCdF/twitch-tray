@@ -126,6 +126,7 @@ Controls.ScrollView {
                     width: parent.width
                     categoryId: modelData.id
                     name: modelData.name
+                    boxArtUrl: modelData.box_art_url || ""
                     totalViewersFormatted: modelData.total_viewers_formatted
                     streamCountFormatted: modelData.stream_count_formatted
                     streams: modelData.streams

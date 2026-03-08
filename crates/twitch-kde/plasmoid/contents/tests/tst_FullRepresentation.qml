@@ -184,6 +184,7 @@ Item {
                     {
                         "id": "27471",
                         "name": "Minecraft",
+                        "box_art_url": "https://example.com/mc-144x192.jpg",
                         "total_viewers_formatted": "45k",
                         "stream_count_formatted": "12 live",
                         "streams": [

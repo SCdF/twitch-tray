@@ -42,6 +42,7 @@ pub struct LiveStreamDto {
 pub struct CategorySectionDto {
     pub id: String,
     pub name: String,
+    pub box_art_url: String,
     pub total_viewers_formatted: String,
     pub stream_count_formatted: String,
     pub streams: Vec<CategoryStreamDto>,

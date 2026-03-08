@@ -177,9 +177,15 @@ pub fn compute_plasmoid_state(
                     .collect();
 
                 let stream_count = streams_dto.len();
+                let box_art_url = raw
+                    .box_art_urls
+                    .get(&category.id)
+                    .cloned()
+                    .unwrap_or_default();
                 categories.push(CategorySectionDto {
                     id: category.id.clone(),
                     name: category.name.clone(),
+                    box_art_url,
                     total_viewers_formatted: format_viewer_count(total_viewers),
                     stream_count_formatted: format!("{} live", stream_count),
                     streams: streams_dto,
@@ -294,6 +300,7 @@ mod tests {
             category_streams: HashMap::new(),
             config: Config::default(),
             profile_image_urls: HashMap::new(),
+            box_art_urls: HashMap::new(),
         }
     }
 
@@ -321,6 +328,7 @@ mod tests {
             category_streams: HashMap::new(),
             config,
             profile_image_urls: HashMap::new(),
+            box_art_urls: HashMap::new(),
         }
     }
 
@@ -579,6 +587,45 @@ mod tests {
         assert_eq!(state.categories[0].streams.len(), 15);
         assert_eq!(state.categories[0].id, "cat1");
         assert_eq!(state.categories[0].stream_count_formatted, "15 live");
+    }
+
+    #[test]
+    fn category_section_includes_box_art_url_from_cache() {
+        let cat_id = "cat1".to_string();
+        let cat_streams = vec![make_stream("1", "Streamer1")];
+
+        let mut raw = raw(vec![], vec![]);
+        raw.followed_categories = vec![FollowedCategory {
+            id: cat_id.clone(),
+            name: "Minecraft".to_string(),
+        }];
+        raw.category_streams = HashMap::from([(cat_id.clone(), cat_streams)]);
+        raw.box_art_urls =
+            HashMap::from([(cat_id, "https://example.com/mc-144x192.jpg".to_string())]);
+
+        let state = compute_plasmoid_state(raw, None, Utc::now());
+
+        assert_eq!(
+            state.categories[0].box_art_url,
+            "https://example.com/mc-144x192.jpg"
+        );
+    }
+
+    #[test]
+    fn category_section_defaults_empty_box_art_url_when_not_cached() {
+        let cat_id = "cat1".to_string();
+        let cat_streams = vec![make_stream("1", "Streamer1")];
+
+        let mut raw = raw(vec![], vec![]);
+        raw.followed_categories = vec![FollowedCategory {
+            id: cat_id.clone(),
+            name: "Minecraft".to_string(),
+        }];
+        raw.category_streams = HashMap::from([(cat_id, cat_streams)]);
+
+        let state = compute_plasmoid_state(raw, None, Utc::now());
+
+        assert_eq!(state.categories[0].box_art_url, "");
     }
 
     // =========================================================

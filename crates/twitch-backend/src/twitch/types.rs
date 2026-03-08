@@ -217,6 +217,12 @@ pub struct SearchCategoriesResponse {
     pub data: Vec<Category>,
 }
 
+/// Response from get games endpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GamesResponse {
+    pub data: Vec<Category>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

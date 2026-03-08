@@ -247,6 +247,20 @@ impl<H: HttpClient> TwitchClient<H> {
         Ok(response.data)
     }
 
+    /// Gets games/categories by their IDs (up to 100 per request)
+    ///
+    /// Returns `ApiError::Unauthorized` if the token has expired.
+    pub async fn get_games_by_ids(&self, game_ids: &[&str]) -> Result<Vec<Category>, ApiError> {
+        if game_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let params: Vec<String> = game_ids.iter().map(|id| format!("id={}", id)).collect();
+        let endpoint = format!("/games?{}", params.join("&"));
+        let response: GamesResponse = self.get(&endpoint).await?;
+        Ok(response.data)
+    }
+
     /// Gets top streams for a specific category/game
     ///
     /// Returns `ApiError::Unauthorized` if the token has expired.

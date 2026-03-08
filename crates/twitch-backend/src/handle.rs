@@ -25,6 +25,8 @@ pub struct RawDisplayData {
     pub config: Config,
     /// Cached profile image URLs keyed by user/broadcaster ID.
     pub profile_image_urls: HashMap<String, String>,
+    /// Cached box art URLs keyed by category/game ID.
+    pub box_art_urls: HashMap<String, String>,
 }
 
 /// Commands sent to the backend auth task.

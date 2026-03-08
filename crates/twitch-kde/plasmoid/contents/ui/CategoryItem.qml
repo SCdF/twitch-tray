@@ -7,18 +7,11 @@ ColumnLayout {
 
     property string categoryId: ""
     property string name: ""
+    property string boxArtUrl: ""
     property string totalViewersFormatted: ""
     property string streamCountFormatted: ""
     property var streams: []
     property bool expanded: false
-
-    readonly property string boxArtUrl: {
-        if (!root.categoryId) return ""
-        var ratio = Screen.devicePixelRatio || 1
-        var w = Math.round(iconContainer.width * ratio)
-        var h = Math.round(iconContainer.height * ratio)
-        return "https://static-cdn.jtvnw.net/ttv-boxart/" + root.categoryId + "-" + w + "x" + h + ".jpg"
-    }
 
     signal streamClicked(string userLogin)
 
@@ -36,7 +29,7 @@ ColumnLayout {
             Rectangle {
                 id: iconContainer
                 objectName: "iconContainer"
-                width: 40
+                width: 30
                 height: 40
                 color: "transparent"
 
