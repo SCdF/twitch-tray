@@ -67,6 +67,9 @@ pub struct ScheduledStreamDto {
     pub broadcaster_login: String,
     pub broadcaster_name: String,
     pub start_time_formatted: String,
+    pub title: String,
+    pub category: String,
+    pub profile_image_url: String,
     pub is_inferred: bool,
     pub is_favourite: bool,
 }
@@ -128,6 +131,9 @@ mod tests {
             broadcaster_login: "streamer2".to_string(),
             broadcaster_name: "Streamer2".to_string(),
             start_time_formatted: "Tomorrow 8:00 PM".to_string(),
+            title: "Evening Stream".to_string(),
+            category: "Just Chatting".to_string(),
+            profile_image_url: "https://example.com/avatar.jpg".to_string(),
             is_inferred: true,
             is_favourite: false,
         };

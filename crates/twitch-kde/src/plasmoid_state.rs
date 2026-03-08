@@ -59,14 +59,32 @@ fn live_stream_to_dto(s: Stream, settings: &HashMap<String, StreamerSettings>) -
 fn scheduled_to_dto(
     s: ScheduledStream,
     settings: &HashMap<String, StreamerSettings>,
+    profile_image_urls: &HashMap<String, String>,
 ) -> ScheduledStreamDto {
     let is_favourite =
         get_importance(&s.broadcaster_login, settings) == StreamerImportance::Favourite;
     let start_time_formatted = s.format_start_time();
+    let title = if s.is_inferred {
+        String::new()
+    } else {
+        s.title.clone()
+    };
+    let category = if s.is_inferred {
+        String::new()
+    } else {
+        s.category.clone().unwrap_or_default()
+    };
+    let profile_image_url = profile_image_urls
+        .get(&s.broadcaster_id)
+        .cloned()
+        .unwrap_or_default();
     ScheduledStreamDto {
         broadcaster_login: s.broadcaster_login,
         broadcaster_name: s.broadcaster_name,
         start_time_formatted,
+        title,
+        category,
+        profile_image_url,
         is_inferred: s.is_inferred,
         is_favourite,
     }
@@ -194,11 +212,11 @@ pub fn compute_plasmoid_state(
         loaded: raw.schedules_loaded,
         visible: sched_visible_raw
             .into_iter()
-            .map(|s| scheduled_to_dto(s, settings))
+            .map(|s| scheduled_to_dto(s, settings, &raw.profile_image_urls))
             .collect(),
         overflow: sched_overflow_raw
             .into_iter()
-            .map(|s| scheduled_to_dto(s, settings))
+            .map(|s| scheduled_to_dto(s, settings, &raw.profile_image_urls))
             .collect(),
     };
 
@@ -275,6 +293,7 @@ mod tests {
             followed_categories: vec![],
             category_streams: HashMap::new(),
             config: Config::default(),
+            profile_image_urls: HashMap::new(),
         }
     }
 
@@ -301,6 +320,7 @@ mod tests {
             followed_categories: vec![],
             category_streams: HashMap::new(),
             config,
+            profile_image_urls: HashMap::new(),
         }
     }
 

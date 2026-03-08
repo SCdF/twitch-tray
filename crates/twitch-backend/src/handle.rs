@@ -23,6 +23,8 @@ pub struct RawDisplayData {
     pub followed_categories: Vec<FollowedCategory>,
     pub category_streams: HashMap<String, Vec<Stream>>,
     pub config: Config,
+    /// Cached profile image URLs keyed by user/broadcaster ID.
+    pub profile_image_urls: HashMap<String, String>,
 }
 
 /// Commands sent to the backend auth task.

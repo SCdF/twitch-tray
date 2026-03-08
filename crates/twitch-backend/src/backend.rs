@@ -348,15 +348,32 @@ impl Backend {
     /// Collects current state and sends a RawDisplayData snapshot.
     async fn push_display_state(&self, display_tx: &watch::Sender<RawDisplayData>) {
         let cfg = self.config.get();
+        let scheduled_streams = self.state.get_scheduled_streams().await;
+
+        // Ensure profile images are cached for scheduled broadcasters
+        let sched_ids: Vec<String> = scheduled_streams
+            .iter()
+            .map(|s| s.broadcaster_id.clone())
+            .collect();
+        self.ensure_profile_images_cached(&sched_ids).await;
+
+        let profile_image_urls = {
+            let cache = self.profile_image_cache.lock().unwrap();
+            cache
+                .iter()
+                .map(|(id, (url, _))| (id.clone(), url.clone()))
+                .collect()
+        };
         let raw = RawDisplayData {
             is_authenticated: self.state.is_authenticated().await,
             live_streams: self.state.get_followed_streams().await,
-            scheduled_streams: self.state.get_scheduled_streams().await,
+            scheduled_streams,
             schedules_loaded: self.state.schedules_loaded().await,
             followed_channels: self.state.get_followed_channels().await,
             followed_categories: cfg.followed_categories.clone(),
             category_streams: self.state.get_category_streams().await,
             config: cfg,
+            profile_image_urls,
         };
         let _ = display_tx.send(raw);
     }
@@ -438,35 +455,35 @@ impl Backend {
         self.state.set_followed_streams(streams).await;
     }
 
-    async fn enrich_with_profile_images(&self, streams: &mut [crate::twitch::Stream]) {
+    /// Ensures all given user IDs have profile images in the cache.
+    /// Fetches any missing ones from the Twitch Users API.
+    async fn ensure_profile_images_cached(&self, user_ids: &[String]) {
         const CACHE_TTL: Duration = Duration::from_secs(3600);
 
-        if streams.is_empty() {
+        if user_ids.is_empty() {
             return;
         }
 
         let now = Instant::now();
 
-        // Apply cached values and collect uncached user IDs
-        let mut uncached_ids: Vec<String> = Vec::new();
-        {
+        let uncached_ids: Vec<String> = {
             let cache = self.profile_image_cache.lock().unwrap();
-            for stream in streams.iter_mut() {
-                if let Some((url, fetched_at)) = cache.get(&stream.user_id) {
-                    if now.duration_since(*fetched_at) < CACHE_TTL {
-                        stream.profile_image_url = url.clone();
-                        continue;
-                    }
-                }
-                uncached_ids.push(stream.user_id.clone());
-            }
-        }
+            user_ids
+                .iter()
+                .filter(|id| {
+                    cache
+                        .get(id.as_str())
+                        .is_none_or(|(_, fetched_at)| now.duration_since(*fetched_at) >= CACHE_TTL)
+                })
+                .cloned()
+                .collect()
+        };
 
         if uncached_ids.is_empty() {
             return;
         }
 
-        // Fetch uncached profiles in batches of 100 (Twitch API limit)
+        // Fetch in batches of 100 (Twitch API limit)
         let uncached_refs: Vec<&str> = uncached_ids.iter().map(|s| s.as_str()).collect();
         let mut fetched = HashMap::new();
         for chunk in uncached_refs.chunks(100) {
@@ -485,15 +502,21 @@ impl Backend {
             }
         }
 
-        // Update cache and apply to streams
-        {
+        if !fetched.is_empty() {
             let mut cache = self.profile_image_cache.lock().unwrap();
-            for (id, url) in &fetched {
-                cache.insert(id.clone(), (url.clone(), now));
+            for (id, url) in fetched {
+                cache.insert(id, (url, now));
             }
         }
+    }
+
+    async fn enrich_with_profile_images(&self, streams: &mut [crate::twitch::Stream]) {
+        let user_ids: Vec<String> = streams.iter().map(|s| s.user_id.clone()).collect();
+        self.ensure_profile_images_cached(&user_ids).await;
+
+        let cache = self.profile_image_cache.lock().unwrap();
         for stream in streams.iter_mut() {
-            if let Some(url) = fetched.get(&stream.user_id) {
+            if let Some((url, _)) = cache.get(&stream.user_id) {
                 stream.profile_image_url = url.clone();
             }
         }

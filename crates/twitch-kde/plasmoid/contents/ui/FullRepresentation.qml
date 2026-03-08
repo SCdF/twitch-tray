@@ -151,6 +151,9 @@ Controls.ScrollView {
                     broadcasterLogin: modelData.broadcaster_login
                     broadcasterName: modelData.broadcaster_name
                     startTimeFormatted: modelData.start_time_formatted
+                    title: modelData.title || ""
+                    category: modelData.category || ""
+                    profileImageUrl: modelData.profile_image_url || ""
                     isInferred: modelData.is_inferred
                     isFavourite: modelData.is_favourite
                     onScheduleClicked: (login) => scrollView.openStreamerSettings(
@@ -172,6 +175,9 @@ Controls.ScrollView {
                         broadcasterLogin: modelData.broadcaster_login
                         broadcasterName: modelData.broadcaster_name
                         startTimeFormatted: modelData.start_time_formatted
+                        title: modelData.title || ""
+                        category: modelData.category || ""
+                        profileImageUrl: modelData.profile_image_url || ""
                         isInferred: modelData.is_inferred
                         isFavourite: modelData.is_favourite
                         onClicked: (login) => scrollView.openStreamerSettings(

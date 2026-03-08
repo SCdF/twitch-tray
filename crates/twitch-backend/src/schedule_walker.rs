@@ -16,7 +16,7 @@ use crate::config::ConfigManager;
 use crate::db::Database;
 use crate::session::SessionManager;
 use crate::state::AppState;
-use crate::twitch::{ScheduleData, ScheduledStream, TwitchClient};
+use crate::twitch::{ScheduleData, ScheduleVacation, ScheduledStream, TwitchClient};
 
 /// Within this many seconds, an inferred schedule is considered a duplicate of an API schedule.
 const SCHEDULE_DEDUP_WINDOW_SECS: i64 = 3600;
@@ -182,8 +182,17 @@ impl ScheduleWalker {
     }
 }
 
+/// Returns true if the segment's time range overlaps with the vacation period.
+///
+/// A segment with no `end_time` is treated as a point event at `start_time`.
+fn overlaps_vacation(seg: &crate::twitch::ScheduleSegment, vacation: &ScheduleVacation) -> bool {
+    let seg_end = seg.end_time.unwrap_or(seg.start_time);
+    seg.start_time < vacation.end_time && seg_end > vacation.start_time
+}
+
 /// Converts raw API schedule segments into [`ScheduledStream`] structs.
-/// Skips canceled segments. Does NOT filter by time horizon (stores all future segments).
+/// Skips canceled segments and segments that overlap with the broadcaster's vacation.
+/// Does NOT filter by time horizon (stores all future segments).
 fn convert_schedule_segments(data: &ScheduleData) -> Vec<ScheduledStream> {
     let Some(segments) = &data.segments else {
         return Vec::new();
@@ -192,6 +201,11 @@ fn convert_schedule_segments(data: &ScheduleData) -> Vec<ScheduledStream> {
     segments
         .iter()
         .filter(|seg| seg.canceled_until.is_none())
+        .filter(|seg| {
+            data.vacation
+                .as_ref()
+                .is_none_or(|v| !overlaps_vacation(seg, v))
+        })
         .map(|seg| ScheduledStream {
             id: seg.id.clone(),
             broadcaster_id: data.broadcaster_id.clone(),
@@ -206,4 +220,145 @@ fn convert_schedule_segments(data: &ScheduleData) -> Vec<ScheduledStream> {
             is_inferred: false,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::twitch::{ScheduleCategory, ScheduleSegment};
+    use chrono::{Duration, TimeZone, Utc};
+
+    fn make_schedule_data(
+        segments: Vec<ScheduleSegment>,
+        vacation: Option<ScheduleVacation>,
+    ) -> ScheduleData {
+        ScheduleData {
+            segments: Some(segments),
+            broadcaster_id: "123".to_string(),
+            broadcaster_name: "TestBroadcaster".to_string(),
+            broadcaster_login: "testbroadcaster".to_string(),
+            vacation,
+        }
+    }
+
+    fn make_segment(id: &str, start: chrono::DateTime<Utc>, hours: i64) -> ScheduleSegment {
+        ScheduleSegment {
+            id: id.to_string(),
+            start_time: start,
+            end_time: Some(start + Duration::hours(hours)),
+            title: format!("Stream {id}"),
+            canceled_until: None,
+            category: Some(ScheduleCategory {
+                id: "game1".to_string(),
+                name: "Test Game".to_string(),
+            }),
+            is_recurring: false,
+        }
+    }
+
+    #[test]
+    fn canceled_segments_filtered_out() {
+        let start = Utc::now() + Duration::hours(1);
+        let mut seg = make_segment("1", start, 2);
+        seg.canceled_until = Some("2026-01-01T00:00:00Z".to_string());
+
+        let data = make_schedule_data(vec![seg], None);
+        let result = convert_schedule_segments(&data);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn segments_during_vacation_filtered_out() {
+        let vacation_start = Utc.with_ymd_and_hms(2026, 3, 10, 0, 0, 0).unwrap();
+        let vacation_end = Utc.with_ymd_and_hms(2026, 3, 17, 0, 0, 0).unwrap();
+        let vacation = ScheduleVacation {
+            start_time: vacation_start,
+            end_time: vacation_end,
+        };
+
+        // Segment fully inside vacation
+        let inside = make_segment("inside", vacation_start + Duration::hours(12), 2);
+        // Segment before vacation
+        let before = make_segment("before", vacation_start - Duration::hours(5), 2);
+        // Segment after vacation
+        let after = make_segment("after", vacation_end + Duration::hours(1), 2);
+
+        let data = make_schedule_data(vec![inside, before, after], Some(vacation));
+        let result = convert_schedule_segments(&data);
+
+        let ids: Vec<&str> = result.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["before", "after"]);
+    }
+
+    #[test]
+    fn segment_overlapping_vacation_start_filtered_out() {
+        let vacation_start = Utc.with_ymd_and_hms(2026, 3, 10, 0, 0, 0).unwrap();
+        let vacation_end = Utc.with_ymd_and_hms(2026, 3, 17, 0, 0, 0).unwrap();
+        let vacation = ScheduleVacation {
+            start_time: vacation_start,
+            end_time: vacation_end,
+        };
+
+        // Starts before vacation, ends during vacation
+        let overlapping = make_segment("overlap", vacation_start - Duration::hours(1), 3);
+
+        let data = make_schedule_data(vec![overlapping], Some(vacation));
+        let result = convert_schedule_segments(&data);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn segment_ending_exactly_at_vacation_start_not_filtered() {
+        let vacation_start = Utc.with_ymd_and_hms(2026, 3, 10, 0, 0, 0).unwrap();
+        let vacation_end = Utc.with_ymd_and_hms(2026, 3, 17, 0, 0, 0).unwrap();
+        let vacation = ScheduleVacation {
+            start_time: vacation_start,
+            end_time: vacation_end,
+        };
+
+        // Ends exactly when vacation starts — no overlap
+        let adjacent = make_segment("adjacent", vacation_start - Duration::hours(2), 2);
+
+        let data = make_schedule_data(vec![adjacent], Some(vacation));
+        let result = convert_schedule_segments(&data);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "adjacent");
+    }
+
+    #[test]
+    fn no_vacation_keeps_all_segments() {
+        let start = Utc::now() + Duration::hours(1);
+        let seg1 = make_segment("1", start, 2);
+        let seg2 = make_segment("2", start + Duration::hours(3), 2);
+
+        let data = make_schedule_data(vec![seg1, seg2], None);
+        let result = convert_schedule_segments(&data);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn segment_category_and_title_preserved() {
+        let start = Utc::now() + Duration::hours(1);
+        let seg = make_segment("1", start, 2);
+
+        let data = make_schedule_data(vec![seg], None);
+        let result = convert_schedule_segments(&data);
+
+        assert_eq!(result[0].title, "Stream 1");
+        assert_eq!(result[0].category.as_deref(), Some("Test Game"));
+        assert_eq!(result[0].category_id.as_deref(), Some("game1"));
+    }
+
+    #[test]
+    fn null_segments_returns_empty() {
+        let data = ScheduleData {
+            segments: None,
+            broadcaster_id: "123".to_string(),
+            broadcaster_name: "Test".to_string(),
+            broadcaster_login: "test".to_string(),
+            vacation: None,
+        };
+        let result = convert_schedule_segments(&data);
+        assert!(result.is_empty());
+    }
 }

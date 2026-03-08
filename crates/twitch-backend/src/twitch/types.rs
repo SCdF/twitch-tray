@@ -160,6 +160,13 @@ pub struct ScheduleCategory {
     pub name: String,
 }
 
+/// Broadcaster vacation period from Helix API
+#[derive(Debug, Clone, Deserialize)]
+pub struct ScheduleVacation {
+    pub start_time: DateTime<Utc>,
+    pub end_time: DateTime<Utc>,
+}
+
 /// Schedule data from Helix API
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScheduleData {
@@ -167,6 +174,8 @@ pub struct ScheduleData {
     pub broadcaster_id: String,
     pub broadcaster_name: String,
     pub broadcaster_login: String,
+    #[serde(default)]
+    pub vacation: Option<ScheduleVacation>,
 }
 
 /// Schedule response from Helix API
