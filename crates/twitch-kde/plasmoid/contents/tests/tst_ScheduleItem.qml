@@ -115,20 +115,21 @@ Item {
             compare(avatar.border.width, 0)
         }
 
-        function test_sparkle_visible_when_inferred() {
+        function test_inferred_label_visible_when_inferred() {
             item.isInferred = true
             wait(10)
-            var sparkle = findChild(item, "inferredIndicator")
-            verify(sparkle, "inferredIndicator should exist")
-            verify(sparkle.visible, "sparkle should be visible when inferred")
+            var label = findChild(item, "inferredIndicator")
+            verify(label, "inferredIndicator should exist")
+            verify(label.visible, "inferred label should be visible when inferred")
+            verify(label.font.italic, "inferred label should be italic")
         }
 
-        function test_sparkle_hidden_when_not_inferred() {
+        function test_inferred_label_hidden_when_not_inferred() {
             item.isInferred = false
             wait(10)
-            var sparkle = findChild(item, "inferredIndicator")
-            verify(sparkle, "inferredIndicator should exist")
-            verify(!sparkle.visible, "sparkle should be hidden when not inferred")
+            var label = findChild(item, "inferredIndicator")
+            verify(label, "inferredIndicator should exist")
+            verify(!label.visible, "inferred label should be hidden when not inferred")
         }
 
         function test_click_emits_broadcaster_login() {

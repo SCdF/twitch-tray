@@ -38,13 +38,6 @@ Controls.ItemDelegate {
                 Layout.fillWidth: true
 
                 Controls.Label {
-                    id: inferredIndicator
-                    objectName: "inferredIndicator"
-                    text: "\u2728"
-                    visible: root.isInferred
-                }
-
-                Controls.Label {
                     id: broadcasterNameLabel
                     objectName: "broadcasterNameLabel"
                     text: root.broadcasterName
@@ -70,13 +63,27 @@ Controls.ItemDelegate {
                 }
             }
 
-            Controls.Label {
-                id: titleLabel
-                objectName: "titleLabel"
-                text: root.title || " "
-                opacity: root.title !== "" ? 0.5 : 0
-                elide: Text.ElideRight
+            RowLayout {
                 Layout.fillWidth: true
+
+                Controls.Label {
+                    id: titleLabel
+                    objectName: "titleLabel"
+                    text: root.title || " "
+                    opacity: root.title !== "" ? 0.5 : 0
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
+                }
+
+                Controls.Label {
+                    id: inferredIndicator
+                    objectName: "inferredIndicator"
+                    text: qsTr("(inferred)")
+                    font.italic: true
+                    opacity: 0.5
+                    visible: root.isInferred
+                    horizontalAlignment: Text.AlignRight
+                }
             }
         }
     }
