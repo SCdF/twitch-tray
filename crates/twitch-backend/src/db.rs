@@ -42,7 +42,8 @@ impl Database {
                 broadcaster_id INTEGER PRIMARY KEY,
                 broadcaster_login TEXT NOT NULL,
                 broadcaster_name TEXT NOT NULL,
-                followed_at INTEGER NOT NULL
+                followed_at INTEGER NOT NULL,
+                broadcaster_timezone TEXT
             );
 
             CREATE TABLE IF NOT EXISTS schedule_last_checked (
@@ -66,6 +67,14 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_scheduled_streams_broadcaster
                 ON scheduled_streams(broadcaster_id);",
         )?;
+        // Migrate: add broadcaster_timezone column to followed if missing
+        let has_tz_col: bool = conn
+            .prepare("SELECT broadcaster_timezone FROM followed LIMIT 0")
+            .is_ok();
+        if !has_tz_col {
+            conn.execute_batch("ALTER TABLE followed ADD COLUMN broadcaster_timezone TEXT")?;
+        }
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -122,21 +131,39 @@ impl Database {
     // === Followed channels ===
 
     /// Replaces the `followed` table with the current list of followed channels.
+    /// Preserves `broadcaster_timezone` for channels that already have one.
     pub fn sync_followed(&self, channels: &[FollowedChannel]) -> anyhow::Result<()> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
+
+        // Read existing timezones before clearing
+        let mut tz_map: HashMap<i64, String> = HashMap::new();
+        {
+            let mut stmt =
+                tx.prepare("SELECT broadcaster_id, broadcaster_timezone FROM followed WHERE broadcaster_timezone IS NOT NULL")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (id, tz) = row?;
+                tz_map.insert(id, tz);
+            }
+        }
+
         tx.execute("DELETE FROM followed", [])?;
         let mut stmt = tx.prepare(
-            "INSERT INTO followed (broadcaster_id, broadcaster_login, broadcaster_name, followed_at)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO followed (broadcaster_id, broadcaster_login, broadcaster_name, followed_at, broadcaster_timezone)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
         )?;
         for ch in channels {
             let id: i64 = ch.broadcaster_id.parse()?;
+            let tz = tz_map.get(&id).map(|s| s.as_str());
             stmt.execute(rusqlite::params![
                 id,
                 ch.broadcaster_login,
                 ch.broadcaster_name,
-                ch.followed_at.timestamp()
+                ch.followed_at.timestamp(),
+                tz,
             ])?;
         }
         drop(stmt);
@@ -154,6 +181,39 @@ impl Database {
             ids.push(row?);
         }
         Ok(ids)
+    }
+
+    /// Updates the timezone for a broadcaster in the `followed` table.
+    /// Called when we fetch a schedule and discover the broadcaster's timezone.
+    pub fn update_broadcaster_timezone(
+        &self,
+        broadcaster_id: i64,
+        timezone: &str,
+    ) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE followed SET broadcaster_timezone = ?1 WHERE broadcaster_id = ?2",
+            rusqlite::params![timezone, broadcaster_id],
+        )?;
+        Ok(())
+    }
+
+    /// Returns a map of broadcaster_id → IANA timezone string for all followed
+    /// channels that have a known timezone.
+    pub fn get_broadcaster_timezones(&self) -> anyhow::Result<HashMap<i64, String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT broadcaster_id, broadcaster_timezone FROM followed WHERE broadcaster_timezone IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut map = HashMap::new();
+        for row in rows {
+            let (id, tz) = row?;
+            map.insert(id, tz);
+        }
+        Ok(map)
     }
 
     // === Schedule queue ===
@@ -335,9 +395,12 @@ impl Database {
             }
         }
 
+        let timezones = self.get_broadcaster_timezones()?;
+
         Ok(crate::schedule_inference::infer_schedules(
             &history,
             channel_lookup,
+            &timezones,
             start,
             end,
         ))
@@ -456,7 +519,8 @@ mod tests {
                 broadcaster_id INTEGER PRIMARY KEY,
                 broadcaster_login TEXT NOT NULL,
                 broadcaster_name TEXT NOT NULL,
-                followed_at INTEGER NOT NULL
+                followed_at INTEGER NOT NULL,
+                broadcaster_timezone TEXT
             );
 
             CREATE TABLE IF NOT EXISTS schedule_last_checked (

@@ -176,6 +176,8 @@ pub struct ScheduleData {
     pub broadcaster_login: String,
     #[serde(default)]
     pub vacation: Option<ScheduleVacation>,
+    #[serde(default)]
+    pub broadcaster_timezone: Option<String>,
 }
 
 /// Schedule response from Helix API

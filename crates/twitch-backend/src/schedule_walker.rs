@@ -78,6 +78,12 @@ impl ScheduleWalker {
         .await
         {
             Ok(Some(data)) => {
+                // Persist broadcaster timezone if the API returned one
+                if let Some(tz) = &data.broadcaster_timezone {
+                    if let Err(e) = self.db.update_broadcaster_timezone(bid, tz) {
+                        tracing::warn!("Failed to store timezone for {}: {}", blogin, e);
+                    }
+                }
                 let segments = convert_schedule_segments(&data);
                 if let Err(e) = self.db.replace_future_schedules(bid, &segments) {
                     tracing::error!("Failed to store schedules for {}: {}", blogin, e);
@@ -238,6 +244,7 @@ mod tests {
             broadcaster_name: "TestBroadcaster".to_string(),
             broadcaster_login: "testbroadcaster".to_string(),
             vacation,
+            broadcaster_timezone: Some("America/New_York".to_string()),
         }
     }
 
@@ -357,6 +364,7 @@ mod tests {
             broadcaster_name: "Test".to_string(),
             broadcaster_login: "test".to_string(),
             vacation: None,
+            broadcaster_timezone: None,
         };
         let result = convert_schedule_segments(&data);
         assert!(result.is_empty());

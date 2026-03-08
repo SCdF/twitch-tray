@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
+use chrono_tz::Tz;
 
 use crate::twitch::{FollowedChannel, ScheduledStream};
 
@@ -15,11 +16,16 @@ use crate::twitch::{FollowedChannel, ScheduledStream};
 /// `history` contains `(user_id, started_at_unix_timestamp)` pairs for all
 /// streams in the three lookback windows.
 ///
+/// `timezones` maps user IDs to IANA timezone strings. When a timezone is known,
+/// projection preserves the streamer's wall-clock time across DST transitions.
+/// Without a timezone, projection falls back to fixed-duration addition (UTC).
+///
 /// Issues no I/O — purely computational. The caller (Database::infer_schedules)
 /// is responsible for loading the relevant rows from SQLite.
 pub fn infer_schedules(
     history: &[(i64, i64)],
     channel_lookup: &HashMap<String, FollowedChannel>,
+    timezones: &HashMap<i64, String>,
     window_start: DateTime<Utc>,
     window_end: DateTime<Utc>,
 ) -> Vec<ScheduledStream> {
@@ -31,6 +37,12 @@ pub fn infer_schedules(
     if user_id_map.is_empty() {
         return Vec::new();
     }
+
+    // Parse timezone strings into Tz once per user.
+    let tz_map: HashMap<i64, Tz> = timezones
+        .iter()
+        .filter_map(|(&uid, tz_str)| tz_str.parse::<Tz>().ok().map(|tz| (uid, tz)))
+        .collect();
 
     // Define lookback windows (same window shifted back by 1/2/3 weeks).
     let lookback_windows: [(DateTime<Utc>, DateTime<Utc>); 3] = [1, 2, 3].map(|weeks| {
@@ -55,6 +67,7 @@ pub fn infer_schedules(
 
     for (user_id, id_str) in &user_id_map {
         let channel = &channel_lookup[*id_str];
+        let tz = tz_map.get(user_id);
 
         // Project each stream from each lookback window forward into the prediction window.
         let mut projected_pairs: Vec<(i64, usize)> = Vec::new();
@@ -63,7 +76,7 @@ pub fn infer_schedules(
             let week_number = win_idx + 1; // 1-indexed
             if let Some(streams) = window_streams[win_idx].get(user_id) {
                 for stream_time in streams {
-                    let projected = *stream_time + Duration::weeks(week_number as i64);
+                    let projected = project_forward(*stream_time, week_number as i64, tz.copied());
                     if projected >= window_start && projected <= window_end {
                         projected_pairs.push((projected.timestamp(), week_number));
                     }
@@ -122,6 +135,25 @@ pub fn infer_schedules(
     inferred
 }
 
+/// Projects a UTC stream time forward by `weeks` weeks, preserving wall-clock
+/// time in the streamer's timezone. Without a timezone, adds fixed seconds.
+fn project_forward(time: DateTime<Utc>, weeks: i64, tz: Option<Tz>) -> DateTime<Utc> {
+    let Some(tz) = tz else {
+        return time + Duration::weeks(weeks);
+    };
+    let local = time.with_timezone(&tz).naive_local();
+    let target = (local.date() + Duration::weeks(weeks)).and_time(local.time());
+    tz.from_local_datetime(&target)
+        .earliest()
+        .unwrap_or_else(|| {
+            // DST gap — time doesn't exist; skip forward 1 hour
+            tz.from_local_datetime(&(target + Duration::hours(1)))
+                .earliest()
+                .expect("valid time after DST gap adjustment")
+        })
+        .with_timezone(&Utc)
+}
+
 /// Clusters (offset, week) pairs using single-linkage with the given threshold.
 ///
 /// Sorts by offset, then greedily builds clusters: a new item joins the current
@@ -174,7 +206,7 @@ fn cluster_offsets(pairs: &[(i64, usize)], threshold_secs: i64) -> Vec<Vec<(i64,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{TimeZone, Timelike};
+    use chrono::Timelike;
 
     fn make_channel(id: &str, name: &str) -> FollowedChannel {
         FollowedChannel {
@@ -194,6 +226,10 @@ mod tests {
         (user_id, ts.timestamp())
     }
 
+    fn no_timezones() -> HashMap<i64, String> {
+        HashMap::new()
+    }
+
     // === infer_schedules tests ===
 
     #[test]
@@ -201,21 +237,17 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
         let (start, end) = schedule_window(now);
 
-        // Earliest record establishes coverage for all 3 weeks.
-        // Week 3 window starts at start-21d = June 25 13:45.
         let earliest = Utc.with_ymd_and_hms(2025, 6, 25, 12, 0, 0).unwrap();
 
-        // Streamer went live at ~15:00 on 2 of the last 3 weeks (Wed).
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
         let w2 = Utc.with_ymd_and_hms(2025, 7, 2, 15, 0, 0).unwrap();
-        // Week 3: skipped (only 2/3 match)
 
         let history = vec![h(100, earliest), h(100, w1), h(100, w2)];
 
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = infer_schedules(&history, &channels, start, end);
+        let result = infer_schedules(&history, &channels, &no_timezones(), start, end);
         assert_eq!(result.len(), 1, "Should predict one schedule");
         assert!(result[0].is_inferred);
         assert_eq!(result[0].start_time.hour(), 15);
@@ -226,10 +258,7 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
         let (start, end) = schedule_window(now);
 
-        // Only 1 out of 3 weeks has a stream in the window.
-        // threshold is 2 (max(1, 3-1)), so not predicted.
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
-        // w2 and w3 have streams outside the window (at 3am) to establish coverage.
         let w2_early = Utc.with_ymd_and_hms(2025, 7, 2, 3, 0, 0).unwrap();
         let w3_early = Utc.with_ymd_and_hms(2025, 6, 25, 3, 0, 0).unwrap();
 
@@ -238,7 +267,7 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = infer_schedules(&history, &channels, start, end);
+        let result = infer_schedules(&history, &channels, &no_timezones(), start, end);
         assert!(
             result.is_empty(),
             "Should not predict with only 1/3 weeks matching"
@@ -250,7 +279,6 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
         let (start, end) = schedule_window(now);
 
-        // Earliest establishes coverage for week 2 (starts start-14d = July 2 13:45).
         let earliest = Utc.with_ymd_and_hms(2025, 7, 2, 12, 0, 0).unwrap();
 
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
@@ -261,7 +289,7 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = infer_schedules(&history, &channels, start, end);
+        let result = infer_schedules(&history, &channels, &no_timezones(), start, end);
         assert_eq!(result.len(), 1, "Should predict with 2/2 weeks matching");
     }
 
@@ -270,10 +298,7 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
         let (start, end) = schedule_window(now);
 
-        // Data goes back 2 weeks, but only week 1 has a stream in the window.
-        // threshold = weeks_with_data = 2 (sparse coverage), so 1 match is NOT enough.
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
-        // w2 has a stream but outside the window (establishes data coverage only).
         let w2_outside = Utc.with_ymd_and_hms(2025, 7, 2, 3, 0, 0).unwrap();
 
         let history = vec![h(100, w1), h(100, w2_outside)];
@@ -281,7 +306,7 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = infer_schedules(&history, &channels, start, end);
+        let result = infer_schedules(&history, &channels, &no_timezones(), start, end);
         assert!(
             result.is_empty(),
             "Should not predict with only 1/2 weeks matching — single sighting is not a pattern"
@@ -293,8 +318,6 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
         let (start, end) = schedule_window(now);
 
-        // Only one stream, appearing in a single lookback window.
-        // 1 distinct week < 2 → not predicted.
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
 
         let history = vec![h(100, w1)];
@@ -302,7 +325,7 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = infer_schedules(&history, &channels, start, end);
+        let result = infer_schedules(&history, &channels, &no_timezones(), start, end);
         assert!(
             result.is_empty(),
             "A single occurrence is not a pattern — should not predict"
@@ -317,7 +340,7 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = infer_schedules(&[], &channels, start, end);
+        let result = infer_schedules(&[], &channels, &no_timezones(), start, end);
         assert!(result.is_empty(), "No data should produce no predictions");
     }
 
@@ -328,7 +351,6 @@ mod tests {
 
         let earliest = Utc.with_ymd_and_hms(2025, 7, 2, 12, 0, 0).unwrap();
 
-        // Two streams 1 minute apart should cluster together (within 60min threshold).
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 55, 0).unwrap();
         let w2 = Utc.with_ymd_and_hms(2025, 7, 2, 15, 54, 0).unwrap();
 
@@ -337,7 +359,7 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = infer_schedules(&history, &channels, start, end);
+        let result = infer_schedules(&history, &channels, &no_timezones(), start, end);
         assert_eq!(
             result.len(),
             1,
@@ -352,9 +374,6 @@ mod tests {
 
         let earliest = Utc.with_ymd_and_hms(2025, 7, 2, 12, 0, 0).unwrap();
 
-        // Two streams 61 minutes apart land in separate clusters (don't merge),
-        // but with only 2 valid weeks and each time appearing in just 1 week,
-        // neither meets the threshold of 2 — so nothing is predicted.
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
         let w2 = Utc.with_ymd_and_hms(2025, 7, 2, 16, 1, 0).unwrap();
 
@@ -363,10 +382,7 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = infer_schedules(&history, &channels, start, end);
-        // To confirm clustering is still separate: use 3 weeks of data so threshold
-        // drops to 2, and give each time a match in week 3 as well.
-        // This test just validates the sparse-coverage (2-week) case is not predicted.
+        let result = infer_schedules(&history, &channels, &no_timezones(), start, end);
         assert!(
             result.is_empty(),
             "With 2 valid weeks and each time appearing only once, nothing should predict"
@@ -380,9 +396,6 @@ mod tests {
 
         let earliest = Utc.with_ymd_and_hms(2025, 6, 25, 8, 0, 0).unwrap();
 
-        // Three streams at 12:45, 12:58, 13:15 (within 30min, so they cluster).
-        // Projected forward: all land on July 16 at 12:45, 12:58, 13:15.
-        // Average = 12:59:20 → rounded to nearest 15 min = 13:00.
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 12, 45, 0).unwrap();
         let w2 = Utc.with_ymd_and_hms(2025, 7, 2, 12, 58, 0).unwrap();
         let w3 = Utc.with_ymd_and_hms(2025, 6, 25, 13, 15, 0).unwrap();
@@ -392,7 +405,7 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = infer_schedules(&history, &channels, start, end);
+        let result = infer_schedules(&history, &channels, &no_timezones(), start, end);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].start_time.hour(), 13);
         assert_eq!(result[0].start_time.minute(), 0);
@@ -400,9 +413,6 @@ mod tests {
 
     #[test]
     fn predicted_time_stable_across_now() {
-        // The predicted time should not change when "now" shifts by minutes,
-        // since it's based on projecting historical data forward, not on offsets
-        // from the current time.
         let earliest = Utc.with_ymd_and_hms(2025, 7, 2, 12, 0, 0).unwrap();
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
         let w2 = Utc.with_ymd_and_hms(2025, 7, 2, 15, 5, 0).unwrap();
@@ -412,17 +422,15 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        // Run inference at multiple "now" times spanning 30 minutes.
         let mut predicted_times = Vec::new();
         for minute in [0u32, 1, 5, 10, 15, 29] {
             let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, minute, 0).unwrap();
             let (start, end) = schedule_window(now);
-            let result = infer_schedules(&history, &channels, start, end);
+            let result = infer_schedules(&history, &channels, &no_timezones(), start, end);
             assert_eq!(result.len(), 1, "Should predict at minute {}", minute);
             predicted_times.push(result[0].start_time);
         }
 
-        // All predicted times should be identical.
         for (i, t) in predicted_times.iter().enumerate() {
             assert_eq!(
                 *t, predicted_times[0],
@@ -440,7 +448,6 @@ mod tests {
         let early100 = Utc.with_ymd_and_hms(2025, 7, 2, 12, 0, 0).unwrap();
         let early200 = Utc.with_ymd_and_hms(2025, 7, 2, 12, 0, 0).unwrap();
 
-        // Streamer 100 streams at 15:00, streamer 200 at 18:00.
         let s100_w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
         let s100_w2 = Utc.with_ymd_and_hms(2025, 7, 2, 15, 0, 0).unwrap();
         let s200_w1 = Utc.with_ymd_and_hms(2025, 7, 9, 18, 0, 0).unwrap();
@@ -459,7 +466,7 @@ mod tests {
         channels.insert("100".to_string(), make_channel("100", "StreamerA"));
         channels.insert("200".to_string(), make_channel("200", "StreamerB"));
 
-        let result = infer_schedules(&history, &channels, start, end);
+        let result = infer_schedules(&history, &channels, &no_timezones(), start, end);
         assert_eq!(result.len(), 2, "Should predict for both streamers");
 
         let names: Vec<&str> = result.iter().map(|s| s.broadcaster_name.as_str()).collect();
@@ -472,8 +479,6 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
         let (start, end) = schedule_window(now);
 
-        // Stream appears only in the week-1 lookback window; nothing in weeks 2 or 3.
-        // 1 distinct week < 2 → not predicted, regardless of how far back the data goes.
         let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
 
         let history = vec![h(100, w1)];
@@ -481,14 +486,12 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = infer_schedules(&history, &channels, start, end);
+        let result = infer_schedules(&history, &channels, &no_timezones(), start, end);
         assert!(result.is_empty());
     }
 
     #[test]
     fn clustering_61min_apart_produces_two_separate_predictions_with_full_coverage() {
-        // Use 3 weeks of full coverage so threshold is 2.
-        // Each slot (15:00 and 16:01) appears in 2 of the 3 weeks → both predicted separately.
         let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
         let (start, end) = schedule_window(now);
 
@@ -510,12 +513,123 @@ mod tests {
         let mut channels = HashMap::new();
         channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
 
-        let result = infer_schedules(&history, &channels, start, end);
+        let result = infer_schedules(&history, &channels, &no_timezones(), start, end);
         assert_eq!(
             result.len(),
             2,
             "61min apart with full coverage should produce two separate predictions"
         );
+    }
+
+    // === Timezone-aware projection tests ===
+
+    #[test]
+    fn dst_spring_forward_preserves_wall_clock_time() {
+        // US Eastern: clocks spring forward on 2025-03-09 (2:00 AM → 3:00 AM)
+        // Streamer goes live at 3:00 PM ET every week.
+        //
+        // Week 2 (before DST): 2025-02-26 15:00 EST = 20:00 UTC
+        // Week 1 (before DST): 2025-03-05 15:00 EST = 20:00 UTC
+        // Prediction (after DST): 2025-03-12 15:00 EDT = 19:00 UTC  ← NOT 20:00 UTC
+        let now = Utc.with_ymd_and_hms(2025, 3, 12, 14, 0, 0).unwrap();
+        let (start, end) = schedule_window(now);
+
+        let earliest = Utc.with_ymd_and_hms(2025, 2, 26, 12, 0, 0).unwrap();
+        // Both streams at 20:00 UTC (3:00 PM EST)
+        let w1 = Utc.with_ymd_and_hms(2025, 3, 5, 20, 0, 0).unwrap();
+        let w2 = Utc.with_ymd_and_hms(2025, 2, 26, 20, 0, 0).unwrap();
+
+        let history = vec![h(100, earliest), h(100, w1), h(100, w2)];
+
+        let mut channels = HashMap::new();
+        channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
+
+        let mut timezones = HashMap::new();
+        timezones.insert(100i64, "America/New_York".to_string());
+
+        let result = infer_schedules(&history, &channels, &timezones, start, end);
+        assert_eq!(result.len(), 1, "Should predict one schedule");
+
+        // After DST spring-forward: 3:00 PM EDT = 19:00 UTC (not 20:00 UTC)
+        assert_eq!(result[0].start_time.hour(), 19);
+    }
+
+    #[test]
+    fn dst_fall_back_preserves_wall_clock_time() {
+        // US Eastern: clocks fall back on 2025-11-02 (2:00 AM → 1:00 AM)
+        // Streamer goes live at 3:00 PM ET every week.
+        //
+        // Week 2 (before DST): 2025-10-22 15:00 EDT = 19:00 UTC
+        // Week 1 (before DST): 2025-10-29 15:00 EDT = 19:00 UTC
+        // Prediction (after DST): 2025-11-05 15:00 EST = 20:00 UTC  ← NOT 19:00 UTC
+        let now = Utc.with_ymd_and_hms(2025, 11, 5, 14, 0, 0).unwrap();
+        let (start, end) = schedule_window(now);
+
+        let earliest = Utc.with_ymd_and_hms(2025, 10, 22, 12, 0, 0).unwrap();
+        // Both streams at 19:00 UTC (3:00 PM EDT)
+        let w1 = Utc.with_ymd_and_hms(2025, 10, 29, 19, 0, 0).unwrap();
+        let w2 = Utc.with_ymd_and_hms(2025, 10, 22, 19, 0, 0).unwrap();
+
+        let history = vec![h(100, earliest), h(100, w1), h(100, w2)];
+
+        let mut channels = HashMap::new();
+        channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
+
+        let mut timezones = HashMap::new();
+        timezones.insert(100i64, "America/New_York".to_string());
+
+        let result = infer_schedules(&history, &channels, &timezones, start, end);
+        assert_eq!(result.len(), 1, "Should predict one schedule");
+
+        // After DST fall-back: 3:00 PM EST = 20:00 UTC (not 19:00 UTC)
+        assert_eq!(result[0].start_time.hour(), 20);
+    }
+
+    #[test]
+    fn no_timezone_falls_back_to_utc_projection() {
+        // Without timezone info, behavior should be the same as before (UTC-based).
+        let now = Utc.with_ymd_and_hms(2025, 3, 12, 14, 0, 0).unwrap();
+        let (start, end) = schedule_window(now);
+
+        let earliest = Utc.with_ymd_and_hms(2025, 2, 26, 12, 0, 0).unwrap();
+        let w1 = Utc.with_ymd_and_hms(2025, 3, 5, 20, 0, 0).unwrap();
+        let w2 = Utc.with_ymd_and_hms(2025, 2, 26, 20, 0, 0).unwrap();
+
+        let history = vec![h(100, earliest), h(100, w1), h(100, w2)];
+
+        let mut channels = HashMap::new();
+        channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
+
+        // No timezone → UTC fallback → projects to 20:00 UTC
+        let result = infer_schedules(&history, &channels, &no_timezones(), start, end);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].start_time.hour(), 20);
+    }
+
+    #[test]
+    fn utc_timezone_same_as_no_timezone() {
+        // Explicit UTC timezone should behave identically to no timezone.
+        let now = Utc.with_ymd_and_hms(2025, 7, 16, 14, 0, 0).unwrap();
+        let (start, end) = schedule_window(now);
+
+        let earliest = Utc.with_ymd_and_hms(2025, 7, 2, 12, 0, 0).unwrap();
+        let w1 = Utc.with_ymd_and_hms(2025, 7, 9, 15, 0, 0).unwrap();
+        let w2 = Utc.with_ymd_and_hms(2025, 7, 2, 15, 0, 0).unwrap();
+
+        let history = vec![h(100, earliest), h(100, w1), h(100, w2)];
+
+        let mut channels = HashMap::new();
+        channels.insert("100".to_string(), make_channel("100", "TestStreamer"));
+
+        let mut timezones = HashMap::new();
+        timezones.insert(100i64, "UTC".to_string());
+
+        let with_tz = infer_schedules(&history, &channels, &timezones, start, end);
+        let without_tz = infer_schedules(&history, &channels, &no_timezones(), start, end);
+
+        assert_eq!(with_tz.len(), 1);
+        assert_eq!(without_tz.len(), 1);
+        assert_eq!(with_tz[0].start_time, without_tz[0].start_time);
     }
 
     // === cluster_offsets unit tests ===
