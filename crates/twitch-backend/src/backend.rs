@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, watch, Mutex};
-use tokio::time::Duration;
+use tokio::time::{Duration, Instant};
 
 use crate::app_services::AppServices;
 use crate::auth::{TokenStore, CLIENT_ID};
@@ -40,6 +40,9 @@ pub(crate) struct Backend {
 
     settings_tx: mpsc::UnboundedSender<StreamerSettingsRequest>,
     settings_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<StreamerSettingsRequest>>>>,
+
+    /// In-memory cache for profile image URLs (user_id -> (url, fetched_at)).
+    profile_image_cache: Arc<std::sync::Mutex<HashMap<String, (String, Instant)>>>,
 }
 
 impl Backend {
@@ -97,6 +100,7 @@ impl Backend {
             snooze_rx: Arc::new(Mutex::new(Some(snooze_rx))),
             settings_tx,
             settings_rx: Arc::new(Mutex::new(Some(settings_rx))),
+            profile_image_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
         })
     }
 
@@ -435,22 +439,44 @@ impl Backend {
     }
 
     async fn enrich_with_profile_images(&self, streams: &mut [crate::twitch::Stream]) {
+        const CACHE_TTL: Duration = Duration::from_secs(3600);
+
         if streams.is_empty() {
             return;
         }
 
-        let user_ids: Vec<&str> = streams.iter().map(|s| s.user_id.as_str()).collect();
+        let now = Instant::now();
 
-        // Batch in groups of 100 (Twitch API limit)
-        let mut profile_map = std::collections::HashMap::new();
-        for chunk in user_ids.chunks(100) {
+        // Apply cached values and collect uncached user IDs
+        let mut uncached_ids: Vec<String> = Vec::new();
+        {
+            let cache = self.profile_image_cache.lock().unwrap();
+            for stream in streams.iter_mut() {
+                if let Some((url, fetched_at)) = cache.get(&stream.user_id) {
+                    if now.duration_since(*fetched_at) < CACHE_TTL {
+                        stream.profile_image_url = url.clone();
+                        continue;
+                    }
+                }
+                uncached_ids.push(stream.user_id.clone());
+            }
+        }
+
+        if uncached_ids.is_empty() {
+            return;
+        }
+
+        // Fetch uncached profiles in batches of 100 (Twitch API limit)
+        let uncached_refs: Vec<&str> = uncached_ids.iter().map(|s| s.as_str()).collect();
+        let mut fetched = HashMap::new();
+        for chunk in uncached_refs.chunks(100) {
             match self
                 .with_retry(|| self.client.get_users_by_ids(chunk))
                 .await
             {
                 Ok(users) => {
                     for user in users {
-                        profile_map.insert(user.id, user.profile_image_url);
+                        fetched.insert(user.id, user.profile_image_url);
                     }
                 }
                 Err(e) => {
@@ -459,8 +485,15 @@ impl Backend {
             }
         }
 
+        // Update cache and apply to streams
+        {
+            let mut cache = self.profile_image_cache.lock().unwrap();
+            for (id, url) in &fetched {
+                cache.insert(id.clone(), (url.clone(), now));
+            }
+        }
         for stream in streams.iter_mut() {
-            if let Some(url) = profile_map.get(&stream.user_id) {
+            if let Some(url) = fetched.get(&stream.user_id) {
                 stream.profile_image_url = url.clone();
             }
         }
@@ -640,6 +673,7 @@ impl Clone for Backend {
             snooze_rx: self.snooze_rx.clone(),
             settings_tx: self.settings_tx.clone(),
             settings_rx: self.settings_rx.clone(),
+            profile_image_cache: self.profile_image_cache.clone(),
         }
     }
 }
