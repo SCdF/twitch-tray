@@ -94,7 +94,5 @@ PlasmoidItem {
         onSettingsRequested: root.dbusCall("OpenSettings")
         onOpenStream: (login) =>
             root.dbusCallArgs("OpenStream", "'" + login + "'")
-        onOpenStreamerSettings: (login, name) =>
-            root.dbusCallArgs("OpenStreamerSettings", "'" + login + "' '" + name + "'")
     }
 }

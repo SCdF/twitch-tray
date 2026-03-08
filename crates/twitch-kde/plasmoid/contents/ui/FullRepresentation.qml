@@ -21,7 +21,7 @@ Controls.ScrollView {
     signal logoutRequested()
     signal settingsRequested()
     signal openStream(string login)
-    signal openStreamerSettings(string login, string name)
+
 
     Layout.preferredWidth: 320
     Layout.preferredHeight: Math.min(fullColumn.implicitHeight + 16, 600)
@@ -159,9 +159,7 @@ Controls.ScrollView {
                     profileImageUrl: modelData.profile_image_url || ""
                     isInferred: modelData.is_inferred
                     isFavourite: modelData.is_favourite
-                    onScheduleClicked: (login) => scrollView.openStreamerSettings(
-                        login, modelData.broadcaster_name
-                    )
+                    onScheduleClicked: (login) => scrollView.openStream(login)
                 }
             }
 
@@ -171,7 +169,7 @@ Controls.ScrollView {
                 items: scrollView.plasmoidState.schedule.overflow
                 onAvatarClicked: (index) => {
                     var item = scrollView.plasmoidState.schedule.overflow[index]
-                    scrollView.openStreamerSettings(item.broadcaster_login, item.broadcaster_name)
+                    scrollView.openStream(item.broadcaster_login)
                 }
 
                 Repeater {
@@ -186,9 +184,7 @@ Controls.ScrollView {
                         profileImageUrl: modelData.profile_image_url || ""
                         isInferred: modelData.is_inferred
                         isFavourite: modelData.is_favourite
-                        onClicked: (login) => scrollView.openStreamerSettings(
-                            login, modelData.broadcaster_name
-                        )
+                        onScheduleClicked: (login) => scrollView.openStream(login)
                     }
                 }
             }
