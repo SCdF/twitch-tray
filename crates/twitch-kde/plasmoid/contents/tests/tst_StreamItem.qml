@@ -48,10 +48,9 @@ Item {
         }
 
         function test_title_displayed_below_name() {
-            var label = findChild(item, "titleLabel")
-            verify(label, "titleLabel should exist")
-            compare(label.text, "Competitive ranked grind")
             var clip = findChild(item, "titleClip")
+            verify(clip, "titleClip should exist")
+            compare(clip.text, "Competitive ranked grind")
             verify(clip.visible, "title should be visible when set")
         }
 

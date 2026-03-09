@@ -18,6 +18,8 @@ Controls.ItemDelegate {
 
     onClicked: root.scheduleClicked(root.broadcasterLogin)
 
+    hoverEnabled: true
+
     contentItem: RowLayout {
         id: row
         spacing: 8
@@ -66,13 +68,14 @@ Controls.ItemDelegate {
             RowLayout {
                 Layout.fillWidth: true
 
-                Controls.Label {
+                ScrollingLabel {
                     id: titleLabel
                     objectName: "titleLabel"
-                    text: root.title || " "
-                    opacity: root.title !== "" ? 0.5 : 0
-                    elide: Text.ElideRight
                     Layout.fillWidth: true
+                    text: root.title || " "
+                    textOpacity: root.title !== "" ? 0.5 : 0
+                    scrollEnabled: root.hovered && root.title !== ""
+                    fadeColor: root.palette.window
                 }
 
                 Controls.Label {

@@ -19,14 +19,6 @@ Controls.ItemDelegate {
     onClicked: root.streamClicked(root.userLogin)
 
     hoverEnabled: true
-    onHoveredChanged: {
-        if (hovered && titleClip.overflow > 0) {
-            scrollAnim.start()
-        } else {
-            scrollAnim.stop()
-            titleLabel.x = 0
-        }
-    }
 
     contentItem: RowLayout {
         id: row
@@ -76,56 +68,14 @@ Controls.ItemDelegate {
                 Layout.fillWidth: true
                 visible: root.title !== "" || root.durationFormatted !== ""
 
-                Item {
+                ScrollingLabel {
                     id: titleClip
                     objectName: "titleClip"
                     Layout.fillWidth: true
-                    implicitHeight: titleLabel.implicitHeight
-                    clip: true
                     visible: root.title !== ""
-
-                    property real overflow: Math.max(0, titleLabel.implicitWidth - width)
-
-                    Controls.Label {
-                        id: titleLabel
-                        objectName: "titleLabel"
-                        text: root.title
-                        opacity: 0.5
-                        width: Math.max(implicitWidth, titleClip.width)
-
-                        SequentialAnimation on x {
-                            id: scrollAnim
-                            running: false
-                            loops: Animation.Infinite
-
-                            PauseAnimation { duration: 2000 }
-                            NumberAnimation {
-                                to: -titleClip.overflow
-                                duration: titleClip.overflow * 25
-                                easing.type: Easing.Linear
-                            }
-                            PauseAnimation { duration: 3000 }
-                            NumberAnimation {
-                                to: 0
-                                duration: 0
-                            }
-                        }
-                    }
-
-                    // Fade-out hint on the right edge when text is clipped
-                    Rectangle {
-                        id: fadeHint
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.bottom: parent.bottom
-                        width: 16
-                        visible: titleClip.overflow > 0 && titleLabel.x >= 0
-                        gradient: Gradient {
-                            orientation: Gradient.Horizontal
-                            GradientStop { position: 0.0; color: "transparent" }
-                            GradientStop { position: 1.0; color: root.palette.window }
-                        }
-                    }
+                    text: root.title
+                    scrollEnabled: root.hovered
+                    fadeColor: root.palette.window
                 }
 
                 Controls.Label {

@@ -67,7 +67,7 @@ Item {
             var label = findChild(item, "titleLabel")
             verify(label, "titleLabel should exist")
             compare(label.text, "Evening Chill Stream")
-            compare(label.opacity, 0.5, "title should be visible when non-empty")
+            compare(label.textOpacity, 0.5, "title should be visible when non-empty")
         }
 
         function test_title_transparent_when_empty() {
@@ -75,7 +75,7 @@ Item {
             wait(10)
             var label = findChild(item, "titleLabel")
             verify(label, "titleLabel should exist")
-            compare(label.opacity, 0, "title should be transparent when empty")
+            compare(label.textOpacity, 0, "title should be transparent when empty")
         }
 
         function test_avatar_container_exists() {
