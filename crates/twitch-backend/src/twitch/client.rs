@@ -4,7 +4,10 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::http::{HttpClient, ReqwestClient};
-use super::types::*;
+use super::types::{
+    Category, FollowedChannel, FollowedChannelsResponse, GamesResponse, ScheduleData,
+    ScheduleResponse, SearchCategoriesResponse, Stream, StreamsResponse, User, UsersResponse,
+};
 use super::ApiError;
 
 const HELIX_BASE_URL: &str = "https://api.twitch.tv/helix";
@@ -64,10 +67,7 @@ impl<H: HttpClient> TwitchClient<H> {
             .context("No access token set")?;
 
         let mut headers = HeaderMap::new();
-        headers.insert(
-            "Authorization",
-            format!("Bearer {}", token).parse().unwrap(),
-        );
+        headers.insert("Authorization", format!("Bearer {token}").parse().unwrap());
         headers.insert("Client-Id", self.client_id.parse().unwrap());
 
         Ok(headers)
@@ -82,7 +82,7 @@ impl<H: HttpClient> TwitchClient<H> {
         endpoint: &str,
     ) -> Result<T, ApiError> {
         let headers = self.build_headers().await?;
-        let url = format!("{}{}", HELIX_BASE_URL, endpoint);
+        let url = format!("{HELIX_BASE_URL}{endpoint}");
 
         let response = self.http.get_response(&url, &headers).await?;
 
@@ -110,7 +110,7 @@ impl<H: HttpClient> TwitchClient<H> {
         endpoint: &str,
     ) -> Result<Option<T>, ApiError> {
         let headers = self.build_headers().await?;
-        let url = format!("{}{}", HELIX_BASE_URL, endpoint);
+        let url = format!("{HELIX_BASE_URL}{endpoint}");
 
         let response = self.http.get_response(&url, &headers).await?;
 
@@ -165,11 +165,8 @@ impl<H: HttpClient> TwitchClient<H> {
 
         loop {
             let endpoint = match &cursor {
-                Some(c) => format!(
-                    "/streams/followed?user_id={}&first=100&after={}",
-                    user_id, c
-                ),
-                None => format!("/streams/followed?user_id={}&first=100", user_id),
+                Some(c) => format!("/streams/followed?user_id={user_id}&first=100&after={c}"),
+                None => format!("/streams/followed?user_id={user_id}&first=100"),
             };
 
             let response: StreamsResponse = self.get(&endpoint).await?;
@@ -201,11 +198,8 @@ impl<H: HttpClient> TwitchClient<H> {
             .map_err(ApiError::Other)?;
 
         let endpoint = match cursor {
-            Some(c) => format!(
-                "/channels/followed?user_id={}&first=100&after={}",
-                user_id, c
-            ),
-            None => format!("/channels/followed?user_id={}&first=100", user_id),
+            Some(c) => format!("/channels/followed?user_id={user_id}&first=100&after={c}"),
+            None => format!("/channels/followed?user_id={user_id}&first=100"),
         };
 
         let response: FollowedChannelsResponse = self.get(&endpoint).await?;
@@ -242,7 +236,7 @@ impl<H: HttpClient> TwitchClient<H> {
     /// Returns `ApiError::Unauthorized` if the token has expired.
     pub async fn search_categories(&self, query: &str) -> Result<Vec<Category>, ApiError> {
         let encoded_query = urlencoding::encode(query);
-        let endpoint = format!("/search/categories?query={}&first=10", encoded_query);
+        let endpoint = format!("/search/categories?query={encoded_query}&first=10");
         let response: SearchCategoriesResponse = self.get(&endpoint).await?;
         Ok(response.data)
     }
@@ -255,7 +249,7 @@ impl<H: HttpClient> TwitchClient<H> {
             return Ok(vec![]);
         }
 
-        let params: Vec<String> = game_ids.iter().map(|id| format!("id={}", id)).collect();
+        let params: Vec<String> = game_ids.iter().map(|id| format!("id={id}")).collect();
         let endpoint = format!("/games?{}", params.join("&"));
         let response: GamesResponse = self.get(&endpoint).await?;
         Ok(response.data)
@@ -265,7 +259,7 @@ impl<H: HttpClient> TwitchClient<H> {
     ///
     /// Returns `ApiError::Unauthorized` if the token has expired.
     pub async fn get_streams_by_category(&self, game_id: &str) -> Result<Vec<Stream>, ApiError> {
-        let endpoint = format!("/streams?game_id={}&first=10", game_id);
+        let endpoint = format!("/streams?game_id={game_id}&first=10");
         let response: StreamsResponse = self.get(&endpoint).await?;
         Ok(response.data)
     }
@@ -281,7 +275,7 @@ impl<H: HttpClient> TwitchClient<H> {
             return Ok(vec![]);
         }
 
-        let params: Vec<String> = user_ids.iter().map(|id| format!("id={}", id)).collect();
+        let params: Vec<String> = user_ids.iter().map(|id| format!("id={id}")).collect();
         let endpoint = format!("/users?{}", params.join("&"));
         let response: UsersResponse = self.get(&endpoint).await?;
         Ok(response.data)
@@ -298,7 +292,7 @@ impl<H: HttpClient> TwitchClient<H> {
         &self,
         broadcaster_id: &str,
     ) -> Result<Option<ScheduleData>, ApiError> {
-        let endpoint = format!("/schedule?broadcaster_id={}&first=10", broadcaster_id);
+        let endpoint = format!("/schedule?broadcaster_id={broadcaster_id}&first=10");
 
         let response: Option<ScheduleResponse> = self.get_optional(&endpoint).await?;
         Ok(response.map(|r| r.data))
@@ -324,6 +318,7 @@ mod tests {
     use super::*;
     use crate::test_helpers::make_stream;
     use crate::twitch::http::mock::MockHttpClient;
+    use crate::twitch::types::Pagination;
 
     fn make_streams_response(streams: Vec<Stream>, cursor: Option<&str>) -> StreamsResponse {
         StreamsResponse {

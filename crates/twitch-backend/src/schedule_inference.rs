@@ -115,7 +115,7 @@ pub fn infer_schedules(
             }
 
             inferred.push(ScheduledStream {
-                id: format!("inferred_{}_{}", user_id, rounded),
+                id: format!("inferred_{user_id}_{rounded}"),
                 broadcaster_id: channel.broadcaster_id.clone(),
                 broadcaster_name: channel.broadcaster_name.clone(),
                 broadcaster_login: channel.broadcaster_login.clone(),

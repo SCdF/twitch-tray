@@ -8,6 +8,7 @@ use twitch_backend::twitch::{Category, FollowedChannel};
 
 /// Gets the current configuration.
 #[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands require State by value
 pub fn get_config(app: State<'_, Arc<dyn AppServices>>) -> Config {
     app.get_config()
 }
@@ -34,6 +35,7 @@ pub async fn search_categories(
 
 /// Gets the followed categories from config.
 #[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands require State by value
 pub fn get_followed_categories(app: State<'_, Arc<dyn AppServices>>) -> Vec<FollowedCategory> {
     app.get_followed_categories()
 }

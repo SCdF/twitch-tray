@@ -1,6 +1,7 @@
 [package]
 name = "twitch-menu-tauri"
 version = "0.1.0"
+publish = false
 edition = "2021"
 rust-version = "1.91"
 
@@ -17,3 +18,6 @@ open = "5"
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+[lints]
+workspace = true

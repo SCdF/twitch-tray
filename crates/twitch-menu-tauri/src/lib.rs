@@ -40,8 +40,8 @@ pub fn start_listener(
                     raw.live_streams,
                     raw.scheduled_streams,
                     raw.schedules_loaded,
-                    raw.followed_categories,
-                    raw.category_streams,
+                    &raw.followed_categories,
+                    &raw.category_streams,
                     &display_config,
                     Utc::now(),
                 )

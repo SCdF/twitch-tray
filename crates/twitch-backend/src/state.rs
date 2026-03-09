@@ -158,7 +158,7 @@ impl AppState {
             );
         }
 
-        state.followed_streams = streams.clone();
+        state.followed_streams.clone_from(&streams);
         drop(state);
 
         self.notify_change(ChangeType::FollowedStreams);

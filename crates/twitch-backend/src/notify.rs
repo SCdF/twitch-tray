@@ -229,10 +229,10 @@ impl DesktopNotifier {
 impl Notifier for DesktopNotifier {
     fn stream_live(&self, stream: &Stream) -> anyhow::Result<()> {
         let title = format!("{} is now live!", stream.user_name);
-        let message = if !stream.title.is_empty() {
-            format!("{} - {}", stream.game_name, truncate(&stream.title, 50))
-        } else {
+        let message = if stream.title.is_empty() {
             stream.game_name.clone()
+        } else {
+            format!("{} - {}", stream.game_name, truncate(&stream.title, 50))
         };
 
         let url = stream.channel_url();
@@ -250,10 +250,10 @@ impl Notifier for DesktopNotifier {
 
     fn stream_reminder(&self, stream: &Stream) -> anyhow::Result<()> {
         let title = format!("{} live for {}", stream.user_name, stream.format_duration());
-        let message = if !stream.title.is_empty() {
-            format!("{} - {}", stream.game_name, truncate(&stream.title, 50))
-        } else {
+        let message = if stream.title.is_empty() {
             stream.game_name.clone()
+        } else {
+            format!("{} - {}", stream.game_name, truncate(&stream.title, 50))
         };
 
         let url = stream.channel_url();

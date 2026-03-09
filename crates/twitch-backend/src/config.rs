@@ -187,7 +187,7 @@ impl ConfigManager {
     pub fn get(&self) -> Config {
         self.config
             .read()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
 
@@ -200,7 +200,10 @@ impl ConfigManager {
         std::fs::write(&config_file, json).context("Failed to write config file")?;
 
         // Update in-memory config
-        *self.config.write().unwrap_or_else(|e| e.into_inner()) = config;
+        *self
+            .config
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
 
         Ok(())
     }

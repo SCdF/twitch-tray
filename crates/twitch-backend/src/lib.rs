@@ -1,4 +1,5 @@
 // twitch-backend: pure Rust backend crate — no Tauri or GTK dependencies.
+#![forbid(unsafe_code)]
 
 pub mod app_services;
 pub mod auth;

@@ -152,8 +152,8 @@ pub fn compute_display_state(
     mut streams: Vec<Stream>,
     scheduled: Vec<ScheduledStream>,
     schedules_loaded: bool,
-    followed_categories: Vec<FollowedCategory>,
-    category_streams: HashMap<String, Vec<Stream>>,
+    followed_categories: &[FollowedCategory],
+    category_streams: &HashMap<String, Vec<Stream>>,
     config: &DisplayConfig,
     now: DateTime<Utc>,
 ) -> DisplayState {
@@ -205,7 +205,7 @@ pub fn compute_display_state(
     // --- Category sections ---
 
     let mut category_sections = Vec::new();
-    for category in &followed_categories {
+    for category in followed_categories {
         if let Some(cat_streams) = category_streams.get(&category.id) {
             if !cat_streams.is_empty() {
                 let mut sorted = cat_streams.clone();
@@ -474,8 +474,8 @@ mod tests {
             streams,
             no_scheduled(),
             true,
-            cats,
-            cat_streams,
+            &cats,
+            &cat_streams,
             &config_with_importance("ignoreuser", StreamerImportance::Ignore),
             Utc::now(),
         );
@@ -505,8 +505,8 @@ mod tests {
             vec![normal_high, fav_low],
             no_scheduled(),
             true,
-            cats,
-            cat_streams,
+            &cats,
+            &cat_streams,
             &config_with_importance("fav_low", StreamerImportance::Favourite),
             Utc::now(),
         );
@@ -533,8 +533,8 @@ mod tests {
             vec![s1, s2],
             no_scheduled(),
             true,
-            cats,
-            cat_streams,
+            &cats,
+            &cat_streams,
             &default_config(),
             Utc::now(),
         );
@@ -557,8 +557,8 @@ mod tests {
             streams,
             no_scheduled(),
             true,
-            cats,
-            cat_streams,
+            &cats,
+            &cat_streams,
             &default_config(),
             Utc::now(),
         );
@@ -589,8 +589,8 @@ mod tests {
             streams,
             no_scheduled(),
             true,
-            cats,
-            cat_streams,
+            &cats,
+            &cat_streams,
             &default_config(),
             Utc::now(),
         );
@@ -608,8 +608,8 @@ mod tests {
             streams,
             no_scheduled(),
             true,
-            cats,
-            cat_streams,
+            &cats,
+            &cat_streams,
             &config_with_importance("favuser", StreamerImportance::Favourite),
             Utc::now(),
         );
@@ -633,8 +633,8 @@ mod tests {
             vec![],
             scheduled,
             true,
-            cats,
-            cat_streams,
+            &cats,
+            &cat_streams,
             &config_with_importance("ignored_bc", StreamerImportance::Ignore),
             Utc::now(),
         );
@@ -662,8 +662,8 @@ mod tests {
             vec![live],
             vec![sched],
             true,
-            cats,
-            cat_streams,
+            &cats,
+            &cat_streams,
             &default_config(),
             now,
         );
@@ -692,8 +692,8 @@ mod tests {
             vec![live],
             vec![sched],
             true,
-            cats,
-            cat_streams,
+            &cats,
+            &cat_streams,
             &default_config(),
             now,
         );
@@ -711,8 +711,8 @@ mod tests {
             vec![], // no live streams
             vec![sched],
             true,
-            cats,
-            cat_streams,
+            &cats,
+            &cat_streams,
             &default_config(),
             Utc::now(),
         );
@@ -732,8 +732,8 @@ mod tests {
             vec![],
             scheduled,
             true,
-            cats,
-            cat_streams,
+            &cats,
+            &cat_streams,
             &default_config(),
             Utc::now(),
         );
@@ -749,8 +749,8 @@ mod tests {
             vec![],
             vec![],
             false, // not yet loaded
-            cats,
-            cat_streams,
+            &cats,
+            &cat_streams,
             &default_config(),
             Utc::now(),
         );
@@ -765,8 +765,8 @@ mod tests {
             vec![],
             vec![],
             true,
-            cats,
-            cat_streams,
+            &cats,
+            &cat_streams,
             &DisplayConfig {
                 schedule_lookahead_hours: 12,
                 ..default_config()
@@ -787,8 +787,8 @@ mod tests {
             vec![],
             vec![sched],
             true,
-            cats,
-            cat_streams,
+            &cats,
+            &cat_streams,
             &default_config(),
             Utc::now(),
         );
@@ -811,8 +811,8 @@ mod tests {
             vec![],
             vec![sched],
             true,
-            cats,
-            cat_streams,
+            &cats,
+            &cat_streams,
             &config_with_importance("favbc", StreamerImportance::Favourite),
             Utc::now(),
         );
@@ -843,8 +843,8 @@ mod tests {
             vec![],
             no_scheduled(),
             true,
-            cats,
-            cat_streams,
+            &cats,
+            &cat_streams,
             &default_config(),
             Utc::now(),
         );
@@ -866,8 +866,8 @@ mod tests {
             vec![],
             no_scheduled(),
             true,
-            cats,
-            cat_streams,
+            &cats,
+            &cat_streams,
             &default_config(),
             Utc::now(),
         );

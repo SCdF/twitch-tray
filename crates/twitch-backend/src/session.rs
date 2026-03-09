@@ -53,9 +53,9 @@ impl SessionManager {
                 client,
                 state,
                 db,
+                refresh_mutex,
                 initial_load_done,
                 last_live_refresh,
-                refresh_mutex,
                 login_progress_tx,
             },
             login_progress_rx,
@@ -73,14 +73,11 @@ impl SessionManager {
         let needs_refresh = if token.is_expired() {
             tracing::info!("Token expired, attempting refresh...");
             true
+        } else if flow.validate_token(&token.access_token).await.is_ok() {
+            false
         } else {
-            match flow.validate_token(&token.access_token).await {
-                Ok(_) => false,
-                Err(_) => {
-                    tracing::info!("Token rejected by Twitch, attempting refresh...");
-                    true
-                }
-            }
+            tracing::info!("Token rejected by Twitch, attempting refresh...");
+            true
         };
 
         if needs_refresh {

@@ -26,7 +26,7 @@ pub fn open_settings_window(app: &AppHandle) {
 
 /// Opens a small settings window for a specific streamer
 pub fn open_streamer_settings_window(app: &AppHandle, user_login: &str, display_name: &str) {
-    let window_id = format!("streamer-settings-{}", user_login);
+    let window_id = format!("streamer-settings-{user_login}");
 
     // Focus existing window if already open
     if let Some(window) = app.get_webview_window(&window_id) {
@@ -34,8 +34,8 @@ pub fn open_streamer_settings_window(app: &AppHandle, user_login: &str, display_
         return;
     }
 
-    let url = format!("index.html?streamer={}", user_login);
-    let title = format!("{} - Settings", display_name);
+    let url = format!("index.html?streamer={user_login}");
+    let title = format!("{display_name} - Settings");
 
     match WebviewWindowBuilder::new(app, &window_id, tauri::WebviewUrl::App(url.into()))
         .title(&title)

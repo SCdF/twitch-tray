@@ -27,9 +27,7 @@ fn get_importance(
 
 fn map_login_state(login_progress: Option<&LoginProgress>) -> LoginStateDto {
     match login_progress {
-        None | Some(LoginProgress::Confirmed) | Some(LoginProgress::Failed(_)) => {
-            LoginStateDto::Idle
-        }
+        None | Some(LoginProgress::Confirmed | LoginProgress::Failed(_)) => LoginStateDto::Idle,
         Some(LoginProgress::PendingCode {
             user_code,
             verification_uri,
@@ -187,7 +185,7 @@ pub fn compute_plasmoid_state(
                     name: category.name.clone(),
                     box_art_url,
                     total_viewers_formatted: format_viewer_count(total_viewers),
-                    stream_count_formatted: format!("{} live", stream_count),
+                    stream_count_formatted: format!("{stream_count} live"),
                     streams: streams_dto,
                 });
             }

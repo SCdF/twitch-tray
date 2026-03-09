@@ -192,12 +192,10 @@ impl<H: HttpClient> DeviceFlow<H> {
                 }
                 Err(DeviceFlowError::AuthorizationPending) => {
                     tracing::debug!("Authorization pending, continuing to poll...");
-                    continue;
                 }
                 Err(DeviceFlowError::SlowDown) => {
                     interval += std::time::Duration::from_secs(5);
                     tracing::info!("Slowing down, new interval: {:?}", interval);
-                    continue;
                 }
                 Err(e) => {
                     tracing::error!("Poll error: {}", e);
@@ -210,7 +208,7 @@ impl<H: HttpClient> DeviceFlow<H> {
     /// Validates an access token and returns user info
     pub async fn validate_token(&self, access_token: &str) -> Result<ValidateResponse> {
         let mut headers = HeaderMap::new();
-        let auth_value = HeaderValue::from_str(&format!("OAuth {}", access_token))
+        let auth_value = HeaderValue::from_str(&format!("OAuth {access_token}"))
             .context("Invalid access token value")?;
         headers.insert(AUTHORIZATION, auth_value);
 

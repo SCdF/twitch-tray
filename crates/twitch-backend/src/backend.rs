@@ -60,7 +60,7 @@ impl Backend {
         let notifier: Arc<dyn Notifier> =
             Arc::new(DesktopNotifier::new(snooze_tx.clone(), settings_tx.clone()));
         let client = TwitchClient::new(CLIENT_ID.to_string());
-        let db = Database::new(ConfigManager::config_dir()?.join("data.db"))?;
+        let db = Database::new(&ConfigManager::config_dir()?.join("data.db"))?;
         let (auth_cancel_tx, auth_cancel_rx) = watch::channel(false);
 
         let (session, login_progress_rx) = SessionManager::new(
@@ -119,8 +119,8 @@ impl Backend {
     /// Starts all background tasks, wiring the display watch channel and event broadcast.
     fn start_tasks(
         self: &Arc<Self>,
-        display_tx: watch::Sender<RawDisplayData>,
-        event_tx: broadcast::Sender<BackendEvent>,
+        display_tx: &watch::Sender<RawDisplayData>,
+        event_tx: &broadcast::Sender<BackendEvent>,
         auth_cmd_rx: mpsc::UnboundedReceiver<AuthCommand>,
     ) -> Vec<JoinHandle<()>> {
         let mut handles = Vec::new();
@@ -200,12 +200,9 @@ impl Backend {
         // Snooze notification task
         let backend = self.clone();
         handles.push(tokio::spawn(async move {
-            let mut rx = match backend.snooze_rx.lock().await.take() {
-                Some(rx) => rx,
-                None => {
-                    tracing::warn!("Snooze receiver already taken");
-                    return;
-                }
+            let Some(mut rx) = backend.snooze_rx.lock().await.take() else {
+                tracing::warn!("Snooze receiver already taken");
+                return;
             };
 
             let mut snoozed: HashMap<String, (SnoozeRequest, crate::twitch::Stream)> =
@@ -261,12 +258,9 @@ impl Backend {
         let backend = self.clone();
         let event_tx_settings = event_tx.clone();
         handles.push(tokio::spawn(async move {
-            let mut rx = match backend.settings_rx.lock().await.take() {
-                Some(rx) => rx,
-                None => {
-                    tracing::warn!("Settings receiver already taken");
-                    return;
-                }
+            let Some(mut rx) = backend.settings_rx.lock().await.take() else {
+                tracing::warn!("Settings receiver already taken");
+                return;
             };
 
             while let Some(request) = rx.recv().await {
@@ -505,7 +499,10 @@ impl Backend {
         }
 
         // Fetch in batches of 100 (Twitch API limit)
-        let uncached_refs: Vec<&str> = uncached_ids.iter().map(|s| s.as_str()).collect();
+        let uncached_refs: Vec<&str> = uncached_ids
+            .iter()
+            .map(std::string::String::as_str)
+            .collect();
         let mut fetched = HashMap::new();
         for chunk in uncached_refs.chunks(100) {
             match self
@@ -559,7 +556,10 @@ impl Backend {
             return;
         }
 
-        let uncached_refs: Vec<&str> = uncached_ids.iter().map(|s| s.as_str()).collect();
+        let uncached_refs: Vec<&str> = uncached_ids
+            .iter()
+            .map(std::string::String::as_str)
+            .collect();
         let mut fetched = HashMap::new();
         for chunk in uncached_refs.chunks(100) {
             match self
@@ -653,9 +653,7 @@ impl Backend {
             }
             Err(e) => {
                 tracing::error!("Authentication failed: {}", e);
-                let _ = self
-                    .notifier
-                    .error(&format!("Authentication failed: {}", e));
+                let _ = self.notifier.error(&format!("Authentication failed: {e}"));
             }
         }
     }
@@ -742,11 +740,11 @@ impl AppServices for Backend {
     }
 
     async fn refresh_category_streams(&self) {
-        Backend::refresh_category_streams(self).await
+        Backend::refresh_category_streams(self).await;
     }
 
     async fn refresh_schedules_from_db(&self) {
-        Backend::refresh_schedules_from_db(self).await
+        Backend::refresh_schedules_from_db(self).await;
     }
 
     async fn get_debug_schedule_data(
@@ -791,7 +789,7 @@ pub fn start() -> anyhow::Result<BackendHandle> {
     let (auth_cmd_tx, auth_cmd_rx) = mpsc::unbounded_channel();
 
     let login_progress_rx = backend.login_progress_rx.clone();
-    let tasks = backend.start_tasks(display_tx, event_tx.clone(), auth_cmd_rx);
+    let tasks = backend.start_tasks(&display_tx, &event_tx, auth_cmd_rx);
 
     let services: Arc<dyn AppServices> = backend;
 

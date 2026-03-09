@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Duration, Utc};
@@ -18,17 +18,17 @@ impl Database {
     ///
     /// If `history.db` exists in the same directory and `data.db` does not,
     /// renames it first (one-time migration).
-    pub fn new(db_path: PathBuf) -> anyhow::Result<Self> {
+    pub fn new(db_path: &Path) -> anyhow::Result<Self> {
         // Migrate history.db → data.db if needed
         if let Some(parent) = db_path.parent() {
             let old_path = parent.join("history.db");
             if old_path.exists() && !db_path.exists() {
                 tracing::info!("Migrating {:?} → {:?}", old_path, db_path);
-                std::fs::rename(&old_path, &db_path)?;
+                std::fs::rename(&old_path, db_path)?;
             }
         }
 
-        let conn = Connection::open(&db_path)?;
+        let conn = Connection::open(db_path)?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS stream_history (
                 user_id INTEGER NOT NULL,
@@ -157,7 +157,7 @@ impl Database {
         )?;
         for ch in channels {
             let id: i64 = ch.broadcaster_id.parse()?;
-            let tz = tz_map.get(&id).map(|s| s.as_str());
+            let tz = tz_map.get(&id).map(std::string::String::as_str);
             stmt.execute(rusqlite::params![
                 id,
                 ch.broadcaster_login,
@@ -301,7 +301,7 @@ impl Database {
                 s.end_time.map(|t| t.timestamp()),
                 s.category,
                 cat_id,
-                s.is_recurring as i64,
+                i64::from(s.is_recurring),
             ])?;
         }
         drop(stmt);
@@ -556,7 +556,7 @@ mod tests {
     fn table_creation_succeeds() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test_history.db");
-        let _db = Database::new(db_path).unwrap();
+        let _db = Database::new(&db_path).unwrap();
     }
 
     #[test]
@@ -978,7 +978,7 @@ mod tests {
         assert!(old_path.exists());
         assert!(!new_path.exists());
 
-        let _db = Database::new(new_path.clone()).unwrap();
+        let _db = Database::new(&new_path).unwrap();
 
         assert!(!old_path.exists());
         assert!(new_path.exists());

@@ -1,6 +1,7 @@
 [package]
 name = "twitch-tray"
 version = "0.1.0"
+publish = false
 description = "A cross-platform system tray application for Twitch viewers"
 authors = [""]
 edition = "2021"
@@ -28,3 +29,6 @@ tempfile = "3"
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+[lints]
+workspace = true

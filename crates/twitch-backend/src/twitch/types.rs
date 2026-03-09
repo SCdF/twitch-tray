@@ -24,11 +24,11 @@ pub struct Stream {
 /// Formats a viewer count with k suffix for thousands
 pub fn format_viewer_count(count: u32) -> String {
     if count >= 1000 {
-        let k = count as f64 / 1000.0;
+        let k = f64::from(count) / 1000.0;
         if k.fract() < 0.05 {
             format!("{}k", k as u32)
         } else {
-            format!("{:.1}k", k)
+            format!("{k:.1}k")
         }
     } else {
         count.to_string()
@@ -53,9 +53,9 @@ impl Stream {
         let minutes = duration.num_minutes() % 60;
 
         if hours > 0 {
-            format!("{}h {}m", hours, minutes)
+            format!("{hours}h {minutes}m")
         } else {
-            format!("{}m", minutes)
+            format!("{minutes}m")
         }
     }
 

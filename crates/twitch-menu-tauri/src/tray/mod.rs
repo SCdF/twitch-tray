@@ -89,7 +89,10 @@ impl DisplayBackend for TrayBackend {
     fn update(&self, state: DisplayState) -> anyhow::Result<()> {
         // Acquire lock to serialise menu rebuilds.
         // std::sync::Mutex is fine here: no `.await` is held while locked.
-        let _guard = self.rebuild_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = self
+            .rebuild_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let app_handle = self.app_handle.clone();
         let authenticated = state.authenticated;
@@ -101,7 +104,7 @@ impl DisplayBackend for TrayBackend {
             .run_on_main_thread(move || {
                 let app_handle = app_handle_closure;
                 let menu_result = if authenticated {
-                    render_display_state(&app_handle, state)
+                    render_display_state(&app_handle, &state)
                 } else {
                     build_unauthenticated_menu(&app_handle)
                 };
@@ -153,7 +156,7 @@ fn build_unauthenticated_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>
 ///
 /// This is the only function in `tray/mod.rs` that knows about Tauri types.
 /// All business logic (sorting, filtering, labelling) lives in `display_state.rs`.
-fn render_display_state(app: &AppHandle, state: DisplayState) -> tauri::Result<Menu<tauri::Wry>> {
+fn render_display_state(app: &AppHandle, state: &DisplayState) -> tauri::Result<Menu<tauri::Wry>> {
     let mut items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
 
     // === Following Live section ===
@@ -161,7 +164,7 @@ fn render_display_state(app: &AppHandle, state: DisplayState) -> tauri::Result<M
     let live_title = if total_live == 0 {
         "Following Live".to_string()
     } else {
-        format!("Following Live ({})", total_live)
+        format!("Following Live ({total_live})")
     };
     items.push(Box::new(
         MenuItemBuilder::new(live_title).enabled(false).build(app)?,
@@ -269,7 +272,12 @@ fn render_display_state(app: &AppHandle, state: DisplayState) -> tauri::Result<M
     let quit = MenuItemBuilder::with_id(ids::QUIT, "Quit").build(app)?;
 
     MenuBuilder::new(app)
-        .items(&items.iter().map(|i| i.as_ref()).collect::<Vec<_>>())
+        .items(
+            &items
+                .iter()
+                .map(std::convert::AsRef::as_ref)
+                .collect::<Vec<_>>(),
+        )
         .separator()
         .items(&[&settings, &logout, &quit])
         .build()
