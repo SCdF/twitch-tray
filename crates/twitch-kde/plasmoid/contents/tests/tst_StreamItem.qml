@@ -36,20 +36,20 @@ Item {
         }
 
         function test_user_name_displayed() {
-            var label = findChild(item, "userNameLabel")
-            verify(label, "userNameLabel should exist")
+            var label = findChild(item, "nameLabel")
+            verify(label, "nameLabel should exist")
             compare(label.text, "Streamer One")
         }
 
         function test_game_name_beside_user_name() {
-            var label = findChild(item, "gameNameLabel")
-            verify(label, "gameNameLabel should exist")
+            var label = findChild(item, "subtitleLabel")
+            verify(label, "subtitleLabel should exist")
             compare(label.text, "\u00B7 Overwatch 2")
         }
 
         function test_title_displayed_below_name() {
-            var clip = findChild(item, "titleClip")
-            verify(clip, "titleClip should exist")
+            var clip = findChild(item, "titleLabel")
+            verify(clip, "titleLabel should exist")
             compare(clip.text, "Competitive ranked grind")
             verify(clip.visible, "title should be visible when set")
         }
@@ -57,20 +57,20 @@ Item {
         function test_title_hidden_when_empty() {
             item.title = ""
             wait(10)
-            var clip = findChild(item, "titleClip")
-            verify(clip, "titleClip should exist")
+            var clip = findChild(item, "titleLabel")
+            verify(clip, "titleLabel should exist")
             verify(!clip.visible, "title should be hidden when empty")
         }
 
         function test_viewer_count_displayed() {
-            var label = findChild(item, "viewerCountLabel")
-            verify(label, "viewerCountLabel should exist")
+            var label = findChild(item, "topRightLabel")
+            verify(label, "topRightLabel should exist")
             compare(label.text, "1.2k")
         }
 
         function test_duration_displayed() {
-            var label = findChild(item, "durationLabel")
-            verify(label, "durationLabel should exist")
+            var label = findChild(item, "bottomRightLabel")
+            verify(label, "bottomRightLabel should exist")
             compare(label.text, "2h 15m")
         }
 

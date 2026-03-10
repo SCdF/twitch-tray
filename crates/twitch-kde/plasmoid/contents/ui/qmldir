@@ -4,6 +4,7 @@ SectionHeader 1.0 SectionHeader.qml
 ExpandableSection 1.0 ExpandableSection.qml
 StreamerAvatar 1.0 StreamerAvatar.qml
 ScrollingLabel 1.0 ScrollingLabel.qml
+StreamRow 1.0 StreamRow.qml
 StreamItem 1.0 StreamItem.qml
 ScheduleItem 1.0 ScheduleItem.qml
 CategoryItem 1.0 CategoryItem.qml

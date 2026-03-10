@@ -55,6 +55,7 @@ pub struct CategoryStreamDto {
     pub profile_image_url: String,
     pub viewer_count_formatted: String,
     pub duration_formatted: String,
+    pub is_favourite: bool,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]

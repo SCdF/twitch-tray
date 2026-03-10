@@ -165,6 +165,8 @@ pub fn compute_plasmoid_state(
                 let streams_dto: Vec<CategoryStreamDto> = sorted
                     .into_iter()
                     .map(|s| {
+                        let is_favourite = get_importance(&s.user_login, settings)
+                            == StreamerImportance::Favourite;
                         let viewer_count_formatted = s.format_viewer_count();
                         let duration_formatted = s.format_duration();
                         CategoryStreamDto {
@@ -174,6 +176,7 @@ pub fn compute_plasmoid_state(
                             profile_image_url: s.profile_image_url,
                             viewer_count_formatted,
                             duration_formatted,
+                            is_favourite,
                         }
                     })
                     .collect();
@@ -625,6 +628,30 @@ mod tests {
         let state = compute_plasmoid_state(raw, None, Utc::now());
 
         assert_eq!(state.categories[0].box_art_url, "");
+    }
+
+    #[test]
+    fn category_stream_favourite_has_is_favourite_true() {
+        let cat_id = "cat1".to_string();
+        let stream = make_stream("1", "favuser");
+
+        let mut raw = raw(vec![], vec![]);
+        raw.followed_categories = vec![FollowedCategory {
+            id: cat_id.clone(),
+            name: "Gaming".to_string(),
+        }];
+        raw.category_streams = HashMap::from([(cat_id, vec![stream])]);
+        raw.config.streamer_settings.insert(
+            "favuser".to_string(),
+            StreamerSettings {
+                display_name: "favuser".to_string(),
+                importance: StreamerImportance::Favourite,
+            },
+        );
+
+        let state = compute_plasmoid_state(raw, None, Utc::now());
+
+        assert!(state.categories[0].streams[0].is_favourite);
     }
 
     // =========================================================

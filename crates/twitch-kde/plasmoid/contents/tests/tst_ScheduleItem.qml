@@ -38,28 +38,28 @@ Item {
         }
 
         function test_broadcaster_name_displayed() {
-            var label = findChild(item, "broadcasterNameLabel")
-            verify(label, "broadcasterNameLabel should exist")
+            var label = findChild(item, "nameLabel")
+            verify(label, "nameLabel should exist")
             compare(label.text, "Streamer One")
         }
 
         function test_start_time_displayed() {
-            var label = findChild(item, "startTimeLabel")
-            verify(label, "startTimeLabel should exist")
+            var label = findChild(item, "topRightLabel")
+            verify(label, "topRightLabel should exist")
             compare(label.text, "Today 8:00 PM")
         }
 
         function test_category_displayed() {
-            var label = findChild(item, "categoryLabel")
-            verify(label, "categoryLabel should exist")
+            var label = findChild(item, "subtitleLabel")
+            verify(label, "subtitleLabel should exist")
             compare(label.text, "\u00B7 Just Chatting")
         }
 
         function test_category_hidden_when_empty() {
             item.category = ""
             wait(10)
-            var label = findChild(item, "categoryLabel")
-            verify(label, "categoryLabel should exist")
+            var label = findChild(item, "subtitleLabel")
+            verify(label, "subtitleLabel should exist")
             compare(label.text, "")
         }
 
@@ -67,15 +67,15 @@ Item {
             var label = findChild(item, "titleLabel")
             verify(label, "titleLabel should exist")
             compare(label.text, "Evening Chill Stream")
-            compare(label.textOpacity, 0.5, "title should be visible when non-empty")
+            verify(label.visible, "title should be visible when non-empty")
         }
 
-        function test_title_transparent_when_empty() {
+        function test_title_hidden_when_empty() {
             item.title = ""
             wait(10)
             var label = findChild(item, "titleLabel")
             verify(label, "titleLabel should exist")
-            compare(label.textOpacity, 0, "title should be transparent when empty")
+            verify(!label.visible, "title should be hidden when empty")
         }
 
         function test_avatar_container_exists() {
@@ -118,17 +118,18 @@ Item {
         function test_inferred_label_visible_when_inferred() {
             item.isInferred = true
             wait(10)
-            var label = findChild(item, "inferredIndicator")
-            verify(label, "inferredIndicator should exist")
+            var label = findChild(item, "bottomRightLabel")
+            verify(label, "bottomRightLabel should exist")
             verify(label.visible, "inferred label should be visible when inferred")
             verify(label.font.italic, "inferred label should be italic")
+            compare(label.text, "(inferred)")
         }
 
         function test_inferred_label_hidden_when_not_inferred() {
             item.isInferred = false
             wait(10)
-            var label = findChild(item, "inferredIndicator")
-            verify(label, "inferredIndicator should exist")
+            var label = findChild(item, "bottomRightLabel")
+            verify(label, "bottomRightLabel should exist")
             verify(!label.visible, "inferred label should be hidden when not inferred")
         }
 

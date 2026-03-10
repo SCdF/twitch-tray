@@ -14,8 +14,8 @@ Item {
         boxArtUrl: ""
         totalViewersFormatted: "45k"
         streams: [
-            { "user_login": "streamer1", "user_name": "Streamer One", "title": "Building a castle", "profile_image_url": "", "viewer_count_formatted": "10k", "duration_formatted": "2h 15m" },
-            { "user_login": "streamer2", "user_name": "Streamer Two", "title": "Survival mode", "profile_image_url": "", "viewer_count_formatted": "5k", "duration_formatted": "45m" }
+            { "user_login": "streamer1", "user_name": "Streamer One", "title": "Building a castle", "profile_image_url": "", "viewer_count_formatted": "10k", "duration_formatted": "2h 15m", "is_favourite": false },
+            { "user_login": "streamer2", "user_name": "Streamer Two", "title": "Survival mode", "profile_image_url": "", "viewer_count_formatted": "5k", "duration_formatted": "45m", "is_favourite": false }
         ]
     }
 
