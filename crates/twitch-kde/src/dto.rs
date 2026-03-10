@@ -44,7 +44,6 @@ pub struct CategorySectionDto {
     pub name: String,
     pub box_art_url: String,
     pub total_viewers_formatted: String,
-    pub stream_count_formatted: String,
     pub streams: Vec<CategoryStreamDto>,
 }
 
@@ -52,7 +51,10 @@ pub struct CategorySectionDto {
 pub struct CategoryStreamDto {
     pub user_login: String,
     pub user_name: String,
+    pub title: String,
+    pub profile_image_url: String,
     pub viewer_count_formatted: String,
+    pub duration_formatted: String,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]

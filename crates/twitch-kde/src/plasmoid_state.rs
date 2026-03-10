@@ -166,15 +166,18 @@ pub fn compute_plasmoid_state(
                     .into_iter()
                     .map(|s| {
                         let viewer_count_formatted = s.format_viewer_count();
+                        let duration_formatted = s.format_duration();
                         CategoryStreamDto {
                             user_login: s.user_login,
                             user_name: s.user_name,
+                            title: s.title,
+                            profile_image_url: s.profile_image_url,
                             viewer_count_formatted,
+                            duration_formatted,
                         }
                     })
                     .collect();
 
-                let stream_count = streams_dto.len();
                 let box_art_url = raw
                     .box_art_urls
                     .get(&category.id)
@@ -185,7 +188,6 @@ pub fn compute_plasmoid_state(
                     name: category.name.clone(),
                     box_art_url,
                     total_viewers_formatted: format_viewer_count(total_viewers),
-                    stream_count_formatted: format!("{stream_count} live"),
                     streams: streams_dto,
                 });
             }
@@ -584,7 +586,6 @@ mod tests {
         // all 15 streams present — no overflow for categories
         assert_eq!(state.categories[0].streams.len(), 15);
         assert_eq!(state.categories[0].id, "cat1");
-        assert_eq!(state.categories[0].stream_count_formatted, "15 live");
     }
 
     #[test]

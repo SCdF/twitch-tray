@@ -186,9 +186,8 @@ Item {
                         "name": "Minecraft",
                         "box_art_url": "https://example.com/mc-144x192.jpg",
                         "total_viewers_formatted": "45k",
-                        "stream_count_formatted": "12 live",
                         "streams": [
-                            { "user_login": "s1", "user_name": "S1", "viewer_count_formatted": "10k" }
+                            { "user_login": "s1", "user_name": "S1", "title": "Building", "profile_image_url": "", "viewer_count_formatted": "10k", "duration_formatted": "1h 30m" }
                         ]
                     }
                 ],

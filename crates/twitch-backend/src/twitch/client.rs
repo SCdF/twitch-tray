@@ -255,11 +255,19 @@ impl<H: HttpClient> TwitchClient<H> {
         Ok(response.data)
     }
 
-    /// Gets top streams for a specific category/game
+    /// Gets top streams for a specific category/game, optionally filtered by language.
     ///
+    /// `language` is an ISO 639-1 two-letter code (e.g. "en", "es").
     /// Returns `ApiError::Unauthorized` if the token has expired.
-    pub async fn get_streams_by_category(&self, game_id: &str) -> Result<Vec<Stream>, ApiError> {
-        let endpoint = format!("/streams?game_id={game_id}&first=10");
+    pub async fn get_streams_by_category(
+        &self,
+        game_id: &str,
+        language: Option<&str>,
+    ) -> Result<Vec<Stream>, ApiError> {
+        let endpoint = match language {
+            Some(lang) => format!("/streams?game_id={game_id}&first=10&language={lang}"),
+            None => format!("/streams?game_id={game_id}&first=10"),
+        };
         let response: StreamsResponse = self.get(&endpoint).await?;
         Ok(response.data)
     }
@@ -545,11 +553,35 @@ mod tests {
         let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
         client.set_access_token("test_token".to_string()).await;
 
-        let result = client.get_streams_by_category("509658").await.unwrap();
+        let result = client
+            .get_streams_by_category("509658", None)
+            .await
+            .unwrap();
 
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].user_name, "StreamerOne");
         assert_eq!(result[1].user_name, "StreamerTwo");
+    }
+
+    #[tokio::test]
+    async fn get_streams_by_category_with_language_filter() {
+        let streams = vec![make_stream("1", "StreamerOne")];
+
+        let mock = MockHttpClient::new().on_get_json(
+            "https://api.twitch.tv/helix/streams?game_id=509658&first=10&language=en",
+            &make_streams_response(streams, None),
+        );
+
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+        client.set_access_token("test_token".to_string()).await;
+
+        let result = client
+            .get_streams_by_category("509658", Some("en"))
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].user_name, "StreamerOne");
     }
 
     #[tokio::test]
@@ -562,7 +594,10 @@ mod tests {
         let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
         client.set_access_token("test_token".to_string()).await;
 
-        let result = client.get_streams_by_category("999999").await.unwrap();
+        let result = client
+            .get_streams_by_category("999999", None)
+            .await
+            .unwrap();
         assert!(result.is_empty());
     }
 }

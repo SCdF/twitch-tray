@@ -17,6 +17,21 @@ pub enum ApiError {
     Other(#[from] anyhow::Error),
 }
 
+/// Returns the system locale as an ISO 639-1 two-letter language code (e.g. "en", "es").
+///
+/// Uses the `sys-locale` crate to detect the OS locale, then extracts the language part.
+/// Falls back to `None` if the locale cannot be determined.
+pub fn system_language() -> Option<String> {
+    let locale = sys_locale::get_locale()?;
+    // Locale is typically "en-US", "es-ES", "fr", etc.
+    let lang = locale.split(['-', '_']).next()?;
+    if lang.len() == 2 {
+        Some(lang.to_lowercase())
+    } else {
+        None
+    }
+}
+
 /// Calls `f()` and, on [`ApiError::Unauthorized`], calls `refresh()` once and retries.
 ///
 /// Any other error is returned immediately without retrying.

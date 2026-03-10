@@ -612,10 +612,13 @@ impl Backend {
             return;
         }
 
+        let language = crate::twitch::system_language();
+        let lang_ref = language.as_deref();
+
         for category in &categories {
             let cat_id = category.id.clone();
-            let streams = match self
-                .with_retry(|| self.client.get_streams_by_category(&cat_id))
+            let mut streams = match self
+                .with_retry(|| self.client.get_streams_by_category(&cat_id, lang_ref))
                 .await
             {
                 Ok(streams) => streams,
@@ -628,6 +631,8 @@ impl Backend {
                     continue;
                 }
             };
+
+            self.enrich_with_profile_images(&mut streams).await;
 
             self.state
                 .set_category_streams(category.id.clone(), streams)

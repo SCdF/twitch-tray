@@ -9,7 +9,6 @@ ColumnLayout {
     property string name: ""
     property string boxArtUrl: ""
     property string totalViewersFormatted: ""
-    property string streamCountFormatted: ""
     property var streams: []
     property bool expanded: false
 
@@ -71,37 +70,20 @@ ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 0
 
-                RowLayout {
+                Controls.Label {
+                    id: nameLabel
+                    objectName: "nameLabel"
+                    text: root.name
+                    font.bold: true
+                    elide: Text.ElideRight
                     Layout.fillWidth: true
-
-                    Controls.Label {
-                        id: nameLabel
-                        objectName: "nameLabel"
-                        text: root.name
-                        font.bold: true
-                        elide: Text.ElideRight
-                        Layout.fillWidth: true
-                    }
-
-                    Controls.Label {
-                        id: viewerCountLabel
-                        objectName: "viewerCountLabel"
-                        text: root.totalViewersFormatted
-                        opacity: 0.7
-                    }
                 }
 
-                RowLayout {
-                    Layout.fillWidth: true
-
-                    Item { Layout.fillWidth: true }
-
-                    Controls.Label {
-                        id: streamCountLabel
-                        objectName: "streamCountLabel"
-                        text: root.streamCountFormatted
-                        opacity: 0.5
-                    }
+                Controls.Label {
+                    id: viewerCountLabel
+                    objectName: "viewerCountLabel"
+                    text: root.totalViewersFormatted
+                    opacity: 0.5
                 }
             }
 
@@ -125,21 +107,59 @@ ColumnLayout {
         Repeater {
             model: root.streams
             delegate: Controls.ItemDelegate {
+                id: streamDelegate
                 width: streamList.width
+                hoverEnabled: true
                 onClicked: root.streamClicked(modelData.user_login)
 
                 contentItem: RowLayout {
-                    spacing: 4
+                    spacing: 8
 
-                    Controls.Label {
-                        text: modelData.user_name
-                        font.bold: true
-                        Layout.fillWidth: true
+                    StreamerAvatar {
+                        profileImageUrl: modelData.profile_image_url || ""
+                        displayName: modelData.user_name
+                        isFavourite: false
                     }
 
-                    Controls.Label {
-                        text: modelData.viewer_count_formatted
-                        opacity: 0.7
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 0
+
+                        RowLayout {
+                            Layout.fillWidth: true
+
+                            Controls.Label {
+                                text: modelData.user_name
+                                font.bold: true
+                                elide: Text.ElideRight
+                            }
+
+                            Item { Layout.fillWidth: true }
+
+                            Controls.Label {
+                                text: modelData.viewer_count_formatted
+                                opacity: 0.7
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: (modelData.title || "") !== "" || (modelData.duration_formatted || "") !== ""
+
+                            ScrollingLabel {
+                                Layout.fillWidth: true
+                                visible: (modelData.title || "") !== ""
+                                text: modelData.title || ""
+                                scrollEnabled: streamDelegate.hovered
+                                fadeColor: root.palette.window
+                            }
+
+                            Controls.Label {
+                                text: modelData.duration_formatted || ""
+                                opacity: 0.5
+                                visible: (modelData.duration_formatted || "") !== ""
+                            }
+                        }
                     }
                 }
             }
