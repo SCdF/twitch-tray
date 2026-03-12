@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{Connection, OptionalExtension};
 
+use crate::hotness_detection::ViewerObservation;
 use crate::twitch::{FollowedChannel, ScheduledStream, Stream};
 
 /// Database for recording stream history, followed channels, and schedules.
@@ -65,7 +66,18 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_scheduled_streams_start
                 ON scheduled_streams(start_time);
             CREATE INDEX IF NOT EXISTS idx_scheduled_streams_broadcaster
-                ON scheduled_streams(broadcaster_id);",
+                ON scheduled_streams(broadcaster_id);
+
+            CREATE TABLE IF NOT EXISTS viewer_observations (
+                broadcaster_id INTEGER NOT NULL,
+                observed_at    INTEGER NOT NULL,
+                stream_age_min INTEGER NOT NULL,
+                viewer_count   INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_vo_broadcaster_age
+                ON viewer_observations(broadcaster_id, stream_age_min);
+            CREATE INDEX IF NOT EXISTS idx_vo_observed_at
+                ON viewer_observations(observed_at);",
         )?;
         // Migrate: add broadcaster_timezone column to followed if missing
         let has_tz_col: bool = conn
@@ -464,6 +476,65 @@ impl Database {
         }
         Ok(result)
     }
+    // === Viewer observations ===
+
+    /// Records viewer count observations for live streams.
+    pub fn record_viewer_observations(
+        &self,
+        observations: &[ViewerObservation],
+    ) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "INSERT INTO viewer_observations (broadcaster_id, observed_at, stream_age_min, viewer_count)
+             VALUES (?1, ?2, ?3, ?4)",
+        )?;
+        for obs in observations {
+            stmt.execute(rusqlite::params![
+                obs.broadcaster_id,
+                obs.observed_at,
+                obs.stream_age_min,
+                obs.viewer_count,
+            ])?;
+        }
+        Ok(())
+    }
+
+    /// Returns viewer observations for a broadcaster within a stream-age window,
+    /// filtered to observations recorded between `since` and `until` (unix timestamps).
+    pub fn get_viewer_observations(
+        &self,
+        broadcaster_id: i64,
+        age_min: i64,
+        age_max: i64,
+        since: i64,
+        until: i64,
+    ) -> anyhow::Result<Vec<ViewerObservation>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT broadcaster_id, observed_at, stream_age_min, viewer_count
+             FROM viewer_observations
+             WHERE broadcaster_id = ?1
+               AND stream_age_min BETWEEN ?2 AND ?3
+               AND observed_at > ?4
+               AND observed_at < ?5",
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![broadcaster_id, age_min, age_max, since, until],
+            |row| {
+                Ok(ViewerObservation {
+                    broadcaster_id: row.get(0)?,
+                    observed_at: row.get(1)?,
+                    stream_age_min: row.get(2)?,
+                    viewer_count: row.get(3)?,
+                })
+            },
+        )?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
 }
 
 /// Generates `count` SQL placeholders: "?,?,?"
@@ -542,7 +613,18 @@ mod tests {
             CREATE INDEX IF NOT EXISTS idx_scheduled_streams_start
                 ON scheduled_streams(start_time);
             CREATE INDEX IF NOT EXISTS idx_scheduled_streams_broadcaster
-                ON scheduled_streams(broadcaster_id);",
+                ON scheduled_streams(broadcaster_id);
+
+            CREATE TABLE IF NOT EXISTS viewer_observations (
+                broadcaster_id INTEGER NOT NULL,
+                observed_at    INTEGER NOT NULL,
+                stream_age_min INTEGER NOT NULL,
+                viewer_count   INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_vo_broadcaster_age
+                ON viewer_observations(broadcaster_id, stream_age_min);
+            CREATE INDEX IF NOT EXISTS idx_vo_observed_at
+                ON viewer_observations(observed_at);",
         )
         .unwrap();
         Database {
@@ -982,5 +1064,145 @@ mod tests {
 
         assert!(!old_path.exists());
         assert!(new_path.exists());
+    }
+
+    // === Viewer observation tests ===
+
+    #[test]
+    fn observation_insert_and_query_by_age_window() {
+        let db = in_memory_db();
+        let observations = vec![
+            ViewerObservation {
+                broadcaster_id: 100,
+                observed_at: 1_700_000_000,
+                stream_age_min: 5,
+                viewer_count: 200,
+            },
+            ViewerObservation {
+                broadcaster_id: 100,
+                observed_at: 1_700_000_000,
+                stream_age_min: 15,
+                viewer_count: 500,
+            },
+            ViewerObservation {
+                broadcaster_id: 100,
+                observed_at: 1_700_000_000,
+                stream_age_min: 30,
+                viewer_count: 1000,
+            },
+            ViewerObservation {
+                broadcaster_id: 100,
+                observed_at: 1_700_000_000,
+                stream_age_min: 60,
+                viewer_count: 2000,
+            },
+        ];
+        db.record_viewer_observations(&observations).unwrap();
+
+        // Query window 10-20 — should only return the age=15 observation
+        let results = db
+            .get_viewer_observations(100, 10, 20, 0, i64::MAX)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].stream_age_min, 15);
+        assert_eq!(results[0].viewer_count, 500);
+    }
+
+    #[test]
+    fn observation_query_respects_time_cutoff() {
+        let db = in_memory_db();
+        let old_ts = 1_700_000_000;
+        let recent_ts = 1_703_000_000;
+        let cutoff = 1_702_000_000;
+        let observations = vec![
+            ViewerObservation {
+                broadcaster_id: 100,
+                observed_at: old_ts,
+                stream_age_min: 10,
+                viewer_count: 500,
+            },
+            ViewerObservation {
+                broadcaster_id: 100,
+                observed_at: recent_ts,
+                stream_age_min: 10,
+                viewer_count: 800,
+            },
+        ];
+        db.record_viewer_observations(&observations).unwrap();
+
+        let results = db
+            .get_viewer_observations(100, 0, 60, cutoff, i64::MAX)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].viewer_count, 800);
+    }
+
+    #[test]
+    fn observation_query_returns_all_fields() {
+        let db = in_memory_db();
+        let obs = ViewerObservation {
+            broadcaster_id: 42,
+            observed_at: 1_700_000_123,
+            stream_age_min: 25,
+            viewer_count: 1234,
+        };
+        db.record_viewer_observations(&[obs]).unwrap();
+
+        let results = db.get_viewer_observations(42, 20, 30, 0, i64::MAX).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].broadcaster_id, 42);
+        assert_eq!(results[0].observed_at, 1_700_000_123);
+        assert_eq!(results[0].stream_age_min, 25);
+        assert_eq!(results[0].viewer_count, 1234);
+    }
+
+    #[test]
+    fn observation_query_excludes_after_until() {
+        let db = in_memory_db();
+        let observations = vec![
+            ViewerObservation {
+                broadcaster_id: 100,
+                observed_at: 1_700_000_000,
+                stream_age_min: 10,
+                viewer_count: 500,
+            },
+            ViewerObservation {
+                broadcaster_id: 100,
+                observed_at: 1_700_001_000,
+                stream_age_min: 10,
+                viewer_count: 800,
+            },
+        ];
+        db.record_viewer_observations(&observations).unwrap();
+
+        // until excludes the second observation
+        let results = db
+            .get_viewer_observations(100, 0, 60, 0, 1_700_000_500)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].viewer_count, 500);
+    }
+
+    #[test]
+    fn observation_indexes_exist() {
+        let db = in_memory_db();
+        let conn = db.conn.lock().unwrap();
+        for idx_name in ["idx_vo_broadcaster_age", "idx_vo_observed_at"] {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND name='{idx_name}'"
+                ))
+                .unwrap();
+            assert!(stmt.exists([]).unwrap(), "Index {idx_name} should exist");
+        }
+    }
+
+    #[test]
+    fn observation_empty_query() {
+        let db = in_memory_db();
+        let results = db
+            .get_viewer_observations(999, 0, 100, 0, i64::MAX)
+            .unwrap();
+        assert!(results.is_empty());
     }
 }

@@ -16,6 +16,7 @@ Item {
         viewerCountFormatted: "1.2k"
         durationFormatted: "2h 15m"
         isFavourite: false
+        isHot: false
     }
 
     SignalSpy {
@@ -30,6 +31,7 @@ Item {
 
         function init() {
             item.isFavourite = false
+            item.isHot = false
             item.profileImageUrl = ""
             item.title = "Competitive ranked grind"
             clickSpy.clear()

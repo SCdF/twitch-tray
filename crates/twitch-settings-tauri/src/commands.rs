@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use twitch_backend::app_services::{AppServices, DebugStreamEntry};
+use twitch_backend::app_services::{AppServices, DebugHotnessEntry, DebugStreamEntry};
 use twitch_backend::config::{Config, FollowedCategory};
 use twitch_backend::twitch::{Category, FollowedChannel};
 
@@ -54,6 +54,14 @@ pub async fn get_followed_channels_list(
 #[tauri::command]
 pub fn is_debug_build() -> bool {
     cfg!(debug_assertions)
+}
+
+/// Returns hotness debug data for all currently live streams.
+#[tauri::command]
+pub async fn get_debug_hotness_data(
+    app: State<'_, Arc<dyn AppServices>>,
+) -> Result<Vec<DebugHotnessEntry>, String> {
+    Ok(app.get_debug_hotness_data().await)
 }
 
 /// Returns raw history and inferred schedule entries for the given Unix timestamp window.
@@ -205,5 +213,40 @@ mod tests {
         services.get_debug_schedule_data(100, 200).await;
         services.get_debug_schedule_data(200, 300).await;
         assert_eq!(services.debug_call_count(), 2);
+    }
+
+    // =========================================================
+    // get_debug_hotness_data
+    // =========================================================
+
+    #[tokio::test]
+    async fn debug_hotness_data_delegates_to_services() {
+        use twitch_backend::app_services::DebugHotnessEntry;
+
+        let services = MockAppServices::new();
+        let entry = DebugHotnessEntry {
+            broadcaster_name: "HotStreamer".to_string(),
+            broadcaster_login: "hotstreamer".to_string(),
+            current_viewers: 5000,
+            mean: Some(2000.0),
+            stddev: Some(500.0),
+            z_score: Some(6.0),
+            observation_count: 20,
+            is_hot: true,
+        };
+        services.set_hotness_entries(vec![entry]);
+        let result = services.get_debug_hotness_data().await;
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].broadcaster_login, "hotstreamer");
+        assert!(result[0].is_hot);
+        assert_eq!(result[0].current_viewers, 5000);
+    }
+
+    #[tokio::test]
+    async fn debug_hotness_data_increments_call_count() {
+        let services = MockAppServices::new();
+        services.get_debug_hotness_data().await;
+        services.get_debug_hotness_data().await;
+        assert_eq!(services.hotness_call_count(), 2);
     }
 }

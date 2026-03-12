@@ -125,6 +125,7 @@ mod tests {
             StreamerSettings {
                 display_name: user_login.to_string(),
                 importance,
+                hotness_z_threshold_override: None,
             },
         );
         map
@@ -278,6 +279,7 @@ mod tests {
             StreamerSettings {
                 display_name: "silentone".to_string(),
                 importance: StreamerImportance::Silent,
+                hotness_z_threshold_override: None,
             },
         );
         let decision = filter_notifications(&event, None, now, 600, true, &settings);

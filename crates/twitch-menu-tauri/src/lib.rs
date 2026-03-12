@@ -34,6 +34,7 @@ pub fn start_listener(
                 schedule_lookahead_hours: raw.config.schedule_lookahead_hours,
                 live_limit: raw.config.live_menu_limit,
                 schedule_limit: raw.config.schedule_menu_limit,
+                hot_stream_ids: raw.hot_stream_ids.clone(),
             };
             let state = if raw.is_authenticated {
                 compute_display_state(

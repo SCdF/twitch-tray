@@ -7,6 +7,7 @@ pub mod config;
 pub mod db;
 pub mod events;
 pub mod handle;
+pub mod hotness_detection;
 pub mod notification_dispatcher;
 pub mod notification_filter;
 pub mod notify;

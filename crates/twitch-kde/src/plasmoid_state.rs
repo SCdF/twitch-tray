@@ -38,8 +38,13 @@ fn map_login_state(login_progress: Option<&LoginProgress>) -> LoginStateDto {
     }
 }
 
-fn live_stream_to_dto(s: Stream, settings: &HashMap<String, StreamerSettings>) -> LiveStreamDto {
+fn live_stream_to_dto(
+    s: Stream,
+    settings: &HashMap<String, StreamerSettings>,
+    hot_stream_ids: &HashSet<String>,
+) -> LiveStreamDto {
     let is_favourite = get_importance(&s.user_login, settings) == StreamerImportance::Favourite;
+    let is_hot = hot_stream_ids.contains(&s.user_id);
     let viewer_count_formatted = s.format_viewer_count();
     let duration_formatted = s.format_duration();
     LiveStreamDto {
@@ -51,6 +56,7 @@ fn live_stream_to_dto(s: Stream, settings: &HashMap<String, StreamerSettings>) -
         viewer_count_formatted,
         duration_formatted,
         is_favourite,
+        is_hot,
     }
 }
 
@@ -144,11 +150,11 @@ pub fn compute_plasmoid_state(
     let live = LiveSectionDto {
         visible: live_visible_raw
             .into_iter()
-            .map(|s| live_stream_to_dto(s, settings))
+            .map(|s| live_stream_to_dto(s, settings, &raw.hot_stream_ids))
             .collect(),
         overflow: live_overflow_raw
             .into_iter()
-            .map(|s| live_stream_to_dto(s, settings))
+            .map(|s| live_stream_to_dto(s, settings, &raw.hot_stream_ids))
             .collect(),
     };
 
@@ -304,6 +310,7 @@ mod tests {
             config: Config::default(),
             profile_image_urls: HashMap::new(),
             box_art_urls: HashMap::new(),
+            hot_stream_ids: HashSet::new(),
         }
     }
 
@@ -319,6 +326,7 @@ mod tests {
             StreamerSettings {
                 display_name: user_login.to_string(),
                 importance,
+                hotness_z_threshold_override: None,
             },
         );
         RawDisplayData {
@@ -332,6 +340,7 @@ mod tests {
             config,
             profile_image_urls: HashMap::new(),
             box_art_urls: HashMap::new(),
+            hot_stream_ids: HashSet::new(),
         }
     }
 
@@ -429,6 +438,25 @@ mod tests {
         let state = compute_plasmoid_state(raw, None, Utc::now());
 
         assert!(state.live.visible[0].is_favourite);
+    }
+
+    #[test]
+    fn hot_stream_has_is_hot_true() {
+        let mut s = make_stream("1", "hotuser");
+        s.user_id = "uid_hot".to_string();
+        let mut raw = raw(vec![s], vec![]);
+        raw.hot_stream_ids = HashSet::from(["uid_hot".to_string()]);
+        let state = compute_plasmoid_state(raw, None, Utc::now());
+
+        assert!(state.live.visible[0].is_hot);
+    }
+
+    #[test]
+    fn non_hot_stream_has_is_hot_false() {
+        let s = make_stream("1", "cooluser");
+        let state = compute_plasmoid_state(raw(vec![s], vec![]), None, Utc::now());
+
+        assert!(!state.live.visible[0].is_hot);
     }
 
     // =========================================================
@@ -646,6 +674,7 @@ mod tests {
             StreamerSettings {
                 display_name: "favuser".to_string(),
                 importance: StreamerImportance::Favourite,
+                hotness_z_threshold_override: None,
             },
         );
 

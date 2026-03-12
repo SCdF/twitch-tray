@@ -14,6 +14,7 @@ Controls.ItemDelegate {
     property string bottomRightText: ""
     property bool bottomRightItalic: false
     property bool isFavourite: false
+    property bool isHot: false
 
     signal clicked_(string login)
 
@@ -29,6 +30,7 @@ Controls.ItemDelegate {
             profileImageUrl: root.profileImageUrl
             displayName: root.displayName
             isFavourite: root.isFavourite
+            isHot: root.isHot
         }
 
         ColumnLayout {

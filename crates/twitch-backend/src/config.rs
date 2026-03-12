@@ -19,6 +19,9 @@ pub const DEFAULT_SCHEDULE_LOOKAHEAD_HOURS: u64 = 6;
 pub const DEFAULT_SCHEDULE_BEFORE_NOW_MIN: u64 = 30;
 pub const DEFAULT_LIVE_MENU_LIMIT: usize = 10;
 pub const DEFAULT_SCHEDULE_MENU_LIMIT: usize = 5;
+pub const DEFAULT_HOTNESS_Z_THRESHOLD: f64 = 2.0;
+pub const DEFAULT_HOTNESS_MIN_OBSERVATIONS: usize = 5;
+pub const DEFAULT_NOTIFY_ON_HOT: bool = true;
 
 /// Importance level for a streamer, affecting display and notifications
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -37,6 +40,8 @@ pub struct StreamerSettings {
     pub display_name: String,
     #[serde(default)]
     pub importance: StreamerImportance,
+    #[serde(default)]
+    pub hotness_z_threshold_override: Option<f64>,
 }
 
 /// A followed category for category stream tracking
@@ -82,6 +87,17 @@ pub struct Config {
     /// Maximum scheduled streams shown directly in the main menu before the overflow submenu.
     #[serde(default = "default_schedule_menu_limit")]
     pub schedule_menu_limit: usize,
+    /// Z-score threshold for detecting "hot" streams (default: 2.0).
+    /// A stream is hot when its current viewers exceed the historical mean by this many
+    /// standard deviations.
+    #[serde(default = "default_hotness_z_threshold")]
+    pub hotness_z_threshold: f64,
+    /// Minimum historical observations needed before hotness detection activates (default: 5)
+    #[serde(default = "default_hotness_min_observations")]
+    pub hotness_min_observations: usize,
+    /// Send desktop notifications when a stream is detected as hot (default: true)
+    #[serde(default = "default_notify_on_hot")]
+    pub notify_on_hot: bool,
     /// Categories to follow for category-based stream listings
     #[serde(default)]
     pub followed_categories: Vec<FollowedCategory>,
@@ -134,6 +150,18 @@ fn default_schedule_menu_limit() -> usize {
     DEFAULT_SCHEDULE_MENU_LIMIT
 }
 
+fn default_hotness_z_threshold() -> f64 {
+    DEFAULT_HOTNESS_Z_THRESHOLD
+}
+
+fn default_hotness_min_observations() -> usize {
+    DEFAULT_HOTNESS_MIN_OBSERVATIONS
+}
+
+fn default_notify_on_hot() -> bool {
+    DEFAULT_NOTIFY_ON_HOT
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -148,6 +176,9 @@ impl Default for Config {
             schedule_before_now_min: DEFAULT_SCHEDULE_BEFORE_NOW_MIN,
             live_menu_limit: DEFAULT_LIVE_MENU_LIMIT,
             schedule_menu_limit: DEFAULT_SCHEDULE_MENU_LIMIT,
+            hotness_z_threshold: DEFAULT_HOTNESS_Z_THRESHOLD,
+            hotness_min_observations: DEFAULT_HOTNESS_MIN_OBSERVATIONS,
+            notify_on_hot: DEFAULT_NOTIFY_ON_HOT,
             followed_categories: Vec::new(),
             streamer_settings: HashMap::new(),
         }
@@ -399,6 +430,7 @@ mod tests {
             StreamerSettings {
                 display_name: "TestStreamer".to_string(),
                 importance: StreamerImportance::Favourite,
+                hotness_z_threshold_override: None,
             },
         );
 
@@ -414,6 +446,9 @@ mod tests {
             schedule_before_now_min: 20,
             live_menu_limit: 7,
             schedule_menu_limit: 3,
+            hotness_z_threshold: 3.0,
+            hotness_min_observations: 10,
+            notify_on_hot: false,
             followed_categories: vec![FollowedCategory {
                 id: "12345".to_string(),
                 name: "Just Chatting".to_string(),
@@ -458,6 +493,14 @@ mod tests {
             deserialized.schedule_menu_limit,
             original.schedule_menu_limit
         );
+        assert!(
+            (deserialized.hotness_z_threshold - original.hotness_z_threshold).abs() < f64::EPSILON
+        );
+        assert_eq!(
+            deserialized.hotness_min_observations,
+            original.hotness_min_observations
+        );
+        assert_eq!(deserialized.notify_on_hot, original.notify_on_hot);
     }
 
     #[test]
@@ -530,6 +573,78 @@ mod tests {
             config.streamer_settings.get("ninja").unwrap().importance,
             StreamerImportance::Normal
         );
+    }
+
+    // === Hotness config tests ===
+
+    #[test]
+    fn default_hotness_z_threshold_is_2() {
+        let config = Config::default();
+        assert!((config.hotness_z_threshold - DEFAULT_HOTNESS_Z_THRESHOLD).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn default_hotness_min_observations_is_5() {
+        let config = Config::default();
+        assert_eq!(
+            config.hotness_min_observations,
+            DEFAULT_HOTNESS_MIN_OBSERVATIONS
+        );
+    }
+
+    #[test]
+    fn default_notify_on_hot_is_true() {
+        let config = Config::default();
+        assert_eq!(config.notify_on_hot, DEFAULT_NOTIFY_ON_HOT);
+    }
+
+    #[test]
+    fn deserialize_empty_uses_hotness_defaults() {
+        let json = "{}";
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert!((config.hotness_z_threshold - DEFAULT_HOTNESS_Z_THRESHOLD).abs() < f64::EPSILON);
+        assert_eq!(
+            config.hotness_min_observations,
+            DEFAULT_HOTNESS_MIN_OBSERVATIONS
+        );
+        assert_eq!(config.notify_on_hot, DEFAULT_NOTIFY_ON_HOT);
+    }
+
+    #[test]
+    fn deserialize_with_hotness_settings() {
+        let json = r#"{
+            "hotness_z_threshold": 3.5,
+            "hotness_min_observations": 10,
+            "notify_on_hot": false
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert!((config.hotness_z_threshold - 3.5).abs() < f64::EPSILON);
+        assert_eq!(config.hotness_min_observations, 10);
+        assert!(!config.notify_on_hot);
+    }
+
+    #[test]
+    fn streamer_hotness_threshold_override_deserialized() {
+        let json = r#"{
+            "streamer_settings": {
+                "ninja": {"display_name": "Ninja", "hotness_z_threshold_override": 3.0}
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        let settings = config.streamer_settings.get("ninja").unwrap();
+        assert_eq!(settings.hotness_z_threshold_override, Some(3.0));
+    }
+
+    #[test]
+    fn streamer_hotness_threshold_override_defaults_to_none() {
+        let json = r#"{
+            "streamer_settings": {
+                "ninja": {"display_name": "Ninja"}
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        let settings = config.streamer_settings.get("ninja").unwrap();
+        assert_eq!(settings.hotness_z_threshold_override, None);
     }
 
     #[test]

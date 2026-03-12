@@ -83,6 +83,7 @@ Controls.ScrollView {
                     viewerCountFormatted: modelData.viewer_count_formatted
                     durationFormatted: modelData.duration_formatted
                     isFavourite: modelData.is_favourite
+                    isHot: modelData.is_hot
                     onStreamClicked: (login) => scrollView.openStream(login)
                 }
             }
@@ -107,6 +108,7 @@ Controls.ScrollView {
                         viewerCountFormatted: modelData.viewer_count_formatted
                         durationFormatted: modelData.duration_formatted
                         isFavourite: modelData.is_favourite
+                        isHot: modelData.is_hot
                         onStreamClicked: (login) => scrollView.openStream(login)
                     }
                 }

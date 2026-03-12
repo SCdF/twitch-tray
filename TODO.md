@@ -8,15 +8,20 @@ This is the only file a human has edited.
 - free() corrupted unsorted chunks
 - version when starting and tag version (used for creating builds in CI) are different. What is the idiomatic rust way of solving this? I want to set the version once. We can create a CI task for releasing if that's appropriate
 
-- broadcaster_name vs broadcaster_login, what is this? Why are there two? Surely we only need one.
+Avatars and network:
+- scheduled stream avatars are blank if they couldn't load the image, not the fallback ("C" for cohh)
+- if there are network issues images don't load, and won't re-load until some kind of refresh is forced when the network is working. Examples: live avatars were missing, came back after 60sec when the live counts were updated; scheduled stream avatars were missing, forced them to show by changing how many display before being punted to the sub menu. 
+
 
 
 ## TODO:
 
 - add a streamer setting to hide their schedule, and this should filter at the menu level, hiding scheuled and inferred streams
+  eg to hide MANvsGAME's schedules.
 
 - ask it about the security of the user's credential. How is it stored, can we take another crack at storing it in the keychain?
 - get a better tray icon, this one looks too large comparatively
+  look at it again? I'm not that sure this is true, I might be used to it now.
 - better packaging, installed "properly" (arch aur?), starts at startup etc
 - cron to periodically delete data older than N months from the database
 - refactor DB usage so it handles logout / login. Maybe name the DB the logged in user's id?
@@ -69,3 +74,5 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 - make sure we are detecting wake ups and instantly refreshing if we've been asleep. This should be magic if we schedule our refreshes on a timer?
 - consider a schdeuled stream live if the streamer is live within 60min of the schedule time
 - add general setting for how many followed and how many scheduled to show in main dropdown
+- broadcaster_name vs broadcaster_login, what is this? Why are there two? Surely we only need one.
+  ANSWER: login is the ascii name, name could have eg chinese characters in it

@@ -17,6 +17,7 @@ Item {
         bottomRightText: "2h 15m"
         bottomRightItalic: false
         isFavourite: false
+        isHot: false
     }
 
     SignalSpy {
@@ -39,6 +40,7 @@ Item {
             row.bottomRightText = "2h 15m"
             row.bottomRightItalic = false
             row.isFavourite = false
+            row.isHot = false
             clickSpy.clear()
         }
 
@@ -131,6 +133,16 @@ Item {
             mouseClick(row)
             compare(clickSpy.count, 1)
             compare(clickSpy.signalArguments[0][0], "testuser")
+        }
+
+        function test_hot_border_on_avatar() {
+            row.isHot = true
+            wait(10)
+            var avatar = findChild(row, "avatarContainer")
+            compare(avatar.border.width, 2, "hot should have 2px border")
+            var ring = findChild(row, "hotRing")
+            verify(ring, "hotRing should exist")
+            verify(ring.visible, "hotRing should be visible when hot")
         }
 
         function test_second_row_visible_when_only_bottom_right_set() {

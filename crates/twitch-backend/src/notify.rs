@@ -6,6 +6,7 @@
 use chrono::{DateTime, Duration, Utc};
 use tokio::sync::mpsc;
 
+use crate::hotness_detection::HotnessInfo;
 use crate::twitch::Stream;
 
 const APP_NAME: &str = "Twitch Tray";
@@ -53,6 +54,9 @@ pub trait Notifier: Send + Sync {
 
     /// Sends a notification when a streamer changes category
     fn category_changed(&self, stream: &Stream, old_category: &str) -> anyhow::Result<()>;
+
+    /// Sends a notification when a stream is detected as "hot"
+    fn stream_hot(&self, stream: &Stream, info: &HotnessInfo) -> anyhow::Result<()>;
 
     /// Sends an error notification
     fn error(&self, message: &str) -> anyhow::Result<()>;
@@ -206,6 +210,8 @@ mod categories {
     pub const STREAM_LIVE: &str = "presence.online";
     /// Category for "category changed" notifications
     pub const CATEGORY_CHANGE: &str = "category.changed";
+    /// Category for "stream is hot" notifications
+    pub const STREAM_HOT: &str = "presence.hot";
 }
 
 impl DesktopNotifier {
@@ -285,6 +291,25 @@ impl Notifier for DesktopNotifier {
         )
     }
 
+    fn stream_hot(&self, stream: &Stream, info: &HotnessInfo) -> anyhow::Result<()> {
+        let title = format!(
+            "\u{1f525}\u{1f525}\u{1f525} ({:.1}\u{03c3}) {} on {} IS HOT",
+            info.z_score, stream.user_name, stream.game_name,
+        );
+        let message = truncate(&stream.title, 80);
+
+        let url = stream.channel_url();
+        let settings = self.make_settings_info(stream);
+        self.send_notification(
+            &title,
+            &message,
+            Some(&url),
+            Some(categories::STREAM_HOT),
+            None,
+            settings,
+        )
+    }
+
     fn error(&self, message: &str) -> anyhow::Result<()> {
         self.send_notification(APP_NAME, message, None, None, None, None)
     }
@@ -324,6 +349,7 @@ pub mod mock {
         StreamLive,
         StreamReminder,
         CategoryChange,
+        StreamHot,
         Error,
     }
 
@@ -419,6 +445,25 @@ pub mod mock {
                 .unwrap()
                 .push(RecordedNotification {
                     notification_type: NotificationType::CategoryChange,
+                    title,
+                    message,
+                });
+
+            Ok(())
+        }
+
+        fn stream_hot(&self, stream: &Stream, info: &HotnessInfo) -> anyhow::Result<()> {
+            let title = format!(
+                "\u{1f525}\u{1f525}\u{1f525} ({:.1}\u{03c3}) {} on {} IS HOT",
+                info.z_score, stream.user_name, stream.game_name,
+            );
+            let message = stream.title.clone();
+
+            self.notifications
+                .write()
+                .unwrap()
+                .push(RecordedNotification {
+                    notification_type: NotificationType::StreamHot,
                     title,
                     message,
                 });

@@ -11,6 +11,7 @@ Item {
         profileImageUrl: ""
         displayName: "TestUser"
         isFavourite: false
+        isHot: false
     }
 
     TestCase {
@@ -21,6 +22,7 @@ Item {
             avatar.profileImageUrl = ""
             avatar.displayName = "TestUser"
             avatar.isFavourite = false
+            avatar.isHot = false
         }
 
         function test_default_size() {
@@ -74,6 +76,53 @@ Item {
             wait(10)
             var image = findChild(avatar, "avatarImage")
             compare(image.anchors.margins, 0, "image should have no margin when not favourite")
+        }
+
+        // --- Hot stream tests ---
+
+        function test_hot_shows_border_width() {
+            avatar.isHot = true
+            wait(10)
+            compare(avatar.border.width, 2, "hot should have 2px border")
+        }
+
+        function test_hot_border_is_transparent() {
+            avatar.isHot = true
+            wait(10)
+            compare(avatar.border.color, "#00000000", "hot border should be transparent (gradient ring replaces it)")
+        }
+
+        function test_hot_ring_visible_when_hot() {
+            avatar.isHot = true
+            wait(10)
+            var ring = findChild(avatar, "hotRing")
+            verify(ring, "hotRing should exist")
+            verify(ring.visible, "hotRing should be visible when hot")
+        }
+
+        function test_hot_ring_hidden_when_not_hot() {
+            avatar.isHot = false
+            wait(10)
+            var ring = findChild(avatar, "hotRing")
+            verify(ring, "hotRing should exist")
+            verify(!ring.visible, "hotRing should be hidden when not hot")
+        }
+
+        function test_hot_margins_on_image() {
+            avatar.isHot = true
+            avatar.profileImageUrl = "https://example.com/avatar.jpg"
+            wait(10)
+            var image = findChild(avatar, "avatarImage")
+            compare(image.anchors.margins, 2, "image should have 2px margin for hot ring")
+        }
+
+        function test_hot_overrides_favourite_border_color() {
+            avatar.isFavourite = true
+            avatar.isHot = true
+            wait(10)
+            compare(avatar.border.color, "#00000000", "hot should override favourite border color to transparent")
+            var ring = findChild(avatar, "hotRing")
+            verify(ring.visible, "hotRing should be visible even when also favourite")
         }
     }
 }

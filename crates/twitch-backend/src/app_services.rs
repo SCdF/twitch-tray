@@ -11,6 +11,19 @@ pub struct DebugStreamEntry {
     pub started_at: i64, // Unix timestamp (seconds)
 }
 
+/// Debug view entry for hotness detection state.
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+pub struct DebugHotnessEntry {
+    pub broadcaster_name: String,
+    pub broadcaster_login: String,
+    pub current_viewers: u32,
+    pub mean: Option<f64>,
+    pub stddev: Option<f64>,
+    pub z_score: Option<f64>,
+    pub observation_count: usize,
+    pub is_hot: bool,
+}
+
 /// Input port for Tauri command handlers.
 ///
 /// Commands take `State<'_, Arc<dyn AppServices>>` so they can be tested
@@ -29,6 +42,7 @@ pub trait AppServices: Send + Sync {
     async fn refresh_category_streams(&self);
     async fn refresh_schedules_from_db(&self);
     async fn get_debug_schedule_data(&self, start: i64, end: i64) -> Vec<DebugStreamEntry>;
+    async fn get_debug_hotness_data(&self) -> Vec<DebugHotnessEntry>;
 }
 
 #[cfg(test)]
@@ -46,10 +60,12 @@ pub mod mock {
         search_results: Mutex<Vec<Category>>,
         channels: Mutex<Vec<FollowedChannel>>,
         debug_entries: Mutex<Vec<super::DebugStreamEntry>>,
+        hotness_entries: Mutex<Vec<super::DebugHotnessEntry>>,
         save_config_count: AtomicUsize,
         refresh_category_count: AtomicUsize,
         refresh_schedules_count: AtomicUsize,
         debug_call_count: AtomicUsize,
+        hotness_call_count: AtomicUsize,
     }
 
     impl MockAppServices {
@@ -59,10 +75,12 @@ pub mod mock {
                 search_results: Mutex::new(Vec::new()),
                 channels: Mutex::new(Vec::new()),
                 debug_entries: Mutex::new(Vec::new()),
+                hotness_entries: Mutex::new(Vec::new()),
                 save_config_count: AtomicUsize::new(0),
                 refresh_category_count: AtomicUsize::new(0),
                 refresh_schedules_count: AtomicUsize::new(0),
                 debug_call_count: AtomicUsize::new(0),
+                hotness_call_count: AtomicUsize::new(0),
             }
         }
 
@@ -81,6 +99,11 @@ pub mod mock {
             *self.debug_entries.lock().unwrap() = entries;
         }
 
+        /// Pre-configure the hotness entries that `get_debug_hotness_data` will return.
+        pub fn set_hotness_entries(&self, entries: Vec<super::DebugHotnessEntry>) {
+            *self.hotness_entries.lock().unwrap() = entries;
+        }
+
         pub fn save_config_count(&self) -> usize {
             self.save_config_count.load(Ordering::SeqCst)
         }
@@ -95,6 +118,10 @@ pub mod mock {
 
         pub fn debug_call_count(&self) -> usize {
             self.debug_call_count.load(Ordering::SeqCst)
+        }
+
+        pub fn hotness_call_count(&self) -> usize {
+            self.hotness_call_count.load(Ordering::SeqCst)
         }
     }
 
@@ -139,6 +166,11 @@ pub mod mock {
         ) -> Vec<super::DebugStreamEntry> {
             self.debug_call_count.fetch_add(1, Ordering::SeqCst);
             self.debug_entries.lock().unwrap().clone()
+        }
+
+        async fn get_debug_hotness_data(&self) -> Vec<super::DebugHotnessEntry> {
+            self.hotness_call_count.fetch_add(1, Ordering::SeqCst);
+            self.hotness_entries.lock().unwrap().clone()
         }
     }
 }

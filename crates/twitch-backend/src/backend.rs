@@ -10,6 +10,10 @@ use crate::config::ConfigManager;
 use crate::db::Database;
 use crate::events::BackendEvent;
 use crate::handle::{AuthCommand, BackendHandle, LoginProgress, RawDisplayData};
+use crate::hotness_detection::{
+    compute_hotness, compute_hotness_profile, find_nearest_bucket, BucketStats, HotnessConfig,
+    HotnessInfo, ViewerObservation,
+};
 use crate::notification_dispatcher::NotificationDispatcher;
 use crate::notify::{DesktopNotifier, Notifier, SnoozeRequest, StreamerSettingsRequest};
 use crate::schedule_walker::ScheduleWalker;
@@ -17,6 +21,18 @@ use crate::session::SessionManager;
 use crate::state::AppState;
 use crate::twitch::TwitchClient;
 use tokio::task::JoinHandle;
+
+/// Age points (in minutes) at which to precompute hotness bucket stats.
+const HOTNESS_AGE_POINTS: &[i64] = &[0, 5, 10, 15, 30, 45, 60, 90, 120, 180, 240, 360];
+
+/// Retention period for viewer observations (30 days in seconds).
+const OBSERVATION_RETENTION_SECS: i64 = 30 * 24 * 3600;
+
+/// Cached hotness profile for a single broadcaster.
+struct CachedHotnessProfile {
+    profile: Vec<(i64, BucketStats)>,
+    was_hot: bool,
+}
 
 /// Internal backend orchestrator.
 pub(crate) struct Backend {
@@ -46,6 +62,10 @@ pub(crate) struct Backend {
 
     /// In-memory cache for box art URLs (game_id -> (url, fetched_at)).
     box_art_cache: Arc<std::sync::Mutex<HashMap<String, (String, Instant)>>>,
+
+    /// In-memory cache for hotness profiles (broadcaster user_id -> profile).
+    /// Populated when a stream goes live, evicted when it goes offline.
+    hotness_cache: Arc<std::sync::Mutex<HashMap<String, CachedHotnessProfile>>>,
 }
 
 impl Backend {
@@ -105,6 +125,7 @@ impl Backend {
             settings_rx: Arc::new(Mutex::new(Some(settings_rx))),
             profile_image_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
             box_art_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            hotness_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
         })
     }
 
@@ -278,6 +299,7 @@ impl Backend {
                         crate::config::StreamerSettings {
                             display_name: request.display_name.clone(),
                             importance: crate::config::StreamerImportance::Normal,
+                            hotness_z_threshold_override: None,
                         },
                     );
                     if let Err(e) = backend.config.save(cfg) {
@@ -318,7 +340,7 @@ impl Backend {
                 .start(self.state.subscribe_streams()),
         );
 
-        // History recording listener task
+        // History + viewer observation recording listener task
         let backend = self.clone();
         handles.push(tokio::spawn(async move {
             let mut rx = backend.state.subscribe_streams();
@@ -329,6 +351,9 @@ impl Backend {
                         if let Err(e) = backend.db.record_streams(&event.streams) {
                             tracing::error!("Failed to record stream history: {}", e);
                         }
+
+                        // Record viewer observations for hotness detection
+                        backend.record_and_evaluate_hotness(&event);
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!("History listener lagged by {} events", n);
@@ -378,9 +403,19 @@ impl Backend {
                 .map(|(id, (url, _))| (id.clone(), url.clone()))
                 .collect()
         };
+        let live_streams = self.state.get_followed_streams().await;
+
+        // Evaluate hotness for all live streams
+        let hotness_results = self.evaluate_hotness(&live_streams);
+        let hot_stream_ids: std::collections::HashSet<String> = hotness_results
+            .iter()
+            .filter(|h| h.is_hot)
+            .map(|h| h.broadcaster_id.clone())
+            .collect();
+
         let raw = RawDisplayData {
             is_authenticated: self.state.is_authenticated().await,
-            live_streams: self.state.get_followed_streams().await,
+            live_streams,
             scheduled_streams,
             schedules_loaded: self.state.schedules_loaded().await,
             followed_channels: self.state.get_followed_channels().await,
@@ -389,6 +424,7 @@ impl Backend {
             config: cfg,
             profile_image_urls,
             box_art_urls,
+            hot_stream_ids,
         };
         let _ = display_tx.send(raw);
     }
@@ -440,6 +476,171 @@ impl Backend {
         } else {
             true
         }
+    }
+
+    /// Records viewer observations and evaluates hotness for all live streams.
+    ///
+    /// For newly live streams, populates the hotness cache from historical DB data.
+    /// For streams going offline, evicts them from the cache.
+    fn record_and_evaluate_hotness(&self, event: &crate::state::StreamsUpdated) {
+        let now = Utc::now();
+        let now_ts = now.timestamp();
+        let since = now_ts - OBSERVATION_RETENTION_SECS;
+
+        // Build viewer observations from current live streams
+        let observations: Vec<ViewerObservation> = event
+            .streams
+            .iter()
+            .map(|s| {
+                let age = (now - s.started_at).num_minutes().max(0);
+                ViewerObservation {
+                    broadcaster_id: s.user_id.parse().unwrap_or(0),
+                    observed_at: now_ts,
+                    stream_age_min: age,
+                    viewer_count: s.viewer_count,
+                }
+            })
+            .collect();
+
+        if let Err(e) = self.db.record_viewer_observations(&observations) {
+            tracing::error!("Failed to record viewer observations: {}", e);
+        }
+
+        // Populate cache for newly live streams
+        for stream in &event.newly_live {
+            let broadcaster_id: i64 = match stream.user_id.parse() {
+                Ok(id) => id,
+                Err(_) => continue,
+            };
+
+            // Fetch historical observations excluding the current stream.
+            // Using started_at as the upper bound ensures only data from prior streams
+            // forms the baseline — never the stream we're currently evaluating.
+            let until = stream.started_at.timestamp();
+            let all_obs =
+                match self
+                    .db
+                    .get_viewer_observations(broadcaster_id, 0, i64::MAX, since, until)
+                {
+                    Ok(obs) => obs,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to load hotness history for {}: {}",
+                            stream.user_name,
+                            e
+                        );
+                        continue;
+                    }
+                };
+
+            let profile = compute_hotness_profile(&all_obs, HOTNESS_AGE_POINTS);
+            let mut cache = self.hotness_cache.lock().unwrap();
+            cache.insert(
+                stream.user_id.clone(),
+                CachedHotnessProfile {
+                    profile,
+                    was_hot: false,
+                },
+            );
+        }
+
+        // Evaluate hotness and detect edges (not-hot → hot)
+        let cfg = self.config.get();
+        {
+            let mut cache = self.hotness_cache.lock().unwrap();
+            for stream in &event.streams {
+                let Some(cached) = cache.get_mut(&stream.user_id) else {
+                    continue;
+                };
+
+                let age = (now - stream.started_at).num_minutes().max(0);
+                let Some(bucket) = find_nearest_bucket(&cached.profile, age) else {
+                    continue;
+                };
+
+                let z_threshold = cfg
+                    .streamer_settings
+                    .get(&stream.user_login)
+                    .and_then(|s| s.hotness_z_threshold_override)
+                    .unwrap_or(cfg.hotness_z_threshold);
+
+                let hotness_cfg = HotnessConfig {
+                    z_threshold,
+                    min_observations: cfg.hotness_min_observations,
+                };
+
+                if let Some(info) =
+                    compute_hotness(&stream.user_id, stream.viewer_count, bucket, &hotness_cfg)
+                {
+                    let was_hot = cached.was_hot;
+                    cached.was_hot = info.is_hot;
+
+                    // Edge detection: notify only on not-hot → hot transition
+                    if info.is_hot && !was_hot && cfg.notify_on_hot {
+                        tracing::info!(
+                            "🔥 {} is HOT (z={:.1}σ, {} viewers, avg {:.0})",
+                            stream.user_name,
+                            info.z_score,
+                            info.current_viewers,
+                            info.mean_viewers,
+                        );
+                        if let Err(e) = self.notifier.stream_hot(stream, &info) {
+                            tracing::error!("Hot notification error: {}", e);
+                        }
+                    }
+                } else {
+                    // Insufficient data — reset was_hot so if data appears later, edge fires
+                    cached.was_hot = false;
+                }
+            }
+        }
+
+        // Evict streams that went offline
+        let live_ids: std::collections::HashSet<&str> =
+            event.streams.iter().map(|s| s.user_id.as_str()).collect();
+        {
+            let mut cache = self.hotness_cache.lock().unwrap();
+            cache.retain(|id, _| live_ids.contains(id.as_str()));
+        }
+    }
+
+    /// Evaluates hotness for all currently live streams against cached profiles.
+    /// Returns hotness info for streams that have sufficient data.
+    fn evaluate_hotness(&self, streams: &[crate::twitch::Stream]) -> Vec<HotnessInfo> {
+        let cfg = self.config.get();
+        let cache = self.hotness_cache.lock().unwrap();
+        let mut results = Vec::new();
+
+        for stream in streams {
+            let Some(cached) = cache.get(&stream.user_id) else {
+                continue;
+            };
+
+            let age = (Utc::now() - stream.started_at).num_minutes().max(0);
+            let Some(bucket) = find_nearest_bucket(&cached.profile, age) else {
+                continue;
+            };
+
+            // Check per-streamer threshold override
+            let z_threshold = cfg
+                .streamer_settings
+                .get(&stream.user_login)
+                .and_then(|s| s.hotness_z_threshold_override)
+                .unwrap_or(cfg.hotness_z_threshold);
+
+            let hotness_cfg = HotnessConfig {
+                z_threshold,
+                min_observations: cfg.hotness_min_observations,
+            };
+
+            if let Some(info) =
+                compute_hotness(&stream.user_id, stream.viewer_count, bucket, &hotness_cfg)
+            {
+                results.push(info);
+            }
+        }
+
+        results
     }
 
     pub(crate) async fn refresh_all_data(&self) {
@@ -675,6 +876,50 @@ impl Backend {
         self.push_display_state(display_tx).await;
     }
 
+    pub(crate) async fn get_debug_hotness_data(
+        &self,
+    ) -> Vec<crate::app_services::DebugHotnessEntry> {
+        use crate::app_services::DebugHotnessEntry;
+
+        let streams = self.state.get_followed_streams().await;
+        let hotness_results = self.evaluate_hotness(&streams);
+
+        // Index hotness info by broadcaster_id for fast lookup
+        let hotness_map: HashMap<&str, &HotnessInfo> = hotness_results
+            .iter()
+            .map(|h| (h.broadcaster_id.as_str(), h))
+            .collect();
+
+        streams
+            .iter()
+            .map(|stream| {
+                if let Some(info) = hotness_map.get(stream.user_id.as_str()) {
+                    DebugHotnessEntry {
+                        broadcaster_name: stream.user_name.clone(),
+                        broadcaster_login: stream.user_login.clone(),
+                        current_viewers: stream.viewer_count,
+                        mean: Some(info.mean_viewers),
+                        stddev: Some(info.stddev),
+                        z_score: Some(info.z_score),
+                        observation_count: info.observation_count,
+                        is_hot: info.is_hot,
+                    }
+                } else {
+                    DebugHotnessEntry {
+                        broadcaster_name: stream.user_name.clone(),
+                        broadcaster_login: stream.user_login.clone(),
+                        current_viewers: stream.viewer_count,
+                        mean: None,
+                        stddev: None,
+                        z_score: None,
+                        observation_count: 0,
+                        is_hot: false,
+                    }
+                }
+            })
+            .collect()
+    }
+
     pub(crate) async fn get_debug_schedule_data(
         &self,
         start: i64,
@@ -759,6 +1004,10 @@ impl AppServices for Backend {
     ) -> Vec<crate::app_services::DebugStreamEntry> {
         Backend::get_debug_schedule_data(self, start, end).await
     }
+
+    async fn get_debug_hotness_data(&self) -> Vec<crate::app_services::DebugHotnessEntry> {
+        Backend::get_debug_hotness_data(self).await
+    }
 }
 
 impl Clone for Backend {
@@ -781,6 +1030,7 @@ impl Clone for Backend {
             settings_rx: self.settings_rx.clone(),
             profile_image_cache: self.profile_image_cache.clone(),
             box_art_cache: self.box_art_cache.clone(),
+            hotness_cache: self.hotness_cache.clone(),
         }
     }
 }

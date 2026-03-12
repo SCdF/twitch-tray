@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-use twitch_backend::app_services::{AppServices, DebugStreamEntry};
+use twitch_backend::app_services::{AppServices, DebugHotnessEntry, DebugStreamEntry};
 use twitch_backend::config::{Config, FollowedCategory};
 use twitch_backend::twitch::{ApiError, Category, FollowedChannel};
 
@@ -12,10 +12,12 @@ pub struct MockAppServices {
     search_results: Mutex<Vec<Category>>,
     channels: Mutex<Vec<FollowedChannel>>,
     debug_entries: Mutex<Vec<DebugStreamEntry>>,
+    hotness_entries: Mutex<Vec<DebugHotnessEntry>>,
     save_config_count: AtomicUsize,
     refresh_category_count: AtomicUsize,
     refresh_schedules_count: AtomicUsize,
     debug_call_count: AtomicUsize,
+    hotness_call_count: AtomicUsize,
 }
 
 impl MockAppServices {
@@ -25,10 +27,12 @@ impl MockAppServices {
             search_results: Mutex::new(Vec::new()),
             channels: Mutex::new(Vec::new()),
             debug_entries: Mutex::new(Vec::new()),
+            hotness_entries: Mutex::new(Vec::new()),
             save_config_count: AtomicUsize::new(0),
             refresh_category_count: AtomicUsize::new(0),
             refresh_schedules_count: AtomicUsize::new(0),
             debug_call_count: AtomicUsize::new(0),
+            hotness_call_count: AtomicUsize::new(0),
         }
     }
 
@@ -42,6 +46,10 @@ impl MockAppServices {
 
     pub fn set_debug_entries(&self, entries: Vec<DebugStreamEntry>) {
         *self.debug_entries.lock().unwrap() = entries;
+    }
+
+    pub fn set_hotness_entries(&self, entries: Vec<DebugHotnessEntry>) {
+        *self.hotness_entries.lock().unwrap() = entries;
     }
 
     pub fn save_config_count(&self) -> usize {
@@ -58,6 +66,10 @@ impl MockAppServices {
 
     pub fn debug_call_count(&self) -> usize {
         self.debug_call_count.load(Ordering::SeqCst)
+    }
+
+    pub fn hotness_call_count(&self) -> usize {
+        self.hotness_call_count.load(Ordering::SeqCst)
     }
 }
 
@@ -98,5 +110,10 @@ impl AppServices for MockAppServices {
     async fn get_debug_schedule_data(&self, _start: i64, _end: i64) -> Vec<DebugStreamEntry> {
         self.debug_call_count.fetch_add(1, Ordering::SeqCst);
         self.debug_entries.lock().unwrap().clone()
+    }
+
+    async fn get_debug_hotness_data(&self) -> Vec<DebugHotnessEntry> {
+        self.hotness_call_count.fetch_add(1, Ordering::SeqCst);
+        self.hotness_entries.lock().unwrap().clone()
     }
 }

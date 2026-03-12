@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tokio::sync::{broadcast, mpsc, watch};
@@ -27,6 +27,8 @@ pub struct RawDisplayData {
     pub profile_image_urls: HashMap<String, String>,
     /// Cached box art URLs keyed by category/game ID.
     pub box_art_urls: HashMap<String, String>,
+    /// User IDs of streams currently detected as "hot" (significantly above normal viewers).
+    pub hot_stream_ids: HashSet<String>,
 }
 
 /// Commands sent to the backend auth task.

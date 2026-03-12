@@ -21,6 +21,9 @@ const notifyMaxGapInput = document.getElementById('notify_max_gap');
 const scheduleLookaheadInput = document.getElementById('schedule_lookahead');
 const notifyOnLiveInput = document.getElementById('notify_on_live');
 const notifyOnCategoryInput = document.getElementById('notify_on_category');
+const notifyOnHotInput = document.getElementById('notify_on_hot');
+const hotnessZThresholdInput = document.getElementById('hotness_z_threshold');
+const hotnessMinObservationsInput = document.getElementById('hotness_min_observations');
 const liveMenuLimitInput = document.getElementById('live_menu_limit');
 const scheduleMenuLimitInput = document.getElementById('schedule_menu_limit');
 const categorySearchInput = document.getElementById('category_search');
@@ -95,6 +98,9 @@ function populateForm() {
   notifyMaxGapInput.value = config.notify_max_gap_min;
   notifyOnLiveInput.checked = config.notify_on_live;
   notifyOnCategoryInput.checked = config.notify_on_category;
+  notifyOnHotInput.checked = config.notify_on_hot;
+  hotnessZThresholdInput.value = config.hotness_z_threshold;
+  hotnessMinObservationsInput.value = config.hotness_min_observations;
   scheduleLookaheadInput.value = config.schedule_lookahead_hours;
   liveMenuLimitInput.value = config.live_menu_limit;
   scheduleMenuLimitInput.value = config.schedule_menu_limit;
@@ -173,6 +179,9 @@ function renderStreamerDetailInto(container) {
     ignore: 'Ignore - Hidden from menu',
   };
 
+  const overrideValue = s.hotness_z_threshold_override != null ? s.hotness_z_threshold_override : '';
+  const globalThreshold = config.hotness_z_threshold || 2.0;
+
   container.innerHTML = `
     <div class="detail-header">${importanceIcon(s.importance)}${escapeHtml(s.display_name)}</div>
     <div class="detail-field">
@@ -182,6 +191,13 @@ function renderStreamerDetailInto(container) {
           <option value="${opt}" ${s.importance === opt ? 'selected' : ''}>${importanceLabels[opt]}</option>
         `).join('')}
       </select>
+    </div>
+    <div class="detail-field" style="margin-top: 16px;">
+      <label for="streamer_hotness_override">Hotness Z-Score Override</label>
+      <input type="number" id="streamer_hotness_override" min="0.5" max="5.0" step="0.1"
+        value="${overrideValue}" placeholder="${globalThreshold} (global default)"
+        onchange="updateStreamerHotnessOverride(this.value)">
+      <span class="help-text">Leave empty to use the global threshold. Lower = more sensitive.</span>
     </div>
   `;
   return true;
@@ -279,6 +295,20 @@ function updateStreamerImportance(value) {
   autoSave();
 }
 
+function updateStreamerHotnessOverride(value) {
+  if (!selectedStreamer || !config.streamer_settings[selectedStreamer]) return;
+  const trimmed = value.trim();
+  if (trimmed === '') {
+    config.streamer_settings[selectedStreamer].hotness_z_threshold_override = null;
+  } else {
+    const parsed = parseFloat(trimmed);
+    if (!isNaN(parsed)) {
+      config.streamer_settings[selectedStreamer].hotness_z_threshold_override = Math.max(0.5, Math.min(5.0, parsed));
+    }
+  }
+  autoSave();
+}
+
 function searchStreamers(query) {
   const lowerQuery = query.toLowerCase();
   const configuredLogins = new Set(Object.keys(config?.streamer_settings || {}));
@@ -320,6 +350,7 @@ function setupEventListeners() {
       // Load initial debug data on first open, then scroll to now
       if (targetId === 'debug' && !debugDataLoaded) {
         debugDataLoaded = true;
+        await loadDebugHotness();
         await loadDebugChunk(debugWindowStart, debugWindowEnd);
         scrollToNow();
       }
@@ -367,10 +398,10 @@ function setupEventListeners() {
   });
 
   // Auto-save on general settings changes
-  [pollIntervalInput, notifyMaxGapInput, scheduleLookaheadInput, liveMenuLimitInput, scheduleMenuLimitInput].forEach(input => {
+  [pollIntervalInput, notifyMaxGapInput, scheduleLookaheadInput, liveMenuLimitInput, scheduleMenuLimitInput, hotnessZThresholdInput, hotnessMinObservationsInput].forEach(input => {
     input.addEventListener('change', () => autoSave());
   });
-  [notifyOnLiveInput, notifyOnCategoryInput].forEach(input => {
+  [notifyOnLiveInput, notifyOnCategoryInput, notifyOnHotInput].forEach(input => {
     input.addEventListener('change', () => autoSave());
   });
 }
@@ -455,6 +486,9 @@ async function autoSave() {
         notify_max_gap_min: parseInt(notifyMaxGapInput.value, 10) || 10,
         notify_on_live: notifyOnLiveInput.checked,
         notify_on_category: notifyOnCategoryInput.checked,
+        notify_on_hot: notifyOnHotInput.checked,
+        hotness_z_threshold: parseFloat(hotnessZThresholdInput.value) || 2.0,
+        hotness_min_observations: parseInt(hotnessMinObservationsInput.value, 10) || 5,
         schedule_lookahead_hours: parseInt(scheduleLookaheadInput.value, 10) || 6,
         live_menu_limit: parseInt(liveMenuLimitInput.value, 10) || 10,
         schedule_menu_limit: parseInt(scheduleMenuLimitInput.value, 10) || 5,
@@ -465,6 +499,8 @@ async function autoSave() {
       // Validate
       newConfig.poll_interval_sec = Math.max(30, Math.min(300, newConfig.poll_interval_sec));
       newConfig.notify_max_gap_min = Math.max(1, Math.min(60, newConfig.notify_max_gap_min));
+      newConfig.hotness_z_threshold = Math.max(0.5, Math.min(5.0, newConfig.hotness_z_threshold));
+      newConfig.hotness_min_observations = Math.max(1, Math.min(50, newConfig.hotness_min_observations));
       newConfig.schedule_lookahead_hours = Math.max(1, Math.min(72, newConfig.schedule_lookahead_hours));
       newConfig.live_menu_limit = Math.max(1, Math.min(50, newConfig.live_menu_limit));
       newConfig.schedule_menu_limit = Math.max(1, Math.min(20, newConfig.schedule_menu_limit));
@@ -489,6 +525,7 @@ window.selectStreamer = selectStreamer;
 window.addStreamer = addStreamer;
 window.removeStreamer = removeStreamer;
 window.updateStreamerImportance = updateStreamerImportance;
+window.updateStreamerHotnessOverride = updateStreamerHotnessOverride;
 
 // === Debug tab functions ===
 
@@ -600,6 +637,44 @@ function scrollToNow() {
   const rowRect = targetRow.getBoundingClientRect();
   const rowOffsetInContainer = rowRect.top - containerRect.top + container.scrollTop;
   container.scrollTop = Math.max(0, rowOffsetInContainer - container.clientHeight / 3);
+}
+
+// === Debug hotness functions ===
+
+async function loadDebugHotness() {
+  try {
+    const entries = await invoke('get_debug_hotness_data');
+    renderDebugHotnessTable(entries);
+  } catch (e) {
+    console.error('Failed to load hotness data:', e);
+  }
+}
+
+function renderDebugHotnessTable(entries) {
+  const tbody = document.getElementById('debug-hotness-tbody');
+  if (!tbody) return;
+
+  if (entries.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#808080;padding:20px">No live streams with hotness data</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = entries.map(e => {
+    const mean = e.mean != null ? e.mean.toFixed(0) : '\u2014';
+    const stddev = e.stddev != null ? e.stddev.toFixed(0) : '\u2014';
+    const zScore = e.z_score != null ? e.z_score.toFixed(2) : '\u2014';
+    const hotClass = e.is_hot ? ' class="debug-hot-row"' : '';
+    const hotIcon = e.is_hot ? '\uD83D\uDD25' : '';
+    return `<tr${hotClass}>
+      <td>${escapeHtml(e.broadcaster_name)}</td>
+      <td>${e.current_viewers.toLocaleString()}</td>
+      <td>${mean}</td>
+      <td>${stddev}</td>
+      <td>${zScore}</td>
+      <td>${e.observation_count}</td>
+      <td>${hotIcon}</td>
+    </tr>`;
+  }).join('');
 }
 
 // Set up debug filter and scroll handlers once the DOM is ready

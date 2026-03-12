@@ -36,6 +36,7 @@ pub struct LiveStreamDto {
     pub viewer_count_formatted: String,
     pub duration_formatted: String,
     pub is_favourite: bool,
+    pub is_hot: bool,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
@@ -123,6 +124,7 @@ mod tests {
             viewer_count_formatted: "12k".to_string(),
             duration_formatted: "1h 30m".to_string(),
             is_favourite: true,
+            is_hot: false,
         };
         let json = serde_json::to_string(&dto).unwrap();
         let parsed: LiveStreamDto = serde_json::from_str(&json).unwrap();

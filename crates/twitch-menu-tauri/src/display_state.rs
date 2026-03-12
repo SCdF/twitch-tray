@@ -14,6 +14,7 @@ const LIVE_COVERS_SCHEDULE_WINDOW_MIN: i64 = 60;
 pub struct StreamEntry {
     pub stream: Stream,
     pub label: String,
+    pub is_hot: bool,
 }
 
 /// The live-streams portion of the display.
@@ -91,6 +92,8 @@ pub struct DisplayConfig {
     pub live_limit: usize,
     /// Maximum scheduled streams shown in the main menu before the overflow submenu.
     pub schedule_limit: usize,
+    /// User IDs of streams currently detected as "hot" (significantly above normal viewers).
+    pub hot_stream_ids: HashSet<String>,
 }
 
 fn get_importance(
@@ -103,14 +106,16 @@ fn get_importance(
         .unwrap_or_default()
 }
 
-/// Formats a stream label for the Following Live menu with optional star prefix.
+/// Formats a stream label for the Following Live menu with optional star/fire prefix.
 ///
-/// Format: `"[★ ]StreamerName - GameName (1.2k, 2h 15m)"`
-pub(crate) fn format_stream_label_with_star(s: &Stream, star: bool) -> String {
-    let prefix = if star { "\u{2605} " } else { "" };
+/// Format: `"[🔥 ][★ ]StreamerName - GameName (1.2k, 2h 15m)"`
+pub(crate) fn format_stream_label_with_star(s: &Stream, star: bool, hot: bool) -> String {
+    let fire = if hot { "\u{1F525} " } else { "" };
+    let star_str = if star { "\u{2605} " } else { "" };
     format!(
-        "{}{} - {} ({}, {})",
-        prefix,
+        "{}{}{} - {} ({}, {})",
+        fire,
+        star_str,
         s.user_name,
         truncate(&s.game_name, 20),
         s.format_viewer_count(),
@@ -187,8 +192,13 @@ pub fn compute_display_state(
             .map(|s| {
                 let is_fav =
                     get_importance(&s.user_login, settings) == StreamerImportance::Favourite;
-                let label = format_stream_label_with_star(&s, is_fav);
-                StreamEntry { stream: s, label }
+                let is_hot = config.hot_stream_ids.contains(&s.user_id);
+                let label = format_stream_label_with_star(&s, is_fav, is_hot);
+                StreamEntry {
+                    stream: s,
+                    label,
+                    is_hot,
+                }
             })
             .collect(),
         overflow: live_overflow_raw
@@ -196,8 +206,13 @@ pub fn compute_display_state(
             .map(|s| {
                 let is_fav =
                     get_importance(&s.user_login, settings) == StreamerImportance::Favourite;
-                let label = format_stream_label_with_star(&s, is_fav);
-                StreamEntry { stream: s, label }
+                let is_hot = config.hot_stream_ids.contains(&s.user_id);
+                let label = format_stream_label_with_star(&s, is_fav, is_hot);
+                StreamEntry {
+                    stream: s,
+                    label,
+                    is_hot,
+                }
             })
             .collect(),
     };
@@ -318,6 +333,7 @@ mod tests {
             schedule_lookahead_hours: 6,
             live_limit: 10,
             schedule_limit: 5,
+            hot_stream_ids: HashSet::new(),
         }
     }
 
@@ -329,6 +345,7 @@ mod tests {
             StreamerSettings {
                 display_name: user_login.to_string(),
                 importance,
+                hotness_z_threshold_override: None,
             },
         );
         DisplayConfig {
@@ -336,6 +353,7 @@ mod tests {
             schedule_lookahead_hours: 6,
             live_limit: 10,
             schedule_limit: 5,
+            hot_stream_ids: HashSet::new(),
         }
     }
 
@@ -349,7 +367,7 @@ mod tests {
         s.game_name = "Fortnite".to_string();
         s.viewer_count = 5000;
         s.started_at = Utc::now() - Duration::hours(2);
-        let label = format_stream_label_with_star(&s, false);
+        let label = format_stream_label_with_star(&s, false, false);
 
         assert!(label.contains("Ninja"), "should contain streamer name");
         assert!(label.contains("Fortnite"), "should contain game name");
@@ -362,7 +380,7 @@ mod tests {
         let mut s = make_stream("streamer", "Streamer");
         s.game_name = "This Is A Very Long Game Name That Should Be Truncated".to_string();
         s.viewer_count = 1000;
-        let label = format_stream_label_with_star(&s, false);
+        let label = format_stream_label_with_star(&s, false, false);
 
         assert!(label.contains("..."), "long game name should be truncated");
     }
@@ -371,7 +389,7 @@ mod tests {
     fn format_stream_label_small_viewers_exact() {
         let mut s = make_stream("smallstreamer", "SmallStreamer");
         s.viewer_count = 42;
-        let label = format_stream_label_with_star(&s, false);
+        let label = format_stream_label_with_star(&s, false, false);
 
         assert!(
             label.contains("42"),
@@ -383,8 +401,8 @@ mod tests {
     #[test]
     fn format_stream_label_star_prefix() {
         let s = make_stream("fav", "Fav");
-        let with_star = format_stream_label_with_star(&s, true);
-        let without_star = format_stream_label_with_star(&s, false);
+        let with_star = format_stream_label_with_star(&s, true, false);
+        let without_star = format_stream_label_with_star(&s, false, false);
 
         assert!(
             with_star.starts_with('\u{2605}'),
@@ -618,6 +636,59 @@ mod tests {
             state.live_section.visible[0].label.contains('\u{2605}'),
             "favourite label should contain ★"
         );
+    }
+
+    // =========================================================
+    // compute_display_state — hotness
+    // =========================================================
+
+    #[test]
+    fn hot_stream_has_fire_in_label() {
+        let mut s = make_stream("hotuser", "HotUser");
+        s.user_id = "uid_hot".to_string();
+        let (cats, cat_streams) = no_categories();
+
+        let state = compute_display_state(
+            vec![s],
+            no_scheduled(),
+            true,
+            &cats,
+            &cat_streams,
+            &DisplayConfig {
+                hot_stream_ids: HashSet::from(["uid_hot".to_string()]),
+                ..default_config()
+            },
+            Utc::now(),
+        );
+
+        assert!(
+            state.live_section.visible[0].label.contains('\u{1F525}'),
+            "hot stream label should contain \u{1F525}: {}",
+            state.live_section.visible[0].label
+        );
+        assert!(state.live_section.visible[0].is_hot);
+    }
+
+    #[test]
+    fn non_hot_stream_has_no_fire_in_label() {
+        let s = make_stream("cooluser", "CoolUser");
+        let (cats, cat_streams) = no_categories();
+
+        let state = compute_display_state(
+            vec![s],
+            no_scheduled(),
+            true,
+            &cats,
+            &cat_streams,
+            &default_config(),
+            Utc::now(),
+        );
+
+        assert!(
+            !state.live_section.visible[0].label.contains('\u{1F525}'),
+            "non-hot stream should not have fire"
+        );
+        assert!(!state.live_section.visible[0].is_hot);
     }
 
     // =========================================================
