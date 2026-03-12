@@ -13,7 +13,7 @@ A 5,000-viewer spike means nothing for xQc but is extraordinary for a 200-viewer
 - **Desktop notification** on hot detection: `🔥🔥🔥 (2.3σ) StreamerName on GameName IS HOT`
 - **Tray menu**: 🔥 prefix on hot stream labels
 - **KDE plasmoid**: animated swirling fire-colored `ConicalGradient` ring on the streamer's avatar (2s rotation cycle, overrides the favourite border)
-- **Debug view** (debug builds only): live table showing mean, stddev, z-score, observation count, and is_hot for every live stream
+- **Debug view** (debug builds only): live table showing mean, stddev, z-score, observation count, distinct streams, and is_hot for every live stream
 - **Edge-triggered**: notification fires only on the not-hot → hot transition. If they cool off and spike again, that's a new edge, new notification.
 
 ## How it works
@@ -28,6 +28,7 @@ Every 60-second poll, one `viewer_observations` row is recorded per live stream:
 | `observed_at` | UTC timestamp |
 | `stream_age_min` | `(now - stream.started_at)` in minutes |
 | `viewer_count` | Current viewer count |
+| `stream_started_at` | `stream.started_at` as Unix timestamp (identifies which stream) |
 
 Stored in SQLite (`data.db`). Indexed on `(broadcaster_id, stream_age_min)` for age-window queries and `(observed_at)` for retention pruning. 30-day retention window. At ~500k rows/month (1440 polls/day × 12 streamers × 30 days) this is trivial for SQLite.
 
@@ -51,7 +52,12 @@ Examples:
 
 This naturally handles the viewer ramp-up without modeling the curve shape.
 
-**Thresholds**: a stream is "hot" when `z >= hotness_z_threshold` (default 2.0) and there are at least `hotness_min_observations` (default 5) observations in the bucket. Zero stddev (all identical historical values) returns no result rather than dividing by zero.
+**Thresholds**: a stream is "hot" when all of the following are true:
+- `z >= hotness_z_threshold` (default 2.0)
+- At least `hotness_min_observations` (default 5) data points in the bucket
+- At least `hotness_min_streams` (default 7) distinct streams contributed to the bucket
+
+The `min_streams` gate ensures the baseline is built from multiple independent streams rather than a single session. This prevents false positives when the app has only observed one or two streams for a streamer. Zero stddev (all identical historical values) returns no result rather than dividing by zero.
 
 ### Caching strategy
 
@@ -68,6 +74,7 @@ The cache (`CachedHotnessProfile`) also tracks `was_hot: bool` for edge detectio
 Global config (`~/.config/twitch-tray/config.json`):
 - `hotness_z_threshold: f64` (default 2.0)
 - `hotness_min_observations: usize` (default 5)
+- `hotness_min_streams: usize` (default 7) — minimum distinct streams observed before detection activates
 - `notify_on_hot: bool` (default true)
 
 Per-streamer override:
@@ -80,13 +87,13 @@ Per-streamer override:
 | Pure detection math | `crates/twitch-backend/src/hotness_detection.rs` | `compute_age_window`, `compute_bucket_stats`, `compute_hotness`, `compute_hotness_profile`, `find_nearest_bucket` — zero side effects |
 | DB persistence | `crates/twitch-backend/src/db.rs` | `viewer_observations` table, `record_viewer_observations`, `get_viewer_observations` |
 | Cache + orchestration | `crates/twitch-backend/src/backend.rs` | `CachedHotnessProfile`, `record_and_evaluate_hotness`, `evaluate_hotness`, `HOTNESS_AGE_POINTS` |
-| Config | `crates/twitch-backend/src/config.rs` | `hotness_z_threshold`, `hotness_min_observations`, `notify_on_hot`, `hotness_z_threshold_override` |
+| Config | `crates/twitch-backend/src/config.rs` | `hotness_z_threshold`, `hotness_min_observations`, `hotness_min_streams`, `notify_on_hot`, `hotness_z_threshold_override` |
 | Notifications | `crates/twitch-backend/src/notify.rs` | `Notifier::stream_hot()`, `DesktopNotifier` impl, `STREAM_HOT` category |
 | Display data | `crates/twitch-backend/src/handle.rs` | `hot_stream_ids: HashSet<String>` on `RawDisplayData` |
 | Tray menu | `crates/twitch-menu-tauri/src/display_state.rs` | `is_hot: bool` on `StreamEntry`, 🔥 prefix |
 | KDE plasmoid | `crates/twitch-kde/src/dto.rs`, `plasmoid_state.rs` | `is_hot` on `LiveStreamDto` |
 | QML visuals | `crates/twitch-kde/plasmoid/contents/ui/StreamerAvatar.qml` | Animated `ConicalGradient` ring |
-| Debug view | `crates/twitch-backend/src/app_services.rs` | `DebugHotnessEntry`, `get_debug_hotness_data()` |
+| Debug view | `crates/twitch-backend/src/app_services.rs` | `DebugHotnessEntry` (includes `distinct_streams`), `get_debug_hotness_data()` |
 | Debug commands | `crates/twitch-settings-tauri/src/commands.rs` | Tauri command `get_debug_hotness_data` |
 
 ## Design decisions
@@ -123,6 +130,14 @@ The baseline includes all streams regardless of category. A streamer who does a 
 
 Morning streams and evening streams may have different audience sizes. Discussed and deferred — splitting observations by time-of-day would fragment an already-sparse dataset. UTC timestamps are stored, so this can be added later if the debug view reveals time-dependent patterns.
 
+### Minimum distinct streams over minimum observations alone
+
+The original implementation only gated on `min_observations` (data point count), but a single 5-hour stream generates ~300 observations — easily exceeding the threshold. This meant a "baseline" could be built from one stream, making the first unusual stream look hot simply because it differed from one prior session.
+
+The fix adds `stream_started_at` to each observation row and counts distinct `stream_started_at` values per bucket (`BucketStats.distinct_streams`). Detection requires data from `min_streams` (default 7) distinct streams, ensuring the baseline reflects the streamer's typical viewership across multiple independent sessions. A week of casual use (~1 stream/day) naturally satisfies this.
+
+Distinct streams was chosen over distinct calendar days because streams can span midnight, and a streamer who does two streams in one day provides more independent signal than one.
+
 ### Edge-triggered notifications
 
 One notification per not-hot → hot transition. If the streamer cools off and spikes again, that's a new transition and fires a new notification. This avoids notification spam while still catching multiple hot periods within a single stream.
@@ -131,19 +146,19 @@ One notification per not-hot → hot transition. If the streamer cools off and s
 
 Built in 8 phases, following the project's crate-boundary architecture:
 
-1. **DB layer** — new `viewer_observations` table with `record_viewer_observations` and `get_viewer_observations` methods in `db.rs`. Indexes on `(broadcaster_id, stream_age_min)` and `(observed_at)`.
+1. **DB layer** — `viewer_observations` table with `record_viewer_observations` and `get_viewer_observations` methods in `db.rs`. Columns: `broadcaster_id`, `observed_at`, `stream_age_min`, `viewer_count`, `stream_started_at`. Indexes on `(broadcaster_id, stream_age_min)` and `(observed_at)`.
 
 2. **Observation recording** — the history recording listener in `backend.rs` writes one `ViewerObservation` row per live stream per `StreamsUpdated` event, computing `stream_age_min` from `started_at`.
 
-3. **Detection module** — `hotness_detection.rs`, a pure-function module with zero side effects. Five functions (`compute_age_window`, `compute_bucket_stats`, `compute_hotness`, `compute_hotness_profile`, `find_nearest_bucket`) and 16 unit tests.
+3. **Detection module** — `hotness_detection.rs`, a pure-function module with zero side effects. Five functions (`compute_age_window`, `compute_bucket_stats`, `compute_hotness`, `compute_hotness_profile`, `find_nearest_bucket`). `BucketStats` tracks `distinct_streams` alongside `count`, and `HotnessConfig` includes `min_streams` to gate on multi-stream baselines.
 
-4. **Config** — `hotness_z_threshold`, `hotness_min_observations`, `notify_on_hot` on global `Config`; `hotness_z_threshold_override` on `StreamerSettings`.
+4. **Config** — `hotness_z_threshold`, `hotness_min_observations`, `hotness_min_streams`, `notify_on_hot` on global `Config`; `hotness_z_threshold_override` on `StreamerSettings`.
 
 5. **Cache + edge detection + notifications** — `CachedHotnessProfile` in `backend.rs` with precomputed profile and `was_hot` flag. Populates on newly-live, evicts on offline, evaluates each poll. `stream_hot()` added to `Notifier` trait with `DesktopNotifier` and `RecordingNotifier` implementations. `hot_stream_ids: HashSet<String>` added to `RawDisplayData`.
 
 6. **Display integration** — `is_hot: bool` on `StreamEntry` in tray menu (`display_state.rs`), fire emoji prefix on labels. `is_hot` on `LiveStreamDto` for KDE plasmoid, mapped from `hot_stream_ids`.
 
-7. **Debug view** — `DebugHotnessEntry` type in `app_services.rs` exposing broadcaster name, current viewers, mean, stddev, z-score, observation count, and is_hot. Tauri command `get_debug_hotness_data` gated behind `is_debug_build()`.
+7. **Debug view** — `DebugHotnessEntry` type in `app_services.rs` exposing broadcaster name, current viewers, mean, stddev, z-score, observation count, distinct streams, and is_hot. Tauri command `get_debug_hotness_data` gated behind `is_debug_build()`.
 
 8. **QML plasmoid visuals** — `isHot` property on `StreamerAvatar` and `StreamRow`. Animated swirling `ConicalGradient` ring (fire colors, 2s rotation) that overrides the favourite border. QML tests for hot ring visibility, border behavior, and hot+favourite interaction.
 

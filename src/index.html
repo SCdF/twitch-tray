@@ -68,6 +68,12 @@
           <span class="help-text">Minimum data points needed before hotness detection activates for a streamer (default 5)</span>
         </div>
 
+        <div class="form-group">
+          <label for="hotness_min_streams">Minimum Streams Observed</label>
+          <input type="number" id="hotness_min_streams" min="1" max="30" value="7">
+          <span class="help-text">Minimum distinct streams that must be observed before hotness detection activates (default 7)</span>
+        </div>
+
         <h2>Menu</h2>
 
         <div class="form-group">
@@ -137,6 +143,7 @@
                 <th>StdDev</th>
                 <th>Z-Score</th>
                 <th>Obs</th>
+                <th>Streams</th>
                 <th>Hot</th>
               </tr>
             </thead>

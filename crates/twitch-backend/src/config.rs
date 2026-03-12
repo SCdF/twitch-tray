@@ -21,6 +21,7 @@ pub const DEFAULT_LIVE_MENU_LIMIT: usize = 10;
 pub const DEFAULT_SCHEDULE_MENU_LIMIT: usize = 5;
 pub const DEFAULT_HOTNESS_Z_THRESHOLD: f64 = 2.0;
 pub const DEFAULT_HOTNESS_MIN_OBSERVATIONS: usize = 5;
+pub const DEFAULT_HOTNESS_MIN_STREAMS: usize = 7;
 pub const DEFAULT_NOTIFY_ON_HOT: bool = true;
 
 /// Importance level for a streamer, affecting display and notifications
@@ -95,6 +96,10 @@ pub struct Config {
     /// Minimum historical observations needed before hotness detection activates (default: 5)
     #[serde(default = "default_hotness_min_observations")]
     pub hotness_min_observations: usize,
+    /// Minimum distinct streams observed before hotness detection activates (default: 7).
+    /// Ensures the baseline is built from multiple independent streams, not just one session.
+    #[serde(default = "default_hotness_min_streams")]
+    pub hotness_min_streams: usize,
     /// Send desktop notifications when a stream is detected as hot (default: true)
     #[serde(default = "default_notify_on_hot")]
     pub notify_on_hot: bool,
@@ -158,6 +163,10 @@ fn default_hotness_min_observations() -> usize {
     DEFAULT_HOTNESS_MIN_OBSERVATIONS
 }
 
+fn default_hotness_min_streams() -> usize {
+    DEFAULT_HOTNESS_MIN_STREAMS
+}
+
 fn default_notify_on_hot() -> bool {
     DEFAULT_NOTIFY_ON_HOT
 }
@@ -178,6 +187,7 @@ impl Default for Config {
             schedule_menu_limit: DEFAULT_SCHEDULE_MENU_LIMIT,
             hotness_z_threshold: DEFAULT_HOTNESS_Z_THRESHOLD,
             hotness_min_observations: DEFAULT_HOTNESS_MIN_OBSERVATIONS,
+            hotness_min_streams: DEFAULT_HOTNESS_MIN_STREAMS,
             notify_on_hot: DEFAULT_NOTIFY_ON_HOT,
             followed_categories: Vec::new(),
             streamer_settings: HashMap::new(),
@@ -448,6 +458,7 @@ mod tests {
             schedule_menu_limit: 3,
             hotness_z_threshold: 3.0,
             hotness_min_observations: 10,
+            hotness_min_streams: 5,
             notify_on_hot: false,
             followed_categories: vec![FollowedCategory {
                 id: "12345".to_string(),
@@ -499,6 +510,10 @@ mod tests {
         assert_eq!(
             deserialized.hotness_min_observations,
             original.hotness_min_observations
+        );
+        assert_eq!(
+            deserialized.hotness_min_streams,
+            original.hotness_min_streams
         );
         assert_eq!(deserialized.notify_on_hot, original.notify_on_hot);
     }
@@ -593,6 +608,12 @@ mod tests {
     }
 
     #[test]
+    fn default_hotness_min_streams_is_7() {
+        let config = Config::default();
+        assert_eq!(config.hotness_min_streams, DEFAULT_HOTNESS_MIN_STREAMS);
+    }
+
+    #[test]
     fn default_notify_on_hot_is_true() {
         let config = Config::default();
         assert_eq!(config.notify_on_hot, DEFAULT_NOTIFY_ON_HOT);
@@ -607,6 +628,7 @@ mod tests {
             config.hotness_min_observations,
             DEFAULT_HOTNESS_MIN_OBSERVATIONS
         );
+        assert_eq!(config.hotness_min_streams, DEFAULT_HOTNESS_MIN_STREAMS);
         assert_eq!(config.notify_on_hot, DEFAULT_NOTIFY_ON_HOT);
     }
 
@@ -615,11 +637,13 @@ mod tests {
         let json = r#"{
             "hotness_z_threshold": 3.5,
             "hotness_min_observations": 10,
+            "hotness_min_streams": 5,
             "notify_on_hot": false
         }"#;
         let config: Config = serde_json::from_str(json).unwrap();
         assert!((config.hotness_z_threshold - 3.5).abs() < f64::EPSILON);
         assert_eq!(config.hotness_min_observations, 10);
+        assert_eq!(config.hotness_min_streams, 5);
         assert!(!config.notify_on_hot);
     }
 

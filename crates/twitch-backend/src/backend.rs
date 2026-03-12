@@ -498,6 +498,7 @@ impl Backend {
                     observed_at: now_ts,
                     stream_age_min: age,
                     viewer_count: s.viewer_count,
+                    stream_started_at: s.started_at.timestamp(),
                 }
             })
             .collect();
@@ -567,6 +568,7 @@ impl Backend {
                 let hotness_cfg = HotnessConfig {
                     z_threshold,
                     min_observations: cfg.hotness_min_observations,
+                    min_streams: cfg.hotness_min_streams,
                 };
 
                 if let Some(info) =
@@ -631,6 +633,7 @@ impl Backend {
             let hotness_cfg = HotnessConfig {
                 z_threshold,
                 min_observations: cfg.hotness_min_observations,
+                min_streams: cfg.hotness_min_streams,
             };
 
             if let Some(info) =
@@ -902,6 +905,7 @@ impl Backend {
                         stddev: Some(info.stddev),
                         z_score: Some(info.z_score),
                         observation_count: info.observation_count,
+                        distinct_streams: info.distinct_streams,
                         is_hot: info.is_hot,
                     }
                 } else {
@@ -913,6 +917,7 @@ impl Backend {
                         stddev: None,
                         z_score: None,
                         observation_count: 0,
+                        distinct_streams: 0,
                         is_hot: false,
                     }
                 }

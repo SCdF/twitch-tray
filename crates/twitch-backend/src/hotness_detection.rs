@@ -5,6 +5,7 @@ pub struct ViewerObservation {
     pub observed_at: i64,
     pub stream_age_min: i64,
     pub viewer_count: u32,
+    pub stream_started_at: i64,
 }
 
 /// Precomputed stats for a stream-age window.
@@ -13,6 +14,7 @@ pub struct BucketStats {
     pub mean: f64,
     pub stddev: f64,
     pub count: usize,
+    pub distinct_streams: usize,
 }
 
 /// Hotness assessment for a single stream.
@@ -25,6 +27,7 @@ pub struct HotnessInfo {
     pub stddev: f64,
     pub current_viewers: u32,
     pub observation_count: usize,
+    pub distinct_streams: usize,
 }
 
 /// Configuration for hotness detection.
@@ -32,6 +35,7 @@ pub struct HotnessInfo {
 pub struct HotnessConfig {
     pub z_threshold: f64,
     pub min_observations: usize,
+    pub min_streams: usize,
 }
 
 /// Computes the stream-age window around a given age point.
@@ -47,13 +51,14 @@ pub fn compute_age_window(stream_age_min: i64) -> (i64, i64) {
 
 /// Computes mean and population standard deviation from viewer counts.
 ///
-/// Empty input yields count=0, mean=0.0, stddev=0.0.
+/// Empty input yields count=0, mean=0.0, stddev=0.0, distinct_streams=0.
 pub fn compute_bucket_stats(observations: &[ViewerObservation]) -> BucketStats {
     if observations.is_empty() {
         return BucketStats {
             mean: 0.0,
             stddev: 0.0,
             count: 0,
+            distinct_streams: 0,
         };
     }
 
@@ -70,10 +75,14 @@ pub fn compute_bucket_stats(observations: &[ViewerObservation]) -> BucketStats {
         .sum::<f64>()
         / count as f64;
 
+    let distinct_streams: std::collections::HashSet<i64> =
+        observations.iter().map(|o| o.stream_started_at).collect();
+
     BucketStats {
         mean,
         stddev: variance.sqrt(),
         count,
+        distinct_streams: distinct_streams.len(),
     }
 }
 
@@ -87,7 +96,10 @@ pub fn compute_hotness(
     stats: &BucketStats,
     config: &HotnessConfig,
 ) -> Option<HotnessInfo> {
-    if stats.count < config.min_observations || stats.stddev == 0.0 {
+    if stats.count < config.min_observations
+        || stats.distinct_streams < config.min_streams
+        || stats.stddev == 0.0
+    {
         return None;
     }
 
@@ -101,6 +113,7 @@ pub fn compute_hotness(
         stddev: stats.stddev,
         current_viewers,
         observation_count: stats.count,
+        distinct_streams: stats.distinct_streams,
     })
 }
 
@@ -144,11 +157,21 @@ mod tests {
     use super::*;
 
     fn obs(broadcaster_id: i64, stream_age_min: i64, viewer_count: u32) -> ViewerObservation {
+        obs_stream(broadcaster_id, stream_age_min, viewer_count, 1_000_000)
+    }
+
+    fn obs_stream(
+        broadcaster_id: i64,
+        stream_age_min: i64,
+        viewer_count: u32,
+        stream_started_at: i64,
+    ) -> ViewerObservation {
         ViewerObservation {
             broadcaster_id,
             observed_at: 1_700_000_000,
             stream_age_min,
             viewer_count,
+            stream_started_at,
         }
     }
 
@@ -229,10 +252,12 @@ mod tests {
             mean: 2000.0,
             stddev: 500.0,
             count: 10,
+            distinct_streams: 5,
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
             min_observations: 5,
+            min_streams: 1,
         };
         let info = compute_hotness("123", 3500, &stats, &config).unwrap();
         assert!((info.z_score - 3.0).abs() < f64::EPSILON);
@@ -244,10 +269,12 @@ mod tests {
             mean: 2000.0,
             stddev: 500.0,
             count: 10,
+            distinct_streams: 5,
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
             min_observations: 5,
+            min_streams: 1,
         };
         let info = compute_hotness("123", 4000, &stats, &config).unwrap();
         assert!(info.is_hot);
@@ -261,10 +288,12 @@ mod tests {
             mean: 2000.0,
             stddev: 500.0,
             count: 10,
+            distinct_streams: 5,
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
             min_observations: 5,
+            min_streams: 1,
         };
         let info = compute_hotness("123", 2500, &stats, &config).unwrap();
         assert!(!info.is_hot);
@@ -276,10 +305,12 @@ mod tests {
             mean: 2000.0,
             stddev: 500.0,
             count: 10,
+            distinct_streams: 5,
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
             min_observations: 5,
+            min_streams: 1,
         };
         // 2000 + 2*500 = 3000 → z=2.0, exactly at threshold → is_hot (>=)
         let info = compute_hotness("123", 3000, &stats, &config).unwrap();
@@ -292,10 +323,12 @@ mod tests {
             mean: 2000.0,
             stddev: 500.0,
             count: 3,
+            distinct_streams: 2,
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
             min_observations: 5,
+            min_streams: 1,
         };
         assert!(compute_hotness("123", 5000, &stats, &config).is_none());
     }
@@ -306,10 +339,12 @@ mod tests {
             mean: 2000.0,
             stddev: 0.0,
             count: 10,
+            distinct_streams: 5,
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
             min_observations: 5,
+            min_streams: 1,
         };
         assert!(compute_hotness("123", 5000, &stats, &config).is_none());
     }
@@ -352,6 +387,7 @@ mod tests {
                     mean: 100.0,
                     stddev: 10.0,
                     count: 5,
+                    distinct_streams: 3,
                 },
             ),
             (
@@ -360,6 +396,7 @@ mod tests {
                     mean: 500.0,
                     stddev: 50.0,
                     count: 5,
+                    distinct_streams: 3,
                 },
             ),
             (
@@ -368,6 +405,7 @@ mod tests {
                     mean: 1000.0,
                     stddev: 100.0,
                     count: 5,
+                    distinct_streams: 3,
                 },
             ),
         ];
@@ -382,6 +420,59 @@ mod tests {
     }
 
     #[test]
+    fn not_hot_when_insufficient_distinct_streams() {
+        let stats = BucketStats {
+            mean: 2000.0,
+            stddev: 500.0,
+            count: 50,
+            distinct_streams: 2,
+        };
+        let config = HotnessConfig {
+            z_threshold: 2.0,
+            min_observations: 5,
+            min_streams: 7,
+        };
+        assert!(compute_hotness("123", 5000, &stats, &config).is_none());
+    }
+
+    #[test]
+    fn hot_when_sufficient_distinct_streams() {
+        let stats = BucketStats {
+            mean: 2000.0,
+            stddev: 500.0,
+            count: 50,
+            distinct_streams: 7,
+        };
+        let config = HotnessConfig {
+            z_threshold: 2.0,
+            min_observations: 5,
+            min_streams: 7,
+        };
+        let info = compute_hotness("123", 5000, &stats, &config).unwrap();
+        assert!(info.is_hot);
+    }
+
+    #[test]
+    fn bucket_stats_counts_distinct_streams() {
+        // 3 observations from 2 distinct streams
+        let observations = vec![
+            obs_stream(1, 10, 100, 1_000_000),
+            obs_stream(1, 11, 200, 1_000_000),
+            obs_stream(1, 12, 300, 2_000_000),
+        ];
+        let stats = compute_bucket_stats(&observations);
+        assert_eq!(stats.count, 3);
+        assert_eq!(stats.distinct_streams, 2);
+    }
+
+    #[test]
+    fn bucket_stats_single_stream_has_one_distinct() {
+        let observations = vec![obs(1, 10, 100), obs(1, 11, 200), obs(1, 12, 300)];
+        let stats = compute_bucket_stats(&observations);
+        assert_eq!(stats.distinct_streams, 1);
+    }
+
+    #[test]
     fn find_nearest_bucket_exact_match() {
         let profile = vec![
             (
@@ -390,6 +481,7 @@ mod tests {
                     mean: 100.0,
                     stddev: 10.0,
                     count: 5,
+                    distinct_streams: 3,
                 },
             ),
             (
@@ -398,6 +490,7 @@ mod tests {
                     mean: 500.0,
                     stddev: 50.0,
                     count: 5,
+                    distinct_streams: 3,
                 },
             ),
         ];

@@ -232,6 +232,7 @@ mod tests {
             stddev: Some(500.0),
             z_score: Some(6.0),
             observation_count: 20,
+            distinct_streams: 10,
             is_hot: true,
         };
         services.set_hotness_entries(vec![entry]);

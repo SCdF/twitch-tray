@@ -24,6 +24,7 @@ const notifyOnCategoryInput = document.getElementById('notify_on_category');
 const notifyOnHotInput = document.getElementById('notify_on_hot');
 const hotnessZThresholdInput = document.getElementById('hotness_z_threshold');
 const hotnessMinObservationsInput = document.getElementById('hotness_min_observations');
+const hotnessMinStreamsInput = document.getElementById('hotness_min_streams');
 const liveMenuLimitInput = document.getElementById('live_menu_limit');
 const scheduleMenuLimitInput = document.getElementById('schedule_menu_limit');
 const categorySearchInput = document.getElementById('category_search');
@@ -101,6 +102,7 @@ function populateForm() {
   notifyOnHotInput.checked = config.notify_on_hot;
   hotnessZThresholdInput.value = config.hotness_z_threshold;
   hotnessMinObservationsInput.value = config.hotness_min_observations;
+  hotnessMinStreamsInput.value = config.hotness_min_streams;
   scheduleLookaheadInput.value = config.schedule_lookahead_hours;
   liveMenuLimitInput.value = config.live_menu_limit;
   scheduleMenuLimitInput.value = config.schedule_menu_limit;
@@ -398,7 +400,7 @@ function setupEventListeners() {
   });
 
   // Auto-save on general settings changes
-  [pollIntervalInput, notifyMaxGapInput, scheduleLookaheadInput, liveMenuLimitInput, scheduleMenuLimitInput, hotnessZThresholdInput, hotnessMinObservationsInput].forEach(input => {
+  [pollIntervalInput, notifyMaxGapInput, scheduleLookaheadInput, liveMenuLimitInput, scheduleMenuLimitInput, hotnessZThresholdInput, hotnessMinObservationsInput, hotnessMinStreamsInput].forEach(input => {
     input.addEventListener('change', () => autoSave());
   });
   [notifyOnLiveInput, notifyOnCategoryInput, notifyOnHotInput].forEach(input => {
@@ -489,6 +491,7 @@ async function autoSave() {
         notify_on_hot: notifyOnHotInput.checked,
         hotness_z_threshold: parseFloat(hotnessZThresholdInput.value) || 2.0,
         hotness_min_observations: parseInt(hotnessMinObservationsInput.value, 10) || 5,
+        hotness_min_streams: parseInt(hotnessMinStreamsInput.value, 10) || 7,
         schedule_lookahead_hours: parseInt(scheduleLookaheadInput.value, 10) || 6,
         live_menu_limit: parseInt(liveMenuLimitInput.value, 10) || 10,
         schedule_menu_limit: parseInt(scheduleMenuLimitInput.value, 10) || 5,
@@ -501,6 +504,7 @@ async function autoSave() {
       newConfig.notify_max_gap_min = Math.max(1, Math.min(60, newConfig.notify_max_gap_min));
       newConfig.hotness_z_threshold = Math.max(0.5, Math.min(5.0, newConfig.hotness_z_threshold));
       newConfig.hotness_min_observations = Math.max(1, Math.min(50, newConfig.hotness_min_observations));
+      newConfig.hotness_min_streams = Math.max(1, Math.min(30, newConfig.hotness_min_streams));
       newConfig.schedule_lookahead_hours = Math.max(1, Math.min(72, newConfig.schedule_lookahead_hours));
       newConfig.live_menu_limit = Math.max(1, Math.min(50, newConfig.live_menu_limit));
       newConfig.schedule_menu_limit = Math.max(1, Math.min(20, newConfig.schedule_menu_limit));
@@ -655,7 +659,7 @@ function renderDebugHotnessTable(entries) {
   if (!tbody) return;
 
   if (entries.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#808080;padding:20px">No live streams with hotness data</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#808080;padding:20px">No live streams with hotness data</td></tr>';
     return;
   }
 
@@ -672,6 +676,7 @@ function renderDebugHotnessTable(entries) {
       <td>${stddev}</td>
       <td>${zScore}</td>
       <td>${e.observation_count}</td>
+      <td>${e.distinct_streams}</td>
       <td>${hotIcon}</td>
     </tr>`;
   }).join('');

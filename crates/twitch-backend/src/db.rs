@@ -69,10 +69,11 @@ impl Database {
                 ON scheduled_streams(broadcaster_id);
 
             CREATE TABLE IF NOT EXISTS viewer_observations (
-                broadcaster_id INTEGER NOT NULL,
-                observed_at    INTEGER NOT NULL,
-                stream_age_min INTEGER NOT NULL,
-                viewer_count   INTEGER NOT NULL
+                broadcaster_id    INTEGER NOT NULL,
+                observed_at       INTEGER NOT NULL,
+                stream_age_min    INTEGER NOT NULL,
+                viewer_count      INTEGER NOT NULL,
+                stream_started_at INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_vo_broadcaster_age
                 ON viewer_observations(broadcaster_id, stream_age_min);
@@ -85,6 +86,16 @@ impl Database {
             .is_ok();
         if !has_tz_col {
             conn.execute_batch("ALTER TABLE followed ADD COLUMN broadcaster_timezone TEXT")?;
+        }
+
+        // Migrate: add stream_started_at column to viewer_observations if missing
+        let has_stream_started_at: bool = conn
+            .prepare("SELECT stream_started_at FROM viewer_observations LIMIT 0")
+            .is_ok();
+        if !has_stream_started_at {
+            conn.execute_batch(
+                "ALTER TABLE viewer_observations ADD COLUMN stream_started_at INTEGER NOT NULL DEFAULT 0",
+            )?;
         }
 
         Ok(Self {
@@ -485,8 +496,8 @@ impl Database {
     ) -> anyhow::Result<()> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "INSERT INTO viewer_observations (broadcaster_id, observed_at, stream_age_min, viewer_count)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO viewer_observations (broadcaster_id, observed_at, stream_age_min, viewer_count, stream_started_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
         )?;
         for obs in observations {
             stmt.execute(rusqlite::params![
@@ -494,6 +505,7 @@ impl Database {
                 obs.observed_at,
                 obs.stream_age_min,
                 obs.viewer_count,
+                obs.stream_started_at,
             ])?;
         }
         Ok(())
@@ -511,7 +523,7 @@ impl Database {
     ) -> anyhow::Result<Vec<ViewerObservation>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT broadcaster_id, observed_at, stream_age_min, viewer_count
+            "SELECT broadcaster_id, observed_at, stream_age_min, viewer_count, stream_started_at
              FROM viewer_observations
              WHERE broadcaster_id = ?1
                AND stream_age_min BETWEEN ?2 AND ?3
@@ -526,6 +538,7 @@ impl Database {
                     observed_at: row.get(1)?,
                     stream_age_min: row.get(2)?,
                     viewer_count: row.get(3)?,
+                    stream_started_at: row.get(4)?,
                 })
             },
         )?;
@@ -616,10 +629,11 @@ mod tests {
                 ON scheduled_streams(broadcaster_id);
 
             CREATE TABLE IF NOT EXISTS viewer_observations (
-                broadcaster_id INTEGER NOT NULL,
-                observed_at    INTEGER NOT NULL,
-                stream_age_min INTEGER NOT NULL,
-                viewer_count   INTEGER NOT NULL
+                broadcaster_id    INTEGER NOT NULL,
+                observed_at       INTEGER NOT NULL,
+                stream_age_min    INTEGER NOT NULL,
+                viewer_count      INTEGER NOT NULL,
+                stream_started_at INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_vo_broadcaster_age
                 ON viewer_observations(broadcaster_id, stream_age_min);
@@ -1077,24 +1091,28 @@ mod tests {
                 observed_at: 1_700_000_000,
                 stream_age_min: 5,
                 viewer_count: 200,
+                stream_started_at: 1_699_999_000,
             },
             ViewerObservation {
                 broadcaster_id: 100,
                 observed_at: 1_700_000_000,
                 stream_age_min: 15,
                 viewer_count: 500,
+                stream_started_at: 1_699_999_000,
             },
             ViewerObservation {
                 broadcaster_id: 100,
                 observed_at: 1_700_000_000,
                 stream_age_min: 30,
                 viewer_count: 1000,
+                stream_started_at: 1_699_999_000,
             },
             ViewerObservation {
                 broadcaster_id: 100,
                 observed_at: 1_700_000_000,
                 stream_age_min: 60,
                 viewer_count: 2000,
+                stream_started_at: 1_699_999_000,
             },
         ];
         db.record_viewer_observations(&observations).unwrap();
@@ -1120,12 +1138,14 @@ mod tests {
                 observed_at: old_ts,
                 stream_age_min: 10,
                 viewer_count: 500,
+                stream_started_at: old_ts - 600,
             },
             ViewerObservation {
                 broadcaster_id: 100,
                 observed_at: recent_ts,
                 stream_age_min: 10,
                 viewer_count: 800,
+                stream_started_at: recent_ts - 600,
             },
         ];
         db.record_viewer_observations(&observations).unwrap();
@@ -1145,6 +1165,7 @@ mod tests {
             observed_at: 1_700_000_123,
             stream_age_min: 25,
             viewer_count: 1234,
+            stream_started_at: 1_699_999_000,
         };
         db.record_viewer_observations(&[obs]).unwrap();
 
@@ -1154,6 +1175,7 @@ mod tests {
         assert_eq!(results[0].observed_at, 1_700_000_123);
         assert_eq!(results[0].stream_age_min, 25);
         assert_eq!(results[0].viewer_count, 1234);
+        assert_eq!(results[0].stream_started_at, 1_699_999_000);
     }
 
     #[test]
@@ -1165,12 +1187,14 @@ mod tests {
                 observed_at: 1_700_000_000,
                 stream_age_min: 10,
                 viewer_count: 500,
+                stream_started_at: 1_699_999_000,
             },
             ViewerObservation {
                 broadcaster_id: 100,
                 observed_at: 1_700_001_000,
                 stream_age_min: 10,
                 viewer_count: 800,
+                stream_started_at: 1_700_000_500,
             },
         ];
         db.record_viewer_observations(&observations).unwrap();

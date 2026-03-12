@@ -21,6 +21,7 @@ pub struct DebugHotnessEntry {
     pub stddev: Option<f64>,
     pub z_score: Option<f64>,
     pub observation_count: usize,
+    pub distinct_streams: usize,
     pub is_hot: bool,
 }
 
