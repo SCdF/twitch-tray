@@ -511,6 +511,33 @@ impl Database {
         Ok(())
     }
 
+    /// Returns all viewer observations recorded after `since` (unix timestamp).
+    pub fn get_all_recent_observations(
+        &self,
+        since: i64,
+    ) -> anyhow::Result<Vec<ViewerObservation>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT broadcaster_id, observed_at, stream_age_min, viewer_count, stream_started_at
+             FROM viewer_observations
+             WHERE observed_at > ?1",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![since], |row| {
+            Ok(ViewerObservation {
+                broadcaster_id: row.get(0)?,
+                observed_at: row.get(1)?,
+                stream_age_min: row.get(2)?,
+                viewer_count: row.get(3)?,
+                stream_started_at: row.get(4)?,
+            })
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
     /// Returns viewer observations for a broadcaster within a stream-age window,
     /// filtered to observations recorded between `since` and `until` (unix timestamps).
     pub fn get_viewer_observations(

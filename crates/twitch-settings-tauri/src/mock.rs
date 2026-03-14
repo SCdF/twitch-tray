@@ -3,7 +3,9 @@
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-use twitch_backend::app_services::{AppServices, DebugHotnessEntry, DebugStreamEntry};
+use twitch_backend::app_services::{
+    AppServices, DebugHotnessEntry, DebugHotnessProfileEntry, DebugStreamEntry,
+};
 use twitch_backend::config::{Config, FollowedCategory};
 use twitch_backend::twitch::{ApiError, Category, FollowedChannel};
 
@@ -115,5 +117,9 @@ impl AppServices for MockAppServices {
     async fn get_debug_hotness_data(&self) -> Vec<DebugHotnessEntry> {
         self.hotness_call_count.fetch_add(1, Ordering::SeqCst);
         self.hotness_entries.lock().unwrap().clone()
+    }
+
+    async fn get_debug_hotness_profiles(&self) -> Vec<DebugHotnessProfileEntry> {
+        Vec::new()
     }
 }

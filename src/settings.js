@@ -44,6 +44,10 @@ let debugAllEntries = [];
 let debugFilter = '';
 let debugLoading = false;
 let debugDataLoaded = false;
+let debugHotnessLoaded = false;
+let debugProfilesFilter = '';
+let debugAllProfiles = [];
+let debugScheduleLoaded = false;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
@@ -349,12 +353,11 @@ function setupEventListeners() {
       tab.classList.add('active');
       document.getElementById(targetId).classList.add('active');
 
-      // Load initial debug data on first open, then scroll to now
-      if (targetId === 'debug' && !debugDataLoaded) {
-        debugDataLoaded = true;
+      // Load hotness debug data on first open of the debug tab
+      if (targetId === 'debug' && !debugHotnessLoaded) {
+        debugHotnessLoaded = true;
+        await loadDebugHotnessProfiles();
         await loadDebugHotness();
-        await loadDebugChunk(debugWindowStart, debugWindowEnd);
-        scrollToNow();
       }
     });
   });
@@ -682,8 +685,185 @@ function renderDebugHotnessTable(entries) {
   }).join('');
 }
 
-// Set up debug filter and scroll handlers once the DOM is ready
+// === Debug hotness profiles ===
+
+const BUCKET_AGE_LABELS = {
+  0: '0m', 5: '5m', 10: '10m', 15: '15m', 30: '30m', 45: '45m',
+  60: '1h', 90: '1.5h', 120: '2h', 180: '3h', 240: '4h', 360: '6h'
+};
+
+async function loadDebugHotnessProfiles() {
+  try {
+    debugAllProfiles = await invoke('get_debug_hotness_profiles');
+    renderDebugProfilesTable();
+  } catch (e) {
+    console.error('Failed to load hotness profiles:', e);
+  }
+}
+
+function renderDebugProfilesTable() {
+  const thead = document.getElementById('debug-profiles-thead');
+  const tbody = document.getElementById('debug-profiles-tbody');
+  if (!thead || !tbody) return;
+
+  if (debugAllProfiles.length === 0) {
+    thead.innerHTML = '';
+    tbody.innerHTML = '<tr><td colspan="1" style="text-align:center;color:#808080;padding:20px">No observation data yet</td></tr>';
+    return;
+  }
+
+  // Sort alphabetically by streamer name
+  const sorted = [...debugAllProfiles].sort((a, b) =>
+    a.broadcaster_name.localeCompare(b.broadcaster_name, undefined, { sensitivity: 'base' })
+  );
+
+  // Filter by streamer name
+  const lowerFilter = debugProfilesFilter.toLowerCase();
+  const profiles = lowerFilter
+    ? sorted.filter(p => p.broadcaster_name.toLowerCase().includes(lowerFilter))
+    : sorted;
+
+  if (profiles.length === 0) {
+    thead.innerHTML = '';
+    tbody.innerHTML = '<tr><td colspan="1" style="text-align:center;color:#808080;padding:20px">No matches</td></tr>';
+    return;
+  }
+
+  // Collect all age points from first profile (they're all the same)
+  const agePoints = profiles[0].buckets.map(b => b.age_point);
+  const minObs = config ? config.hotness_min_observations : 5;
+  const minStreams = config ? config.hotness_min_streams : 7;
+
+  // Header row
+  thead.innerHTML = `<tr>
+    <th>Streamer</th>
+    ${agePoints.map(a => `<th>${BUCKET_AGE_LABELS[a] || a + 'm'}</th>`).join('')}
+  </tr>`;
+
+  // Body rows
+  tbody.innerHTML = profiles.map(p => {
+    const bucketCells = p.buckets.map(b => {
+      const isEmpty = b.count === 0;
+      const hasSufficientData = b.count >= minObs && b.distinct_streams >= minStreams;
+      const isActiveBucket = p.is_live && p.current_bucket_age === b.age_point;
+
+      if (isEmpty) {
+        return `<td class="bucket-cell bucket-empty">\u2014</td>`;
+      }
+
+      const meanStr = b.mean.toFixed(0);
+      const stdStr = b.stddev.toFixed(0);
+      const cellText = `${meanStr}\u00B1${stdStr}`;
+
+      const classes = ['bucket-cell'];
+      if (hasSufficientData) {
+        classes.push('bucket-bold');
+      } else {
+        classes.push('bucket-dim');
+      }
+      if (isActiveBucket) {
+        classes.push('bucket-active');
+      }
+
+      // Tooltip data attributes
+      const zScore = (isActiveBucket && p.current_viewers != null && b.stddev > 0)
+        ? ((p.current_viewers - b.mean) / b.stddev).toFixed(2)
+        : null;
+
+      const tooltipLines = [
+        `Age bucket: ${BUCKET_AGE_LABELS[b.age_point] || b.age_point + 'm'}`,
+        `Mean: ${b.mean.toFixed(1)}`,
+        `StdDev: ${b.stddev.toFixed(1)}`,
+        `Observations: ${b.count}`,
+        `Distinct streams: ${b.distinct_streams}`,
+        `Sufficient data: ${hasSufficientData ? 'Yes' : 'No (need ' + minObs + ' obs, ' + minStreams + ' streams)'}`,
+      ];
+      if (isActiveBucket && p.current_viewers != null) {
+        tooltipLines.push(`Current viewers: ${p.current_viewers.toLocaleString()}`);
+        if (zScore != null) {
+          tooltipLines.push(`Z-score: ${zScore}\u03C3`);
+        }
+      }
+
+      return `<td class="${classes.join(' ')}"
+        data-tooltip="${escapeHtml(tooltipLines.join('\n'))}"
+        onmouseenter="showBucketTooltip(event)" onmouseleave="hideBucketTooltip()">${cellText}</td>`;
+    }).join('');
+
+    const namePrefix = p.is_live ? '\u{1F534} ' : '';
+    return `<tr>${'<td>' + namePrefix + escapeHtml(p.broadcaster_name) + '</td>'}${bucketCells}</tr>`;
+  }).join('');
+}
+
+let tooltipEl = null;
+
+function showBucketTooltip(event) {
+  hideBucketTooltip();
+  const text = event.target.dataset.tooltip;
+  if (!text) return;
+
+  tooltipEl = document.createElement('div');
+  tooltipEl.className = 'bucket-tooltip';
+  tooltipEl.textContent = text;
+  document.body.appendChild(tooltipEl);
+
+  const rect = event.target.getBoundingClientRect();
+  tooltipEl.style.left = rect.left + 'px';
+  tooltipEl.style.top = (rect.bottom + 4) + 'px';
+
+  // Keep tooltip in viewport
+  requestAnimationFrame(() => {
+    if (!tooltipEl) return;
+    const tr = tooltipEl.getBoundingClientRect();
+    if (tr.right > window.innerWidth) {
+      tooltipEl.style.left = (window.innerWidth - tr.width - 8) + 'px';
+    }
+    if (tr.bottom > window.innerHeight) {
+      tooltipEl.style.top = (rect.top - tr.height - 4) + 'px';
+    }
+  });
+}
+
+function hideBucketTooltip() {
+  if (tooltipEl) {
+    tooltipEl.remove();
+    tooltipEl = null;
+  }
+}
+
+window.showBucketTooltip = showBucketTooltip;
+window.hideBucketTooltip = hideBucketTooltip;
+
+// Set up debug filter, scroll handlers, and subtab switching once the DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
+  // Debug subtab switching
+  document.querySelectorAll('.debug-subtab').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const targetTab = btn.dataset.debugTab;
+
+      document.querySelectorAll('.debug-subtab').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.debug-subpane').forEach(p => p.classList.remove('active'));
+
+      btn.classList.add('active');
+      document.getElementById(`debug-${targetTab}-pane`).classList.add('active');
+
+      // Lazy-load schedule data on first open
+      if (targetTab === 'schedule' && !debugScheduleLoaded) {
+        debugScheduleLoaded = true;
+        await loadDebugChunk(debugWindowStart, debugWindowEnd);
+        scrollToNow();
+      }
+    });
+  });
+
+  const profilesFilterInput = document.getElementById('debug-profiles-filter');
+  if (profilesFilterInput) {
+    profilesFilterInput.addEventListener('input', e => {
+      debugProfilesFilter = e.target.value;
+      renderDebugProfilesTable();
+    });
+  }
+
   const filterInput = document.getElementById('debug-filter');
   if (filterInput) {
     filterInput.addEventListener('input', e => {

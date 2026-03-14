@@ -25,6 +25,28 @@ pub struct DebugHotnessEntry {
     pub is_hot: bool,
 }
 
+/// Debug view: stats for a single age bucket.
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+pub struct DebugBucketEntry {
+    pub age_point: i64,
+    pub mean: f64,
+    pub stddev: f64,
+    pub count: usize,
+    pub distinct_streams: usize,
+}
+
+/// Debug view: full hotness profile for a single broadcaster.
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+pub struct DebugHotnessProfileEntry {
+    pub broadcaster_name: String,
+    pub broadcaster_login: String,
+    pub broadcaster_id: String,
+    pub is_live: bool,
+    pub current_bucket_age: Option<i64>,
+    pub current_viewers: Option<u32>,
+    pub buckets: Vec<DebugBucketEntry>,
+}
+
 /// Input port for Tauri command handlers.
 ///
 /// Commands take `State<'_, Arc<dyn AppServices>>` so they can be tested
@@ -44,6 +66,7 @@ pub trait AppServices: Send + Sync {
     async fn refresh_schedules_from_db(&self);
     async fn get_debug_schedule_data(&self, start: i64, end: i64) -> Vec<DebugStreamEntry>;
     async fn get_debug_hotness_data(&self) -> Vec<DebugHotnessEntry>;
+    async fn get_debug_hotness_profiles(&self) -> Vec<DebugHotnessProfileEntry>;
 }
 
 #[cfg(test)]
@@ -172,6 +195,10 @@ pub mod mock {
         async fn get_debug_hotness_data(&self) -> Vec<super::DebugHotnessEntry> {
             self.hotness_call_count.fetch_add(1, Ordering::SeqCst);
             self.hotness_entries.lock().unwrap().clone()
+        }
+
+        async fn get_debug_hotness_profiles(&self) -> Vec<super::DebugHotnessProfileEntry> {
+            Vec::new()
         }
     }
 }

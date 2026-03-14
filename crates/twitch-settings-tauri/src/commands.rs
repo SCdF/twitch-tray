@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use twitch_backend::app_services::{AppServices, DebugHotnessEntry, DebugStreamEntry};
+use twitch_backend::app_services::{
+    AppServices, DebugHotnessEntry, DebugHotnessProfileEntry, DebugStreamEntry,
+};
 use twitch_backend::config::{Config, FollowedCategory};
 use twitch_backend::twitch::{Category, FollowedChannel};
 
@@ -62,6 +64,14 @@ pub async fn get_debug_hotness_data(
     app: State<'_, Arc<dyn AppServices>>,
 ) -> Result<Vec<DebugHotnessEntry>, String> {
     Ok(app.get_debug_hotness_data().await)
+}
+
+/// Returns hotness profiles for all followed streamers with observation history.
+#[tauri::command]
+pub async fn get_debug_hotness_profiles(
+    app: State<'_, Arc<dyn AppServices>>,
+) -> Result<Vec<DebugHotnessProfileEntry>, String> {
+    Ok(app.get_debug_hotness_profiles().await)
 }
 
 /// Returns raw history and inferred schedule entries for the given Unix timestamp window.

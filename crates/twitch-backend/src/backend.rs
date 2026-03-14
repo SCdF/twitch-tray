@@ -925,6 +925,88 @@ impl Backend {
             .collect()
     }
 
+    pub(crate) async fn get_debug_hotness_profiles(
+        &self,
+    ) -> Vec<crate::app_services::DebugHotnessProfileEntry> {
+        use crate::app_services::{DebugBucketEntry, DebugHotnessProfileEntry};
+
+        let channels = self.state.get_followed_channels().await;
+        let streams = self.state.get_followed_streams().await;
+        let now = Utc::now();
+        let since = now.timestamp() - OBSERVATION_RETENTION_SECS;
+
+        // Build a map of live streams by broadcaster_id
+        let live_map: HashMap<&str, &crate::twitch::Stream> =
+            streams.iter().map(|s| (s.user_id.as_str(), s)).collect();
+
+        // Load all recent observations and group by broadcaster_id
+        let all_obs = match self.db.get_all_recent_observations(since) {
+            Ok(obs) => obs,
+            Err(e) => {
+                tracing::error!("Failed to load observations for debug profiles: {}", e);
+                return Vec::new();
+            }
+        };
+
+        let mut obs_by_broadcaster: HashMap<i64, Vec<_>> = HashMap::new();
+        for obs in all_obs {
+            obs_by_broadcaster
+                .entry(obs.broadcaster_id)
+                .or_default()
+                .push(obs);
+        }
+
+        channels
+            .iter()
+            .filter_map(|ch| {
+                let broadcaster_id: i64 = ch.broadcaster_id.parse().ok()?;
+                let obs = obs_by_broadcaster.get(&broadcaster_id);
+
+                // Skip channels with no observation history
+                let obs = obs?;
+
+                let profile = compute_hotness_profile(obs, HOTNESS_AGE_POINTS);
+                let is_live = live_map.contains_key(ch.broadcaster_id.as_str());
+
+                let (current_bucket_age, current_viewers) =
+                    if let Some(stream) = live_map.get(ch.broadcaster_id.as_str()) {
+                        let age = (now - stream.started_at).num_minutes().max(0);
+                        let nearest = find_nearest_bucket(&profile, age).map(|_| {
+                            // Find the actual age point of the nearest bucket
+                            profile
+                                .iter()
+                                .min_by_key(|(a, _)| (a - age).unsigned_abs())
+                                .map_or(0, |(a, _)| *a)
+                        });
+                        (nearest, Some(stream.viewer_count))
+                    } else {
+                        (None, None)
+                    };
+
+                let buckets = profile
+                    .iter()
+                    .map(|(age_point, stats)| DebugBucketEntry {
+                        age_point: *age_point,
+                        mean: stats.mean,
+                        stddev: stats.stddev,
+                        count: stats.count,
+                        distinct_streams: stats.distinct_streams,
+                    })
+                    .collect();
+
+                Some(DebugHotnessProfileEntry {
+                    broadcaster_name: ch.broadcaster_name.clone(),
+                    broadcaster_login: ch.broadcaster_login.clone(),
+                    broadcaster_id: ch.broadcaster_id.clone(),
+                    is_live,
+                    current_bucket_age,
+                    current_viewers,
+                    buckets,
+                })
+            })
+            .collect()
+    }
+
     pub(crate) async fn get_debug_schedule_data(
         &self,
         start: i64,
@@ -1012,6 +1094,12 @@ impl AppServices for Backend {
 
     async fn get_debug_hotness_data(&self) -> Vec<crate::app_services::DebugHotnessEntry> {
         Backend::get_debug_hotness_data(self).await
+    }
+
+    async fn get_debug_hotness_profiles(
+        &self,
+    ) -> Vec<crate::app_services::DebugHotnessProfileEntry> {
+        Backend::get_debug_hotness_profiles(self).await
     }
 }
 

@@ -132,43 +132,63 @@
       </section>
       <!-- Debug Pane (only shown in debug builds) -->
       <section id="debug" class="pane">
-        <h2>Debug: Hotness View</h2>
-        <div id="debug-hotness-container">
-          <table id="debug-hotness-table">
-            <thead>
-              <tr>
-                <th>Streamer</th>
-                <th>Viewers</th>
-                <th>Mean</th>
-                <th>StdDev</th>
-                <th>Z-Score</th>
-                <th>Obs</th>
-                <th>Streams</th>
-                <th>Hot</th>
-              </tr>
-            </thead>
-            <tbody id="debug-hotness-tbody"></tbody>
-          </table>
+        <nav class="debug-subtabs">
+          <button class="debug-subtab active" data-debug-tab="hotness">Hotness Debug</button>
+          <button class="debug-subtab" data-debug-tab="schedule">Schedule Debug</button>
+        </nav>
+
+        <div id="debug-hotness-pane" class="debug-subpane active">
+          <h2>Hotness Profiles</h2>
+          <div class="form-group">
+            <input type="text" id="debug-profiles-filter" placeholder="Filter by streamer...">
+          </div>
+          <div id="debug-profiles-container">
+            <table id="debug-profiles-table">
+              <thead id="debug-profiles-thead"></thead>
+              <tbody id="debug-profiles-tbody"></tbody>
+            </table>
+          </div>
+
+          <h2>Live Hotness</h2>
+          <div id="debug-hotness-container">
+            <table id="debug-hotness-table">
+              <thead>
+                <tr>
+                  <th>Streamer</th>
+                  <th>Viewers</th>
+                  <th>Mean</th>
+                  <th>StdDev</th>
+                  <th>Z-Score</th>
+                  <th>Obs</th>
+                  <th>Streams</th>
+                  <th>Hot</th>
+                </tr>
+              </thead>
+              <tbody id="debug-hotness-tbody"></tbody>
+            </table>
+          </div>
         </div>
 
-        <h2>Debug: Schedule View</h2>
-        <div class="form-group">
-          <input type="text" id="debug-filter" placeholder="Filter by streamer...">
-        </div>
-        <div id="debug-table-container">
-          <table id="debug-table">
-            <thead>
-              <tr>
-                <th class="debug-col-icon"></th>
-                <th>Streamer</th>
-                <th>Date</th>
-                <th>Time</th>
-                <th>Day</th>
-                <th>Week</th>
-              </tr>
-            </thead>
-            <tbody id="debug-tbody"></tbody>
-          </table>
+        <div id="debug-schedule-pane" class="debug-subpane">
+          <h2>Schedule View</h2>
+          <div class="form-group">
+            <input type="text" id="debug-filter" placeholder="Filter by streamer...">
+          </div>
+          <div id="debug-table-container">
+            <table id="debug-table">
+              <thead>
+                <tr>
+                  <th class="debug-col-icon"></th>
+                  <th>Streamer</th>
+                  <th>Date</th>
+                  <th>Time</th>
+                  <th>Day</th>
+                  <th>Week</th>
+                </tr>
+              </thead>
+              <tbody id="debug-tbody"></tbody>
+            </table>
+          </div>
         </div>
       </section>
     </main>

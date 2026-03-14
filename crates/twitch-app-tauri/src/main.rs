@@ -35,6 +35,7 @@ fn main() {
             twitch_settings_tauri::commands::is_debug_build,
             twitch_settings_tauri::commands::get_debug_schedule_data,
             twitch_settings_tauri::commands::get_debug_hotness_data,
+            twitch_settings_tauri::commands::get_debug_hotness_profiles,
         ])
         .setup(|app| {
             // Enter the Tauri-managed tokio runtime so tokio::spawn works
