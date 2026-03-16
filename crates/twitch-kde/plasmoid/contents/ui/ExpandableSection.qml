@@ -24,14 +24,17 @@ ColumnLayout {
         contentItem: RowLayout {
             spacing: 8
 
-            Item {
-                id: avatarClip
-                objectName: "avatarClip"
+            Flickable {
+                id: avatarFlickable
+                objectName: "avatarFlickable"
                 Layout.fillWidth: true
                 implicitHeight: avatarList.height
+                contentWidth: avatarList.implicitWidth
                 clip: true
+                flickableDirection: Flickable.HorizontalFlick
+                boundsBehavior: Flickable.StopAtBounds
 
-                property real overflow: Math.max(0, avatarList.implicitWidth - width)
+                property real overflow: Math.max(0, contentWidth - width)
 
                 Row {
                     id: avatarList
@@ -132,12 +135,31 @@ ColumnLayout {
                     }
                 }
 
+                // Fade gradient on the left edge when scrolled
                 Rectangle {
+                    parent: avatarFlickable
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: 24
+                    z: 1
+                    visible: avatarFlickable.contentX > 0
+                    gradient: Gradient {
+                        orientation: Gradient.Horizontal
+                        GradientStop { position: 0.0; color: avatarDelegate.palette.window }
+                        GradientStop { position: 1.0; color: "transparent" }
+                    }
+                }
+
+                // Fade gradient on the right edge when more content
+                Rectangle {
+                    parent: avatarFlickable
                     anchors.right: parent.right
                     anchors.top: parent.top
                     anchors.bottom: parent.bottom
                     width: 24
-                    visible: avatarClip.overflow > 0
+                    z: 1
+                    visible: avatarFlickable.contentX < avatarFlickable.overflow
                     gradient: Gradient {
                         orientation: Gradient.Horizontal
                         GradientStop { position: 0.0; color: "transparent" }
