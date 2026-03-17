@@ -40,14 +40,15 @@ Item {
             verify(!masked.visible, "masked avatar should be hidden when no URL")
         }
 
-        function test_image_shown_when_url_set() {
-            avatar.profileImageUrl = "https://example.com/avatar.jpg"
-            wait(10)
-            var masked = findChild(avatar, "maskedAvatar")
-            verify(masked.visible, "masked avatar should be visible when URL set")
+        function test_placeholder_shown_when_image_fails_to_load() {
+            avatar.profileImageUrl = "https://example.com/nonexistent.jpg"
+            tryCompare(findChild(avatar, "avatarImage"), "status", Image.Error, 5000)
 
             var placeholder = findChild(avatar, "avatarPlaceholder")
-            verify(!placeholder.visible, "placeholder should be hidden when URL set")
+            verify(placeholder.visible, "placeholder should be visible when image fails to load")
+
+            var masked = findChild(avatar, "maskedAvatar")
+            verify(!masked.visible, "masked avatar should be hidden when image fails to load")
         }
 
         function test_favourite_border() {

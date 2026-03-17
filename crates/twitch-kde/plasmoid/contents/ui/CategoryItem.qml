@@ -47,7 +47,19 @@ ColumnLayout {
                         fillMode: Image.PreserveAspectCrop
                         smooth: true
                         mipmap: true
-                        visible: root.boxArtUrl !== ""
+                        visible: boxArtImage.status === Image.Ready
+
+                        Timer {
+                            objectName: "retryTimer"
+                            interval: 30000
+                            running: boxArtImage.status === Image.Error
+                            repeat: true
+                            onTriggered: {
+                                var url = boxArtImage.source
+                                boxArtImage.source = ""
+                                boxArtImage.source = url
+                            }
+                        }
                     }
 
                     Rectangle {
@@ -55,7 +67,7 @@ ColumnLayout {
                         objectName: "iconPlaceholder"
                         anchors.fill: parent
                         color: root.palette.mid
-                        visible: root.boxArtUrl === ""
+                        visible: boxArtImage.status !== Image.Ready
 
                         Controls.Label {
                             anchors.centerIn: parent

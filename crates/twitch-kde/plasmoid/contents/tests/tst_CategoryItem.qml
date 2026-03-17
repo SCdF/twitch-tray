@@ -73,14 +73,14 @@ Item {
             verify(!image.visible, "image hidden when no URL")
         }
 
-        function test_image_shown_when_url_set() {
-            item.boxArtUrl = "https://example.com/boxart.jpg"
-            wait(10)
+        function test_placeholder_shown_when_image_fails_to_load() {
+            item.boxArtUrl = "https://example.com/nonexistent.jpg"
             var image = findChild(item, "boxArtImage")
-            verify(image.visible, "image visible when URL set")
+            tryCompare(image, "status", Image.Error, 5000)
 
             var placeholder = findChild(item, "iconPlaceholder")
-            verify(!placeholder.visible, "placeholder hidden when URL set")
+            verify(placeholder.visible, "placeholder visible when image fails to load")
+            verify(!image.visible, "image hidden when load fails")
         }
 
         function test_box_art_url_bound_from_property() {

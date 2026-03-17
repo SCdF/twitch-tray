@@ -70,6 +70,18 @@ Rectangle {
         smooth: true
         mipmap: true
         visible: false
+
+        Timer {
+            objectName: "retryTimer"
+            interval: 30000
+            running: avatarImage.status === Image.Error
+            repeat: true
+            onTriggered: {
+                var url = avatarImage.source
+                avatarImage.source = ""
+                avatarImage.source = url
+            }
+        }
     }
 
     OpacityMask {
@@ -81,7 +93,7 @@ Rectangle {
             height: avatarImage.height
             radius: width / 2
         }
-        visible: root.profileImageUrl !== ""
+        visible: avatarImage.status === Image.Ready
     }
 
     Rectangle {
@@ -91,7 +103,7 @@ Rectangle {
         anchors.margins: (root.isHot || root.isFavourite) ? 2 : 0
         radius: width / 2
         color: root.palette.mid
-        visible: root.profileImageUrl === ""
+        visible: avatarImage.status !== Image.Ready
 
         Controls.Label {
             anchors.centerIn: parent
