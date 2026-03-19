@@ -965,7 +965,24 @@ impl Backend {
                 // Skip channels with no observation history
                 let obs = obs?;
 
-                let profile = compute_hotness_profile(obs, HOTNESS_AGE_POINTS);
+                // Exclude current stream's observations so the profile reflects
+                // only prior streams — matching the baseline used for live hotness.
+                let filtered_obs: Vec<_> =
+                    if let Some(stream) = live_map.get(ch.broadcaster_id.as_str()) {
+                        let current_started = stream.started_at.timestamp();
+                        obs.iter()
+                            .filter(|o| o.stream_started_at != current_started)
+                            .cloned()
+                            .collect()
+                    } else {
+                        obs.clone()
+                    };
+
+                if filtered_obs.is_empty() {
+                    return None;
+                }
+
+                let profile = compute_hotness_profile(&filtered_obs, HOTNESS_AGE_POINTS);
                 let is_live = live_map.contains_key(ch.broadcaster_id.as_str());
 
                 let (current_bucket_age, current_viewers) =
