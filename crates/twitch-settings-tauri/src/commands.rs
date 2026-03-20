@@ -244,6 +244,10 @@ mod tests {
             observation_count: 20,
             distinct_streams: 10,
             is_hot: true,
+            age_min: Some(40),
+            age_max: Some(80),
+            window_observations: 20,
+            window_distinct_streams: 10,
         };
         services.set_hotness_entries(vec![entry]);
         let result = services.get_debug_hotness_data().await;

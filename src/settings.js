@@ -662,11 +662,12 @@ function renderDebugHotnessTable(entries) {
   if (!tbody) return;
 
   if (entries.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#808080;padding:20px">No live streams with hotness data</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#808080;padding:20px">No live streams with hotness data</td></tr>';
     return;
   }
 
   tbody.innerHTML = entries.map(e => {
+    const window = e.age_min != null ? `${e.age_min}\u2013${e.age_max}m` : '\u2014';
     const mean = e.mean != null ? e.mean.toFixed(0) : '\u2014';
     const stddev = e.stddev != null ? e.stddev.toFixed(0) : '\u2014';
     const zScore = e.z_score != null ? e.z_score.toFixed(2) : '\u2014';
@@ -675,6 +676,9 @@ function renderDebugHotnessTable(entries) {
     return `<tr${hotClass}>
       <td>${escapeHtml(e.broadcaster_name)}</td>
       <td>${e.current_viewers.toLocaleString()}</td>
+      <td>${window}</td>
+      <td>${e.window_observations}</td>
+      <td>${e.window_distinct_streams}</td>
       <td>${mean}</td>
       <td>${stddev}</td>
       <td>${zScore}</td>

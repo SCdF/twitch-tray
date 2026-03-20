@@ -23,6 +23,14 @@ pub struct DebugHotnessEntry {
     pub observation_count: usize,
     pub distinct_streams: usize,
     pub is_hot: bool,
+    /// Lower bound of the age window queried (minutes).
+    pub age_min: Option<i64>,
+    /// Upper bound of the age window queried (minutes).
+    pub age_max: Option<i64>,
+    /// Total observations in the window (before gating on min_streams etc.).
+    pub window_observations: usize,
+    /// Total distinct streams in the window (before gating).
+    pub window_distinct_streams: usize,
 }
 
 /// Debug view: stats for a single age bucket.

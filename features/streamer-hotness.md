@@ -61,13 +61,15 @@ The `min_streams` gate ensures the baseline is built from multiple independent s
 
 ### Caching strategy
 
-To avoid per-poll DB queries, hotness profiles are cached in memory:
+Hotness is evaluated dynamically each poll with a sliding window query at the exact current stream age:
 
-1. **On stream go-live**: query all historical observations for this broadcaster (excluding the current stream via `until = stream.started_at`), precompute bucket stats at 12 fixed age points: `[0, 5, 10, 15, 30, 45, 60, 90, 120, 180, 240, 360]`
-2. **Each poll**: look up the nearest precomputed age point via `find_nearest_bucket`, compute z-score against those stats
+1. **On stream go-live**: initialise `CachedHotnessProfile` with `stream_started_at` (for excluding the current stream from the baseline), `was_hot: false`, and `last_hotness: None`
+2. **Each poll**: compute the age window via `compute_age_window(age)`, query DB for historical observations in that window excluding the current stream (`stream_started_at != current`), compute bucket stats, evaluate z-score. The result is cached as `last_hotness` so the display path (`evaluate_hotness`) reads from cache without duplicating DB queries.
 3. **On stream offline**: evict from cache
 
-The cache (`CachedHotnessProfile`) also tracks `was_hot: bool` for edge detection.
+The `was_hot` flag is preserved when `compute_hotness` returns `None` (insufficient data). If we previously knew a streamer was hot but moved into a data-sparse age region, we don't forget that — preventing false cool-off notifications.
+
+The debug profiles view (`get_debug_hotness_profiles`) still computes the 12 fixed age-point profile for visualization, but this is independent of the live detection path.
 
 ### Configuration
 
@@ -85,7 +87,7 @@ Per-streamer override:
 | Layer | File | What |
 |---|---|---|
 | Pure detection math | `crates/twitch-backend/src/hotness_detection.rs` | `compute_age_window`, `compute_bucket_stats`, `compute_hotness`, `compute_hotness_profile`, `find_nearest_bucket` — zero side effects |
-| DB persistence | `crates/twitch-backend/src/db.rs` | `viewer_observations` table, `record_viewer_observations`, `get_viewer_observations` |
+| DB persistence | `crates/twitch-backend/src/db.rs` | `viewer_observations` table, `record_viewer_observations`, `get_viewer_observations`, `get_viewer_observations_excluding_stream` |
 | Cache + orchestration | `crates/twitch-backend/src/backend.rs` | `CachedHotnessProfile`, `record_and_evaluate_hotness`, `evaluate_hotness`, `HOTNESS_AGE_POINTS` |
 | Config | `crates/twitch-backend/src/config.rs` | `hotness_z_threshold`, `hotness_min_observations`, `hotness_min_streams`, `notify_on_hot`, `hotness_z_threshold_override` |
 | Notifications | `crates/twitch-backend/src/notify.rs` | `Notifier::stream_hot()`, `DesktopNotifier` impl, `STREAM_HOT` category |
@@ -114,13 +116,15 @@ Considered using Welford's online algorithm to maintain rolling mean/variance pe
 
 Fixed buckets (e.g., 0–15 min, 15–30 min) create cliff edges at boundaries and waste data (a 14-minute observation can't inform the 15-minute bucket). The sliding window centered on the current stream age uses all nearby data, with width proportional to stream age so early-stream windows stay narrow.
 
-### Precomputed profile at 12 age points (not on-the-fly)
+### Dynamic per-poll sliding window (not precomputed)
 
-The implementation precomputes stats at 12 fixed age points and snaps to the nearest one, rather than computing the sliding window at the exact current stream age each poll. This was a pragmatic choice to avoid per-poll iteration over the full observation set. The tradeoff is coarseness at the high end (120-minute gap between the 240 and 360 age points). This could be refined with more age points or on-the-fly computation if needed.
+Originally, stats were precomputed at 12 fixed age points when a stream went live, and each poll snapped to the nearest bucket. This caused streamers to lose their "hot" status when they crossed into a later bucket that happened to have insufficient distinct streams — even though neighboring buckets clearly showed they were hot.
+
+The fix replaces the precomputed profile with a per-poll DB query at the exact current stream age. The `get_viewer_observations_excluding_stream` method filters by `stream_started_at != current_stream` (more precise than the previous `observed_at < until` approach) and uses the existing `idx_vo_broadcaster_age` index. The debug profiles view still uses the 12 fixed age points for visualization.
 
 ### Current stream excluded from baseline
 
-An early bug: observations from the *current* stream were included in the historical baseline, causing false positives after just a few minutes of data. Fixed by adding an `until` parameter to `get_viewer_observations` and passing `stream.started_at.timestamp()` when building the profile cache. Only data from prior streams forms the baseline.
+An early bug: observations from the *current* stream were included in the historical baseline, causing false positives after just a few minutes of data. Fixed by filtering on `stream_started_at != current_stream` via `get_viewer_observations_excluding_stream`. Only data from prior streams forms the baseline.
 
 ### No category distinction
 
@@ -142,6 +146,8 @@ Distinct streams was chosen over distinct calendar days because streams can span
 
 One notification per not-hot → hot transition. If the streamer cools off and spikes again, that's a new transition and fires a new notification. This avoids notification spam while still catching multiple hot periods within a single stream.
 
+When `compute_hotness` returns `None` (insufficient data in the current window), `was_hot` is preserved rather than reset to `false`. This prevents false cool-off edges when a streamer moves into a data-sparse age region — if we knew they were hot, we don't forget that just because the current bucket lacks data.
+
 ## Implementation history
 
 Built in 8 phases, following the project's crate-boundary architecture:
@@ -162,6 +168,8 @@ Built in 8 phases, following the project's crate-boundary architecture:
 
 8. **QML plasmoid visuals** — `isHot` property on `StreamerAvatar` and `StreamRow`. Animated swirling `ConicalGradient` ring (fire colors, 2s rotation) that overrides the favourite border. QML tests for hot ring visibility, border behavior, and hot+favourite interaction.
 
+9. **Dynamic sliding window** — replaced precomputed 12-age-point profiles with per-poll dynamic DB queries at the exact current stream age. Added `get_viewer_observations_excluding_stream` to `db.rs` (filters by `stream_started_at != current`). `CachedHotnessProfile` now stores `stream_started_at` + `was_hot` + `last_hotness` instead of the full profile. `was_hot` is preserved on insufficient data to prevent false cool-off notifications. `evaluate_hotness` reads from `last_hotness` cache instead of re-querying.
+
 ### Dependency graph
 
 ```
@@ -177,4 +185,4 @@ Phase 4 (Config) ┘                                  └──→ Phase 7 (Debu
 - **Time-of-day bucketing**: data is already collected (UTC timestamps), add bucketing if evaluation shows time-dependent baselines matter
 - **Percentile-based detection**: alternative to z-score for non-normal distributions — debug view helps evaluate
 - **Observation pruning**: not yet implemented, will be handled by a generic pruner for all tables
-- **More granular age points**: the 12 fixed age points get coarse past 4 hours — could add more points or switch to on-the-fly computation from cached raw observations
+- ~~**More granular age points**: the 12 fixed age points get coarse past 4 hours~~ — resolved by Phase 9 dynamic sliding window

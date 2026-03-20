@@ -575,6 +575,51 @@ impl Database {
         }
         Ok(result)
     }
+
+    /// Returns viewer observations for a broadcaster within a stream-age window,
+    /// filtered to observations recorded after `since`, excluding a specific stream
+    /// (identified by its `stream_started_at` timestamp).
+    pub fn get_viewer_observations_excluding_stream(
+        &self,
+        broadcaster_id: i64,
+        age_min: i64,
+        age_max: i64,
+        since: i64,
+        exclude_stream_started_at: i64,
+    ) -> anyhow::Result<Vec<ViewerObservation>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT broadcaster_id, observed_at, stream_age_min, viewer_count, stream_started_at
+             FROM viewer_observations
+             WHERE broadcaster_id = ?1
+               AND stream_age_min BETWEEN ?2 AND ?3
+               AND observed_at > ?4
+               AND stream_started_at != ?5",
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![
+                broadcaster_id,
+                age_min,
+                age_max,
+                since,
+                exclude_stream_started_at
+            ],
+            |row| {
+                Ok(ViewerObservation {
+                    broadcaster_id: row.get(0)?,
+                    observed_at: row.get(1)?,
+                    stream_age_min: row.get(2)?,
+                    viewer_count: row.get(3)?,
+                    stream_started_at: row.get(4)?,
+                })
+            },
+        )?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
 }
 
 /// Generates `count` SQL placeholders: "?,?,?"
@@ -1255,5 +1300,76 @@ mod tests {
             .get_viewer_observations(999, 0, 100, 0, i64::MAX)
             .unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn excluding_stream_filters_by_stream_started_at() {
+        let db = in_memory_db();
+        let current_stream_started = 1_700_000_500;
+        let observations = vec![
+            // Prior stream
+            ViewerObservation {
+                broadcaster_id: 100,
+                observed_at: 1_700_000_000,
+                stream_age_min: 10,
+                viewer_count: 500,
+                stream_started_at: 1_699_999_000,
+            },
+            // Current stream (should be excluded)
+            ViewerObservation {
+                broadcaster_id: 100,
+                observed_at: 1_700_001_000,
+                stream_age_min: 10,
+                viewer_count: 800,
+                stream_started_at: current_stream_started,
+            },
+            // Another prior stream
+            ViewerObservation {
+                broadcaster_id: 100,
+                observed_at: 1_700_000_200,
+                stream_age_min: 15,
+                viewer_count: 600,
+                stream_started_at: 1_699_998_000,
+            },
+        ];
+        db.record_viewer_observations(&observations).unwrap();
+
+        let results = db
+            .get_viewer_observations_excluding_stream(100, 0, 60, 0, current_stream_started)
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        // Both results should be from prior streams
+        for obs in &results {
+            assert_ne!(obs.stream_started_at, current_stream_started);
+        }
+    }
+
+    #[test]
+    fn excluding_stream_respects_age_window() {
+        let db = in_memory_db();
+        let observations = vec![
+            ViewerObservation {
+                broadcaster_id: 100,
+                observed_at: 1_700_000_000,
+                stream_age_min: 10,
+                viewer_count: 500,
+                stream_started_at: 1_699_999_000,
+            },
+            ViewerObservation {
+                broadcaster_id: 100,
+                observed_at: 1_700_000_000,
+                stream_age_min: 50,
+                viewer_count: 700,
+                stream_started_at: 1_699_999_000,
+            },
+        ];
+        db.record_viewer_observations(&observations).unwrap();
+
+        // Query age window 5-20 — should only return the age=10 observation
+        let results = db
+            .get_viewer_observations_excluding_stream(100, 5, 20, 0, 9999)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].stream_age_min, 10);
     }
 }

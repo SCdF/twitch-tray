@@ -11,8 +11,8 @@ use crate::db::Database;
 use crate::events::BackendEvent;
 use crate::handle::{AuthCommand, BackendHandle, LoginProgress, RawDisplayData};
 use crate::hotness_detection::{
-    compute_hotness, compute_hotness_profile, find_nearest_bucket, BucketStats, HotnessConfig,
-    HotnessInfo, ViewerObservation,
+    compute_age_window, compute_bucket_stats, compute_hotness, compute_hotness_profile,
+    find_nearest_bucket, HotnessConfig, HotnessInfo, ViewerObservation,
 };
 use crate::notification_dispatcher::NotificationDispatcher;
 use crate::notify::{DesktopNotifier, Notifier, SnoozeRequest, StreamerSettingsRequest};
@@ -28,10 +28,15 @@ const HOTNESS_AGE_POINTS: &[i64] = &[0, 5, 10, 15, 30, 45, 60, 90, 120, 180, 240
 /// Retention period for viewer observations (30 days in seconds).
 const OBSERVATION_RETENTION_SECS: i64 = 30 * 24 * 3600;
 
-/// Cached hotness profile for a single broadcaster.
+/// Cached hotness state for a single broadcaster.
 struct CachedHotnessProfile {
-    profile: Vec<(i64, BucketStats)>,
+    stream_started_at: i64,
     was_hot: bool,
+    last_hotness: Option<HotnessInfo>,
+    /// Raw stats from the last evaluation (always populated, even when gates block).
+    last_age_window: Option<(i64, i64)>,
+    last_observation_count: usize,
+    last_distinct_streams: usize,
 }
 
 /// Internal backend orchestrator.
@@ -480,7 +485,8 @@ impl Backend {
 
     /// Records viewer observations and evaluates hotness for all live streams.
     ///
-    /// For newly live streams, populates the hotness cache from historical DB data.
+    /// For newly live streams, initialises the cache entry with `stream_started_at`.
+    /// Each poll dynamically queries DB for the sliding window around the current age.
     /// For streams going offline, evicts them from the cache.
     fn record_and_evaluate_hotness(&self, event: &crate::state::StreamsUpdated) {
         let now = Utc::now();
@@ -507,45 +513,23 @@ impl Backend {
             tracing::error!("Failed to record viewer observations: {}", e);
         }
 
-        // Populate cache for newly live streams
+        // Initialise cache for newly live streams
         for stream in &event.newly_live {
-            let broadcaster_id: i64 = match stream.user_id.parse() {
-                Ok(id) => id,
-                Err(_) => continue,
-            };
-
-            // Fetch historical observations excluding the current stream.
-            // Using started_at as the upper bound ensures only data from prior streams
-            // forms the baseline — never the stream we're currently evaluating.
-            let until = stream.started_at.timestamp();
-            let all_obs =
-                match self
-                    .db
-                    .get_viewer_observations(broadcaster_id, 0, i64::MAX, since, until)
-                {
-                    Ok(obs) => obs,
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to load hotness history for {}: {}",
-                            stream.user_name,
-                            e
-                        );
-                        continue;
-                    }
-                };
-
-            let profile = compute_hotness_profile(&all_obs, HOTNESS_AGE_POINTS);
             let mut cache = self.hotness_cache.lock().unwrap();
             cache.insert(
                 stream.user_id.clone(),
                 CachedHotnessProfile {
-                    profile,
+                    stream_started_at: stream.started_at.timestamp(),
                     was_hot: false,
+                    last_hotness: None,
+                    last_age_window: None,
+                    last_observation_count: 0,
+                    last_distinct_streams: 0,
                 },
             );
         }
 
-        // Evaluate hotness and detect edges (not-hot → hot)
+        // Evaluate hotness with dynamic sliding window queries
         let cfg = self.config.get();
         {
             let mut cache = self.hotness_cache.lock().unwrap();
@@ -554,10 +538,38 @@ impl Backend {
                     continue;
                 };
 
-                let age = (now - stream.started_at).num_minutes().max(0);
-                let Some(bucket) = find_nearest_bucket(&cached.profile, age) else {
-                    continue;
+                let broadcaster_id: i64 = match stream.user_id.parse() {
+                    Ok(id) => id,
+                    Err(_) => continue,
                 };
+
+                let age = (now - stream.started_at).num_minutes().max(0);
+                let (age_lo, age_hi) = compute_age_window(age);
+
+                let obs = match self.db.get_viewer_observations_excluding_stream(
+                    broadcaster_id,
+                    age_lo,
+                    age_hi,
+                    since,
+                    cached.stream_started_at,
+                ) {
+                    Ok(obs) => obs,
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to query hotness observations for {}: {}",
+                            stream.user_name,
+                            e
+                        );
+                        continue;
+                    }
+                };
+
+                let stats = compute_bucket_stats(&obs);
+
+                // Cache raw stats for debug view (always, even when gates block)
+                cached.last_age_window = Some((age_lo, age_hi));
+                cached.last_observation_count = stats.count;
+                cached.last_distinct_streams = stats.distinct_streams;
 
                 let z_threshold = cfg
                     .streamer_settings
@@ -571,9 +583,16 @@ impl Backend {
                     min_streams: cfg.hotness_min_streams,
                 };
 
-                if let Some(info) =
-                    compute_hotness(&stream.user_id, stream.viewer_count, bucket, &hotness_cfg)
-                {
+                let result =
+                    compute_hotness(&stream.user_id, stream.viewer_count, &stats, &hotness_cfg);
+
+                // Cache for display path
+                cached.last_hotness.clone_from(&result);
+
+                // Preserve was_hot on None — if we previously knew they were hot but
+                // now lack data, don't forget that just because we moved into
+                // a data-sparse region.
+                if let Some(info) = result {
                     let was_hot = cached.was_hot;
                     cached.was_hot = info.is_hot;
 
@@ -590,9 +609,6 @@ impl Backend {
                             tracing::error!("Hot notification error: {}", e);
                         }
                     }
-                } else {
-                    // Insufficient data — reset was_hot so if data appears later, edge fires
-                    cached.was_hot = false;
                 }
             }
         }
@@ -606,44 +622,14 @@ impl Backend {
         }
     }
 
-    /// Evaluates hotness for all currently live streams against cached profiles.
-    /// Returns hotness info for streams that have sufficient data.
+    /// Returns cached hotness info for live streams.
+    /// Results are populated by `record_and_evaluate_hotness` each poll.
     fn evaluate_hotness(&self, streams: &[crate::twitch::Stream]) -> Vec<HotnessInfo> {
-        let cfg = self.config.get();
         let cache = self.hotness_cache.lock().unwrap();
-        let mut results = Vec::new();
-
-        for stream in streams {
-            let Some(cached) = cache.get(&stream.user_id) else {
-                continue;
-            };
-
-            let age = (Utc::now() - stream.started_at).num_minutes().max(0);
-            let Some(bucket) = find_nearest_bucket(&cached.profile, age) else {
-                continue;
-            };
-
-            // Check per-streamer threshold override
-            let z_threshold = cfg
-                .streamer_settings
-                .get(&stream.user_login)
-                .and_then(|s| s.hotness_z_threshold_override)
-                .unwrap_or(cfg.hotness_z_threshold);
-
-            let hotness_cfg = HotnessConfig {
-                z_threshold,
-                min_observations: cfg.hotness_min_observations,
-                min_streams: cfg.hotness_min_streams,
-            };
-
-            if let Some(info) =
-                compute_hotness(&stream.user_id, stream.viewer_count, bucket, &hotness_cfg)
-            {
-                results.push(info);
-            }
-        }
-
-        results
+        streams
+            .iter()
+            .filter_map(|s| cache.get(&s.user_id)?.last_hotness.clone())
+            .collect()
     }
 
     pub(crate) async fn refresh_all_data(&self) {
@@ -885,41 +871,28 @@ impl Backend {
         use crate::app_services::DebugHotnessEntry;
 
         let streams = self.state.get_followed_streams().await;
-        let hotness_results = self.evaluate_hotness(&streams);
-
-        // Index hotness info by broadcaster_id for fast lookup
-        let hotness_map: HashMap<&str, &HotnessInfo> = hotness_results
-            .iter()
-            .map(|h| (h.broadcaster_id.as_str(), h))
-            .collect();
+        let cache = self.hotness_cache.lock().unwrap();
 
         streams
             .iter()
             .map(|stream| {
-                if let Some(info) = hotness_map.get(stream.user_id.as_str()) {
-                    DebugHotnessEntry {
-                        broadcaster_name: stream.user_name.clone(),
-                        broadcaster_login: stream.user_login.clone(),
-                        current_viewers: stream.viewer_count,
-                        mean: Some(info.mean_viewers),
-                        stddev: Some(info.stddev),
-                        z_score: Some(info.z_score),
-                        observation_count: info.observation_count,
-                        distinct_streams: info.distinct_streams,
-                        is_hot: info.is_hot,
-                    }
-                } else {
-                    DebugHotnessEntry {
-                        broadcaster_name: stream.user_name.clone(),
-                        broadcaster_login: stream.user_login.clone(),
-                        current_viewers: stream.viewer_count,
-                        mean: None,
-                        stddev: None,
-                        z_score: None,
-                        observation_count: 0,
-                        distinct_streams: 0,
-                        is_hot: false,
-                    }
+                let cached = cache.get(&stream.user_id);
+                let hotness = cached.and_then(|c| c.last_hotness.as_ref());
+
+                DebugHotnessEntry {
+                    broadcaster_name: stream.user_name.clone(),
+                    broadcaster_login: stream.user_login.clone(),
+                    current_viewers: stream.viewer_count,
+                    mean: hotness.map(|h| h.mean_viewers),
+                    stddev: hotness.map(|h| h.stddev),
+                    z_score: hotness.map(|h| h.z_score),
+                    observation_count: hotness.map_or(0, |h| h.observation_count),
+                    distinct_streams: hotness.map_or(0, |h| h.distinct_streams),
+                    is_hot: hotness.is_some_and(|h| h.is_hot),
+                    age_min: cached.and_then(|c| c.last_age_window.map(|(lo, _)| lo)),
+                    age_max: cached.and_then(|c| c.last_age_window.map(|(_, hi)| hi)),
+                    window_observations: cached.map_or(0, |c| c.last_observation_count),
+                    window_distinct_streams: cached.map_or(0, |c| c.last_distinct_streams),
                 }
             })
             .collect()
