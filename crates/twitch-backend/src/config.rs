@@ -22,6 +22,8 @@ pub const DEFAULT_SCHEDULE_MENU_LIMIT: usize = 5;
 pub const DEFAULT_HOTNESS_Z_THRESHOLD: f64 = 2.0;
 pub const DEFAULT_HOTNESS_MIN_OBSERVATIONS: usize = 5;
 pub const DEFAULT_HOTNESS_MIN_STREAMS: usize = 7;
+pub const DEFAULT_HOTNESS_LOOKBACK_DAYS: u32 = 30;
+pub const DEFAULT_HOTNESS_AGE_WINDOW_DIVISOR: u32 = 2;
 pub const DEFAULT_NOTIFY_ON_HOT: bool = true;
 
 /// Importance level for a streamer, affecting display and notifications
@@ -100,6 +102,13 @@ pub struct Config {
     /// Ensures the baseline is built from multiple independent streams, not just one session.
     #[serde(default = "default_hotness_min_streams")]
     pub hotness_min_streams: usize,
+    /// How many days of historical data to consider for hotness detection (default: 30).
+    #[serde(default = "default_hotness_lookback_days")]
+    pub hotness_lookback_days: u32,
+    /// Age window divisor: half-width = max(stream_age / divisor, 5 min) (default: 2).
+    /// Lower values = wider comparison windows. Higher = narrower, more precise.
+    #[serde(default = "default_hotness_age_window_divisor")]
+    pub hotness_age_window_divisor: u32,
     /// Send desktop notifications when a stream is detected as hot (default: true)
     #[serde(default = "default_notify_on_hot")]
     pub notify_on_hot: bool,
@@ -167,6 +176,14 @@ fn default_hotness_min_streams() -> usize {
     DEFAULT_HOTNESS_MIN_STREAMS
 }
 
+fn default_hotness_lookback_days() -> u32 {
+    DEFAULT_HOTNESS_LOOKBACK_DAYS
+}
+
+fn default_hotness_age_window_divisor() -> u32 {
+    DEFAULT_HOTNESS_AGE_WINDOW_DIVISOR
+}
+
 fn default_notify_on_hot() -> bool {
     DEFAULT_NOTIFY_ON_HOT
 }
@@ -188,6 +205,8 @@ impl Default for Config {
             hotness_z_threshold: DEFAULT_HOTNESS_Z_THRESHOLD,
             hotness_min_observations: DEFAULT_HOTNESS_MIN_OBSERVATIONS,
             hotness_min_streams: DEFAULT_HOTNESS_MIN_STREAMS,
+            hotness_lookback_days: DEFAULT_HOTNESS_LOOKBACK_DAYS,
+            hotness_age_window_divisor: DEFAULT_HOTNESS_AGE_WINDOW_DIVISOR,
             notify_on_hot: DEFAULT_NOTIFY_ON_HOT,
             followed_categories: Vec::new(),
             streamer_settings: HashMap::new(),
@@ -459,6 +478,8 @@ mod tests {
             hotness_z_threshold: 3.0,
             hotness_min_observations: 10,
             hotness_min_streams: 5,
+            hotness_lookback_days: 14,
+            hotness_age_window_divisor: 3,
             notify_on_hot: false,
             followed_categories: vec![FollowedCategory {
                 id: "12345".to_string(),
@@ -514,6 +535,14 @@ mod tests {
         assert_eq!(
             deserialized.hotness_min_streams,
             original.hotness_min_streams
+        );
+        assert_eq!(
+            deserialized.hotness_lookback_days,
+            original.hotness_lookback_days
+        );
+        assert_eq!(
+            deserialized.hotness_age_window_divisor,
+            original.hotness_age_window_divisor
         );
         assert_eq!(deserialized.notify_on_hot, original.notify_on_hot);
     }

@@ -25,8 +25,10 @@ use tokio::task::JoinHandle;
 /// Age points (in minutes) at which to precompute hotness bucket stats.
 const HOTNESS_AGE_POINTS: &[i64] = &[0, 5, 10, 15, 30, 45, 60, 90, 120, 180, 240, 360];
 
-/// Retention period for viewer observations (30 days in seconds).
-const OBSERVATION_RETENTION_SECS: i64 = 30 * 24 * 3600;
+/// Returns the observation retention period in seconds from config lookback days.
+fn observation_retention_secs(lookback_days: u32) -> i64 {
+    i64::from(lookback_days) * 24 * 3600
+}
 
 /// Cached hotness state for a single broadcaster.
 struct CachedHotnessProfile {
@@ -491,7 +493,8 @@ impl Backend {
     fn record_and_evaluate_hotness(&self, event: &crate::state::StreamsUpdated) {
         let now = Utc::now();
         let now_ts = now.timestamp();
-        let since = now_ts - OBSERVATION_RETENTION_SECS;
+        let cfg = self.config.get();
+        let since = now_ts - observation_retention_secs(cfg.hotness_lookback_days);
 
         // Build viewer observations from current live streams
         let observations: Vec<ViewerObservation> = event
@@ -530,7 +533,6 @@ impl Backend {
         }
 
         // Evaluate hotness with dynamic sliding window queries
-        let cfg = self.config.get();
         {
             let mut cache = self.hotness_cache.lock().unwrap();
             for stream in &event.streams {
@@ -544,7 +546,7 @@ impl Backend {
                 };
 
                 let age = (now - stream.started_at).num_minutes().max(0);
-                let (age_lo, age_hi) = compute_age_window(age);
+                let (age_lo, age_hi) = compute_age_window(age, cfg.hotness_age_window_divisor);
 
                 let obs = match self.db.get_viewer_observations_excluding_stream(
                     broadcaster_id,
@@ -906,7 +908,8 @@ impl Backend {
         let channels = self.state.get_followed_channels().await;
         let streams = self.state.get_followed_streams().await;
         let now = Utc::now();
-        let since = now.timestamp() - OBSERVATION_RETENTION_SECS;
+        let cfg = self.config.get();
+        let since = now.timestamp() - observation_retention_secs(cfg.hotness_lookback_days);
 
         // Build a map of live streams by broadcaster_id
         let live_map: HashMap<&str, &crate::twitch::Stream> =
@@ -955,7 +958,11 @@ impl Backend {
                     return None;
                 }
 
-                let profile = compute_hotness_profile(&filtered_obs, HOTNESS_AGE_POINTS);
+                let profile = compute_hotness_profile(
+                    &filtered_obs,
+                    HOTNESS_AGE_POINTS,
+                    cfg.hotness_age_window_divisor,
+                );
                 let is_live = live_map.contains_key(ch.broadcaster_id.as_str());
 
                 let (current_bucket_age, current_viewers) =

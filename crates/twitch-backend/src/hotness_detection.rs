@@ -40,10 +40,13 @@ pub struct HotnessConfig {
 
 /// Computes the stream-age window around a given age point.
 ///
-/// The half-width is `max(stream_age_min / 3, 5)` minutes. The lower bound is
+/// The half-width is `max(stream_age_min / divisor, 5)` minutes. The lower bound is
 /// clamped to zero so early-stream observations are not lost.
-pub fn compute_age_window(stream_age_min: i64) -> (i64, i64) {
-    let half_width = (stream_age_min / 3).max(5);
+///
+/// A `divisor` of 0 is treated as 1 (the full stream age) to avoid division by zero.
+pub fn compute_age_window(stream_age_min: i64, divisor: u32) -> (i64, i64) {
+    let d = (divisor.max(1)) as i64;
+    let half_width = (stream_age_min / d).max(5);
     let lower = (stream_age_min - half_width).max(0);
     let upper = stream_age_min + half_width;
     (lower, upper)
@@ -124,11 +127,12 @@ pub fn compute_hotness(
 pub fn compute_hotness_profile(
     observations: &[ViewerObservation],
     age_points: &[i64],
+    age_window_divisor: u32,
 ) -> Vec<(i64, BucketStats)> {
     age_points
         .iter()
         .map(|&age| {
-            let (lo, hi) = compute_age_window(age);
+            let (lo, hi) = compute_age_window(age, age_window_divisor);
             let filtered: Vec<_> = observations
                 .iter()
                 .filter(|o| o.stream_age_min >= lo && o.stream_age_min <= hi)
@@ -178,33 +182,45 @@ mod tests {
     // === compute_age_window ===
 
     #[test]
-    fn age_window_at_minute_0() {
-        // half_width = max(0/3, 5) = 5 → (0-5, 0+5) clamped → (0, 5)
-        assert_eq!(compute_age_window(0), (0, 5));
+    fn age_window_at_minute_0_divisor_2() {
+        // half_width = max(0/2, 5) = 5 → (0-5, 0+5) clamped → (0, 5)
+        assert_eq!(compute_age_window(0, 2), (0, 5));
     }
 
     #[test]
-    fn age_window_at_minute_3() {
+    fn age_window_at_minute_3_divisor_2() {
         // half_width = max(1, 5) = 5 → (3-5, 3+5) clamped → (0, 8)
-        assert_eq!(compute_age_window(3), (0, 8));
+        assert_eq!(compute_age_window(3, 2), (0, 8));
     }
 
     #[test]
-    fn age_window_at_minute_15() {
-        // half_width = max(5, 5) = 5 → (10, 20)
-        assert_eq!(compute_age_window(15), (10, 20));
+    fn age_window_at_minute_15_divisor_2() {
+        // half_width = max(7, 5) = 7 → (8, 22)
+        assert_eq!(compute_age_window(15, 2), (8, 22));
     }
 
     #[test]
-    fn age_window_at_minute_60() {
-        // half_width = max(20, 5) = 20 → (40, 80)
-        assert_eq!(compute_age_window(60), (40, 80));
+    fn age_window_at_minute_60_divisor_2() {
+        // half_width = max(30, 5) = 30 → (30, 90)
+        assert_eq!(compute_age_window(60, 2), (30, 90));
     }
 
     #[test]
-    fn age_window_at_minute_180() {
-        // half_width = max(60, 5) = 60 → (120, 240)
-        assert_eq!(compute_age_window(180), (120, 240));
+    fn age_window_at_minute_180_divisor_2() {
+        // half_width = max(90, 5) = 90 → (90, 270)
+        assert_eq!(compute_age_window(180, 2), (90, 270));
+    }
+
+    #[test]
+    fn age_window_divisor_3_gives_narrower_window() {
+        // half_width = max(60/3, 5) = 20 → (40, 80)
+        assert_eq!(compute_age_window(60, 3), (40, 80));
+    }
+
+    #[test]
+    fn age_window_divisor_0_treated_as_1() {
+        // divisor 0 clamped to 1 → half_width = max(60/1, 5) = 60 → (0, 120)
+        assert_eq!(compute_age_window(60, 0), (0, 120));
     }
 
     // === compute_bucket_stats ===
@@ -359,7 +375,7 @@ mod tests {
             obs(1, 30, 1000),
             obs(1, 60, 2000),
         ];
-        let profile = compute_hotness_profile(&observations, &[10, 30, 60]);
+        let profile = compute_hotness_profile(&observations, &[10, 30, 60], 2);
         assert_eq!(profile.len(), 3);
         assert_eq!(profile[0].0, 10);
         assert_eq!(profile[1].0, 30);
@@ -368,10 +384,10 @@ mod tests {
 
     #[test]
     fn profile_filters_observations_to_correct_windows() {
-        // age_point=60 → window (40, 80)
-        // Only obs at 50 and 70 should be included, not obs at 10
+        // divisor=2, age_point=60 → half_width=30 → window (30, 90)
+        // obs at 50 and 70 are in window, obs at 10 is outside
         let observations = vec![obs(1, 10, 100), obs(1, 50, 1000), obs(1, 70, 2000)];
-        let profile = compute_hotness_profile(&observations, &[60]);
+        let profile = compute_hotness_profile(&observations, &[60], 2);
         assert_eq!(profile[0].1.count, 2);
         assert!((profile[0].1.mean - 1500.0).abs() < 0.001);
     }

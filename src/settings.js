@@ -25,6 +25,8 @@ const notifyOnHotInput = document.getElementById('notify_on_hot');
 const hotnessZThresholdInput = document.getElementById('hotness_z_threshold');
 const hotnessMinObservationsInput = document.getElementById('hotness_min_observations');
 const hotnessMinStreamsInput = document.getElementById('hotness_min_streams');
+const hotnessLookbackDaysInput = document.getElementById('hotness_lookback_days');
+const hotnessAgeWindowDivisorInput = document.getElementById('hotness_age_window_divisor');
 const liveMenuLimitInput = document.getElementById('live_menu_limit');
 const scheduleMenuLimitInput = document.getElementById('schedule_menu_limit');
 const categorySearchInput = document.getElementById('category_search');
@@ -107,6 +109,8 @@ function populateForm() {
   hotnessZThresholdInput.value = config.hotness_z_threshold;
   hotnessMinObservationsInput.value = config.hotness_min_observations;
   hotnessMinStreamsInput.value = config.hotness_min_streams;
+  hotnessLookbackDaysInput.value = config.hotness_lookback_days;
+  hotnessAgeWindowDivisorInput.value = config.hotness_age_window_divisor;
   scheduleLookaheadInput.value = config.schedule_lookahead_hours;
   liveMenuLimitInput.value = config.live_menu_limit;
   scheduleMenuLimitInput.value = config.schedule_menu_limit;
@@ -403,7 +407,7 @@ function setupEventListeners() {
   });
 
   // Auto-save on general settings changes
-  [pollIntervalInput, notifyMaxGapInput, scheduleLookaheadInput, liveMenuLimitInput, scheduleMenuLimitInput, hotnessZThresholdInput, hotnessMinObservationsInput, hotnessMinStreamsInput].forEach(input => {
+  [pollIntervalInput, notifyMaxGapInput, scheduleLookaheadInput, liveMenuLimitInput, scheduleMenuLimitInput, hotnessZThresholdInput, hotnessMinObservationsInput, hotnessMinStreamsInput, hotnessLookbackDaysInput, hotnessAgeWindowDivisorInput].forEach(input => {
     input.addEventListener('change', () => autoSave());
   });
   [notifyOnLiveInput, notifyOnCategoryInput, notifyOnHotInput].forEach(input => {
@@ -495,6 +499,8 @@ async function autoSave() {
         hotness_z_threshold: parseFloat(hotnessZThresholdInput.value) || 2.0,
         hotness_min_observations: parseInt(hotnessMinObservationsInput.value, 10) || 5,
         hotness_min_streams: parseInt(hotnessMinStreamsInput.value, 10) || 7,
+        hotness_lookback_days: parseInt(hotnessLookbackDaysInput.value, 10) || 30,
+        hotness_age_window_divisor: parseInt(hotnessAgeWindowDivisorInput.value, 10) || 2,
         schedule_lookahead_hours: parseInt(scheduleLookaheadInput.value, 10) || 6,
         live_menu_limit: parseInt(liveMenuLimitInput.value, 10) || 10,
         schedule_menu_limit: parseInt(scheduleMenuLimitInput.value, 10) || 5,
@@ -508,6 +514,8 @@ async function autoSave() {
       newConfig.hotness_z_threshold = Math.max(0.5, Math.min(5.0, newConfig.hotness_z_threshold));
       newConfig.hotness_min_observations = Math.max(1, Math.min(50, newConfig.hotness_min_observations));
       newConfig.hotness_min_streams = Math.max(1, Math.min(30, newConfig.hotness_min_streams));
+      newConfig.hotness_lookback_days = Math.max(7, Math.min(90, newConfig.hotness_lookback_days));
+      newConfig.hotness_age_window_divisor = Math.max(1, Math.min(10, newConfig.hotness_age_window_divisor));
       newConfig.schedule_lookahead_hours = Math.max(1, Math.min(72, newConfig.schedule_lookahead_hours));
       newConfig.live_menu_limit = Math.max(1, Math.min(50, newConfig.live_menu_limit));
       newConfig.schedule_menu_limit = Math.max(1, Math.min(20, newConfig.schedule_menu_limit));

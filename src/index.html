@@ -10,6 +10,7 @@
   <div class="container">
     <nav class="tabs">
       <button class="tab active" data-tab="general">General</button>
+      <button class="tab" data-tab="hotness">Hotness</button>
       <button class="tab" data-tab="categories">Categories</button>
       <button class="tab" data-tab="streamers">Streamers</button>
       <button class="tab" id="tab-debug" data-tab="debug" style="display:none">Debug</button>
@@ -46,34 +47,6 @@
           </label>
         </div>
 
-        <div class="form-group checkbox">
-          <label>
-            <input type="checkbox" id="notify_on_hot" checked>
-            Notify when streams are hot
-          </label>
-          <span class="help-text">Send a notification when a streamer's viewers spike unusually high</span>
-        </div>
-
-        <h2>Hot Stream Detection</h2>
-
-        <div class="form-group">
-          <label for="hotness_z_threshold">Hotness Z-Score Threshold</label>
-          <input type="number" id="hotness_z_threshold" min="0.5" max="5.0" step="0.1" value="2.0">
-          <span class="help-text">How many standard deviations above average to trigger (lower = more sensitive, default 2.0)</span>
-        </div>
-
-        <div class="form-group">
-          <label for="hotness_min_observations">Minimum Observations</label>
-          <input type="number" id="hotness_min_observations" min="1" max="50" value="5">
-          <span class="help-text">Minimum data points needed before hotness detection activates for a streamer (default 5)</span>
-        </div>
-
-        <div class="form-group">
-          <label for="hotness_min_streams">Minimum Streams Observed</label>
-          <input type="number" id="hotness_min_streams" min="1" max="30" value="7">
-          <span class="help-text">Minimum distinct streams that must be observed before hotness detection activates (default 7)</span>
-        </div>
-
         <h2>Menu</h2>
 
         <div class="form-group">
@@ -92,6 +65,49 @@
           <label for="schedule_lookahead">Schedule Lookahead (hours)</label>
           <input type="number" id="schedule_lookahead" min="1" max="72" value="6">
           <span class="help-text">How far ahead to show scheduled streams (1-72 hours)</span>
+        </div>
+      </section>
+
+      <!-- Hotness Pane -->
+      <section id="hotness" class="pane">
+        <h2>Hot Stream Detection</h2>
+
+        <div class="form-group checkbox">
+          <label>
+            <input type="checkbox" id="notify_on_hot" checked>
+            Notify when streams are hot
+          </label>
+          <span class="help-text">Send a notification when a streamer's viewers spike unusually high</span>
+        </div>
+
+        <div class="form-group">
+          <label for="hotness_z_threshold">Z-Score Threshold</label>
+          <input type="number" id="hotness_z_threshold" min="0.5" max="5.0" step="0.1" value="2.0">
+          <span class="help-text">How many standard deviations above average to trigger (lower = more sensitive, default 2.0)</span>
+        </div>
+
+        <div class="form-group">
+          <label for="hotness_min_observations">Minimum Observations</label>
+          <input type="number" id="hotness_min_observations" min="1" max="50" value="5">
+          <span class="help-text">Minimum data points needed before hotness detection activates for a streamer (default 5)</span>
+        </div>
+
+        <div class="form-group">
+          <label for="hotness_min_streams">Minimum Streams Observed</label>
+          <input type="number" id="hotness_min_streams" min="1" max="30" value="7">
+          <span class="help-text">Minimum distinct streams that must be observed before hotness detection activates (default 7)</span>
+        </div>
+
+        <div class="form-group">
+          <label for="hotness_lookback_days">Lookback Window (days)</label>
+          <input type="number" id="hotness_lookback_days" min="7" max="90" value="30">
+          <span class="help-text">How many days of historical data to use for baseline comparison (default 30)</span>
+        </div>
+
+        <div class="form-group">
+          <label for="hotness_age_window_divisor">Age Window Divisor</label>
+          <input type="number" id="hotness_age_window_divisor" min="1" max="10" value="2">
+          <span class="help-text">Controls comparison window width: half-width = stream age / divisor. Higher = narrower, more precise (default 2)</span>
         </div>
       </section>
 
