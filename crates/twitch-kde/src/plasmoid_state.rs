@@ -134,9 +134,14 @@ pub fn compute_plasmoid_state(
     let live_logins: HashSet<String> = streams.iter().map(|s| s.user_login.clone()).collect();
 
     streams.sort_by(|a, b| {
+        let a_hot = raw.hot_stream_ids.contains(&a.user_id);
+        let b_hot = raw.hot_stream_ids.contains(&b.user_id);
         let a_fav = get_importance(&a.user_login, settings) == StreamerImportance::Favourite;
         let b_fav = get_importance(&b.user_login, settings) == StreamerImportance::Favourite;
-        b_fav.cmp(&a_fav).then(b.viewer_count.cmp(&a.viewer_count))
+        b_hot
+            .cmp(&a_hot)
+            .then(b_fav.cmp(&a_fav))
+            .then(b.viewer_count.cmp(&a.viewer_count))
     });
 
     let live_limit = raw.config.live_menu_limit;
@@ -413,6 +418,39 @@ mod tests {
 
         assert_eq!(state.live.visible[0].user_login, "high");
         assert_eq!(state.live.visible[1].user_login, "low");
+    }
+
+    #[test]
+    fn live_streams_sorted_hot_first_then_favourites() {
+        let mut hot = make_stream("1", "hot");
+        hot.viewer_count = 100;
+        let mut fav = make_stream("2", "fav");
+        fav.viewer_count = 50_000;
+        let mut normal = make_stream("3", "normal");
+        normal.viewer_count = 80_000;
+
+        let mut raw = raw_with_importance(
+            "fav",
+            StreamerImportance::Favourite,
+            vec![normal, fav, hot],
+            vec![],
+        );
+        raw.hot_stream_ids = HashSet::from(["1".to_string()]);
+
+        let state = compute_plasmoid_state(raw, None, Utc::now());
+
+        assert_eq!(
+            state.live.visible[0].user_login, "hot",
+            "hot stream should appear first"
+        );
+        assert_eq!(
+            state.live.visible[1].user_login, "fav",
+            "favourite should appear second"
+        );
+        assert_eq!(
+            state.live.visible[2].user_login, "normal",
+            "normal stream should appear last"
+        );
     }
 
     #[test]

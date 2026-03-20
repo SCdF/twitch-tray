@@ -172,11 +172,16 @@ pub fn compute_display_state(
     // Remember which broadcasters are live (used for schedule filtering below)
     let live_logins: HashSet<String> = streams.iter().map(|s| s.user_login.clone()).collect();
 
-    // Sort: Favourites first, then by viewer count descending
+    // Sort: Hot first, then favourites, then by viewer count descending
     streams.sort_by(|a, b| {
+        let a_hot = config.hot_stream_ids.contains(&a.user_id);
+        let b_hot = config.hot_stream_ids.contains(&b.user_id);
         let a_fav = get_importance(&a.user_login, settings) == StreamerImportance::Favourite;
         let b_fav = get_importance(&b.user_login, settings) == StreamerImportance::Favourite;
-        b_fav.cmp(&a_fav).then(b.viewer_count.cmp(&a.viewer_count))
+        b_hot
+            .cmp(&a_hot)
+            .then(b_fav.cmp(&a_fav))
+            .then(b.viewer_count.cmp(&a.viewer_count))
     });
 
     let (live_visible_raw, live_overflow_raw) = if streams.len() > config.live_limit {
@@ -559,6 +564,44 @@ mod tests {
 
         assert_eq!(state.live_section.visible[0].stream.user_login, "high");
         assert_eq!(state.live_section.visible[1].stream.user_login, "low");
+    }
+
+    #[test]
+    fn live_streams_sorted_hot_first_then_favourites() {
+        let mut hot = stream_with_viewers("hot", 100);
+        hot.user_login = "hot".to_string();
+        let mut fav = stream_with_viewers("fav", 50_000);
+        fav.user_login = "fav".to_string();
+        let mut normal = stream_with_viewers("normal", 80_000);
+        normal.user_login = "normal".to_string();
+
+        let (cats, cat_streams) = no_categories();
+
+        let mut config = config_with_importance("fav", StreamerImportance::Favourite);
+        config.hot_stream_ids = HashSet::from(["hot".to_string()]);
+
+        let state = compute_display_state(
+            vec![normal, fav, hot],
+            no_scheduled(),
+            true,
+            &cats,
+            &cat_streams,
+            &config,
+            Utc::now(),
+        );
+
+        assert_eq!(
+            state.live_section.visible[0].stream.user_login, "hot",
+            "hot stream should appear first"
+        );
+        assert_eq!(
+            state.live_section.visible[1].stream.user_login, "fav",
+            "favourite should appear second"
+        );
+        assert_eq!(
+            state.live_section.visible[2].stream.user_login, "normal",
+            "normal stream should appear last"
+        );
     }
 
     #[test]
