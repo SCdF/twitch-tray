@@ -36,7 +36,15 @@ Stored in SQLite (`data.db`). Indexed on `(broadcaster_id, stream_age_min)` for 
 
 The core insight is that viewer counts vary by stream age — the first 10 minutes look different from hour 3. So the baseline must be age-aware.
 
-**Z-score**: `z = (observed - mean) / stddev`. Measures how many standard deviations the current viewer count is from the historical mean at this point in a stream. A z-score of 2.0 means the streamer has 2 standard deviations more viewers than usual.
+**Anscombe-transformed z-score**: Raw viewer counts are integers, and for small streamers the minimum possible fluctuation (+1 viewer) represents a large fraction of their total. This means small streamers are far more likely to trigger hot detection than large ones — a +6 viewer spike on a 10-viewer streamer is unremarkable but produces a huge z-score. The **Anscombe variance-stabilizing transform** fixes this by mapping each viewer count `x` to `sqrt(x + 3/8)` before computing statistics. In this transformed space, the variance is approximately constant (~1/4) regardless of the mean, so z-scores become comparable across streamers of very different sizes.
+
+The z-score is computed in transformed space:
+```
+y = sqrt(x + 3/8)                         # Anscombe transform
+z = (y_observed - mean(y_historical)) / stddev(y_historical)
+```
+
+A z-score of 2.0 means the transformed viewer count is 2 standard deviations above the transformed historical mean. The raw (untransformed) mean and stddev are preserved alongside the transformed values for display in the debug view and notifications.
 
 **Sliding window over stream age**: rather than fixed buckets (0–15 min, 15–30 min, etc.), the window scales with stream age:
 
@@ -57,7 +65,7 @@ This naturally handles the viewer ramp-up without modeling the curve shape.
 - At least `hotness_min_observations` (default 5) data points in the bucket
 - At least `hotness_min_streams` (default 7) distinct streams contributed to the bucket
 
-The `min_streams` gate ensures the baseline is built from multiple independent streams rather than a single session. This prevents false positives when the app has only observed one or two streams for a streamer. Zero stddev (all identical historical values) returns no result rather than dividing by zero.
+The `min_streams` gate ensures the baseline is built from multiple independent streams rather than a single session. This prevents false positives when the app has only observed one or two streams for a streamer. Zero transformed stddev (all identical historical values after transform) returns no result rather than dividing by zero.
 
 ### Caching strategy
 
@@ -100,9 +108,25 @@ Per-streamer override:
 
 ## Design decisions
 
+### Anscombe transform for scale-invariant detection
+
+Viewer counts are integers, and for small streamers the minimum possible fluctuation (+1 viewer) is a large fraction of their total. Without correction, a 10-viewer streamer going to 16 viewers (+60%) produces a much larger z-score than a 10,000-viewer streamer going to 16,000 (+60%), because the raw stddev is proportionally smaller for low counts (variance scales with the mean in Poisson-like count data).
+
+The **Anscombe transform** (`y = sqrt(x + 3/8)`) is a variance-stabilizing transform derived analytically for Poisson data (Anscombe, 1948). After transformation, the variance is approximately 1/4 regardless of the mean, so z-scores become comparable across streamers of all sizes. The `3/8` constant is not a tuning parameter — it's the analytically optimal value.
+
+**Alternatives considered:**
+
+- **Minimum stddev floor** (`max(stddev, mean * k)` for some constant `k`): Simple but requires tuning an arbitrary constant. Different values of `k` would suit different viewer count ranges, and it breaks the statistical interpretation of the z-score threshold. The threshold would need re-tuning whenever the floor constant changes.
+
+- **Log transform** (`y = log(x + 1)`): Common for right-skewed data, but over-corrects for small counts. A streamer going from 2→4 viewers and from 200→400 viewers would produce identical z-scores, which doesn't match intuition — doubling from 2 is much noisier than doubling from 200. The `+1` to handle zero is also ad-hoc.
+
+- **Bayesian shrinkage / empirical Bayes**: The most principled approach — regularize variance estimates with a prior so small-sample streamers are pulled toward a global baseline. However, it requires choosing a prior distribution, maintaining cross-streamer aggregate stats, and significantly complicates the detection path. The z-score threshold would need reinterpretation. Better suited if Anscombe proves insufficient in practice.
+
+- **Coefficient of variation / relative thresholds** (require viewers to be some % above mean in addition to z-score): Adds a second threshold to tune and explain. The Anscombe transform achieves the same goal (scale-invariance) without a second parameter.
+
 ### Z-score over percentile-based detection
 
-Z-score is simpler to compute, configure, and explain. The threshold is a single number (2.0σ) rather than needing to maintain sorted distributions. Downside: z-score assumes roughly normal distributions, and viewer counts are skewed right. The debug view was added specifically to evaluate whether percentile-based detection would work better in practice.
+Z-score is simpler to compute, configure, and explain. The threshold is a single number (2.0σ) rather than needing to maintain sorted distributions. Downside: z-score assumes roughly normal distributions, and viewer counts are skewed right. The Anscombe transform partially addresses the skewness issue by compressing the right tail. The debug view was added specifically to evaluate whether percentile-based detection would work better in practice.
 
 ### Raw rows over rolling stats
 
@@ -169,6 +193,8 @@ Built in 8 phases, following the project's crate-boundary architecture:
 8. **QML plasmoid visuals** — `isHot` property on `StreamerAvatar` and `StreamRow`. Animated swirling `ConicalGradient` ring (fire colors, 2s rotation) that overrides the favourite border. QML tests for hot ring visibility, border behavior, and hot+favourite interaction.
 
 9. **Dynamic sliding window** — replaced precomputed 12-age-point profiles with per-poll dynamic DB queries at the exact current stream age. Added `get_viewer_observations_excluding_stream` to `db.rs` (filters by `stream_started_at != current`). `CachedHotnessProfile` now stores `stream_started_at` + `was_hot` + `last_hotness` instead of the full profile. `was_hot` is preserved on insufficient data to prevent false cool-off notifications. `evaluate_hotness` reads from `last_hotness` cache instead of re-querying.
+
+10. **Anscombe variance-stabilizing transform** — applied `sqrt(x + 3/8)` transform to viewer counts before computing z-scores, making detection scale-invariant across streamers of different sizes. `BucketStats` now carries `transformed_mean` and `transformed_stddev` alongside raw values. `compute_hotness` computes z-score in transformed space; raw mean/stddev preserved for display. No DB, config, or display changes needed — the transform is internal to the detection math.
 
 ### Dependency graph
 

@@ -15,6 +15,10 @@ pub struct BucketStats {
     pub stddev: f64,
     pub count: usize,
     pub distinct_streams: usize,
+    /// Mean of Anscombe-transformed viewer counts (variance-stabilized).
+    pub transformed_mean: f64,
+    /// Stddev of Anscombe-transformed viewer counts (variance-stabilized).
+    pub transformed_stddev: f64,
 }
 
 /// Hotness assessment for a single stream.
@@ -36,6 +40,15 @@ pub struct HotnessConfig {
     pub z_threshold: f64,
     pub min_observations: usize,
     pub min_streams: usize,
+}
+
+/// Anscombe variance-stabilizing transform for Poisson-like count data.
+///
+/// Maps `x` to `sqrt(x + 3/8)`, making the variance approximately constant (~1/4)
+/// regardless of the mean. This ensures z-scores are comparable across streamers
+/// with very different viewer counts.
+fn anscombe(x: f64) -> f64 {
+    (x + 0.375).sqrt()
 }
 
 /// Computes the stream-age window around a given age point.
@@ -62,6 +75,8 @@ pub fn compute_bucket_stats(observations: &[ViewerObservation]) -> BucketStats {
             stddev: 0.0,
             count: 0,
             distinct_streams: 0,
+            transformed_mean: 0.0,
+            transformed_stddev: 0.0,
         };
     }
 
@@ -78,6 +93,21 @@ pub fn compute_bucket_stats(observations: &[ViewerObservation]) -> BucketStats {
         .sum::<f64>()
         / count as f64;
 
+    let transformed_sum: f64 = observations
+        .iter()
+        .map(|o| anscombe(f64::from(o.viewer_count)))
+        .sum();
+    let transformed_mean = transformed_sum / count as f64;
+
+    let transformed_variance = observations
+        .iter()
+        .map(|o| {
+            let diff = anscombe(f64::from(o.viewer_count)) - transformed_mean;
+            diff * diff
+        })
+        .sum::<f64>()
+        / count as f64;
+
     let distinct_streams: std::collections::HashSet<i64> =
         observations.iter().map(|o| o.stream_started_at).collect();
 
@@ -86,6 +116,8 @@ pub fn compute_bucket_stats(observations: &[ViewerObservation]) -> BucketStats {
         stddev: variance.sqrt(),
         count,
         distinct_streams: distinct_streams.len(),
+        transformed_mean,
+        transformed_stddev: transformed_variance.sqrt(),
     }
 }
 
@@ -101,12 +133,13 @@ pub fn compute_hotness(
 ) -> Option<HotnessInfo> {
     if stats.count < config.min_observations
         || stats.distinct_streams < config.min_streams
-        || stats.stddev == 0.0
+        || stats.transformed_stddev == 0.0
     {
         return None;
     }
 
-    let z_score = (f64::from(current_viewers) - stats.mean) / stats.stddev;
+    let z_score =
+        (anscombe(f64::from(current_viewers)) - stats.transformed_mean) / stats.transformed_stddev;
 
     Some(HotnessInfo {
         broadcaster_id: broadcaster_id.to_string(),
@@ -263,12 +296,14 @@ mod tests {
     // === compute_hotness ===
 
     #[test]
-    fn z_score_computed_correctly() {
+    fn z_score_computed_in_transformed_space() {
         let stats = BucketStats {
             mean: 2000.0,
             stddev: 500.0,
             count: 10,
             distinct_streams: 5,
+            transformed_mean: 44.0,
+            transformed_stddev: 5.0,
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
@@ -276,16 +311,22 @@ mod tests {
             min_streams: 1,
         };
         let info = compute_hotness("123", 3500, &stats, &config).unwrap();
-        assert!((info.z_score - 3.0).abs() < f64::EPSILON);
+        // z = (anscombe(3500) - 44.0) / 5.0
+        let expected_z = ((3500.0_f64 + 0.375).sqrt() - 44.0) / 5.0;
+        assert!((info.z_score - expected_z).abs() < f64::EPSILON);
     }
 
     #[test]
     fn hot_when_z_score_exceeds_threshold() {
+        // transformed_mean=50, transformed_stddev=5
+        // anscombe(4000) ≈ 63.25, z ≈ (63.25-50)/5 ≈ 2.65 → hot
         let stats = BucketStats {
             mean: 2000.0,
             stddev: 500.0,
             count: 10,
             distinct_streams: 5,
+            transformed_mean: 50.0,
+            transformed_stddev: 5.0,
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
@@ -300,11 +341,14 @@ mod tests {
 
     #[test]
     fn not_hot_when_below_threshold() {
+        // anscombe(2500) ≈ 50.00, z ≈ (50-50)/5 ≈ 0 → not hot
         let stats = BucketStats {
             mean: 2000.0,
             stddev: 500.0,
             count: 10,
             distinct_streams: 5,
+            transformed_mean: 50.0,
+            transformed_stddev: 5.0,
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
@@ -316,20 +360,26 @@ mod tests {
     }
 
     #[test]
-    fn not_hot_when_exactly_at_threshold() {
+    fn hot_at_or_above_threshold() {
+        // Pick transformed values so we can hit exactly z=2.0:
+        // anscombe(v) = transformed_mean + z * transformed_stddev
+        // We want z >= 2.0 for some integer v.
+        // transformed_mean=40, transformed_stddev=10 → need anscombe(v) >= 60 → v >= 3600-0.375
+        // anscombe(3600) = sqrt(3600.375) ≈ 60.003 → z ≈ 2.0003 → is_hot (>=)
         let stats = BucketStats {
-            mean: 2000.0,
-            stddev: 500.0,
+            mean: 1500.0,
+            stddev: 400.0,
             count: 10,
             distinct_streams: 5,
+            transformed_mean: 40.0,
+            transformed_stddev: 10.0,
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
             min_observations: 5,
             min_streams: 1,
         };
-        // 2000 + 2*500 = 3000 → z=2.0, exactly at threshold → is_hot (>=)
-        let info = compute_hotness("123", 3000, &stats, &config).unwrap();
+        let info = compute_hotness("123", 3600, &stats, &config).unwrap();
         assert!(info.is_hot);
     }
 
@@ -340,6 +390,8 @@ mod tests {
             stddev: 500.0,
             count: 3,
             distinct_streams: 2,
+            transformed_mean: 44.0,
+            transformed_stddev: 5.0,
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
@@ -350,12 +402,14 @@ mod tests {
     }
 
     #[test]
-    fn not_hot_when_stddev_is_zero() {
+    fn not_hot_when_transformed_stddev_is_zero() {
         let stats = BucketStats {
             mean: 2000.0,
             stddev: 0.0,
             count: 10,
             distinct_streams: 5,
+            transformed_mean: 44.726,
+            transformed_stddev: 0.0,
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
@@ -404,6 +458,8 @@ mod tests {
                     stddev: 10.0,
                     count: 5,
                     distinct_streams: 3,
+                    transformed_mean: 0.0,
+                    transformed_stddev: 0.0,
                 },
             ),
             (
@@ -413,6 +469,8 @@ mod tests {
                     stddev: 50.0,
                     count: 5,
                     distinct_streams: 3,
+                    transformed_mean: 0.0,
+                    transformed_stddev: 0.0,
                 },
             ),
             (
@@ -422,6 +480,8 @@ mod tests {
                     stddev: 100.0,
                     count: 5,
                     distinct_streams: 3,
+                    transformed_mean: 0.0,
+                    transformed_stddev: 0.0,
                 },
             ),
         ];
@@ -442,6 +502,8 @@ mod tests {
             stddev: 500.0,
             count: 50,
             distinct_streams: 2,
+            transformed_mean: 44.0,
+            transformed_stddev: 5.0,
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
@@ -453,11 +515,14 @@ mod tests {
 
     #[test]
     fn hot_when_sufficient_distinct_streams() {
+        // anscombe(5000) ≈ 70.71, z ≈ (70.71-44)/5 ≈ 5.34 → hot
         let stats = BucketStats {
             mean: 2000.0,
             stddev: 500.0,
             count: 50,
             distinct_streams: 7,
+            transformed_mean: 44.0,
+            transformed_stddev: 5.0,
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
@@ -498,6 +563,8 @@ mod tests {
                     stddev: 10.0,
                     count: 5,
                     distinct_streams: 3,
+                    transformed_mean: 0.0,
+                    transformed_stddev: 0.0,
                 },
             ),
             (
@@ -507,10 +574,47 @@ mod tests {
                     stddev: 50.0,
                     count: 5,
                     distinct_streams: 3,
+                    transformed_mean: 0.0,
+                    transformed_stddev: 0.0,
                 },
             ),
         ];
         let stats = find_nearest_bucket(&profile, 30).unwrap();
         assert!((stats.mean - 500.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn anscombe_transform_stabilizes_variance_across_scales() {
+        // Small streamer: avg ~10 viewers, current 16 (+60%)
+        // Large streamer: avg ~10000 viewers, current 16000 (+60%)
+        // Without transform, small streamer would have inflated z-score.
+        // With Anscombe, proportionally similar spikes produce similar z-scores.
+        let small_obs: Vec<_> = (0..30)
+            .map(|i| obs_stream(1, 10, 8 + (i % 5), i as i64))
+            .collect();
+        let large_obs: Vec<_> = (0..30)
+            .map(|i| obs_stream(2, 10, 8000 + (i % 5) * 1000, i as i64))
+            .collect();
+
+        let small_stats = compute_bucket_stats(&small_obs);
+        let large_stats = compute_bucket_stats(&large_obs);
+
+        let config = HotnessConfig {
+            z_threshold: 2.0,
+            min_observations: 5,
+            min_streams: 7,
+        };
+
+        let small_info = compute_hotness("1", 16, &small_stats, &config).unwrap();
+        let large_info = compute_hotness("2", 16000, &large_stats, &config).unwrap();
+
+        // The z-scores should be in the same ballpark (both ~60% above mean)
+        // rather than the small streamer having a dramatically higher z-score
+        assert!(
+            (small_info.z_score - large_info.z_score).abs() < 2.0,
+            "z-scores should be comparable: small={:.2}, large={:.2}",
+            small_info.z_score,
+            large_info.z_score
+        );
     }
 }
