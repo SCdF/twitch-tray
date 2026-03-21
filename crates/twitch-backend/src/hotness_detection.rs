@@ -38,6 +38,9 @@ pub struct HotnessInfo {
 #[derive(Debug, Clone)]
 pub struct HotnessConfig {
     pub z_threshold: f64,
+    /// Z-score below which a hot stream is considered "cooled off" (hysteresis).
+    /// Must be less than `z_threshold` to prevent oscillation at the boundary.
+    pub z_cool_threshold: f64,
     pub min_observations: usize,
     pub min_streams: usize,
 }
@@ -123,6 +126,13 @@ pub fn compute_bucket_stats(observations: &[ViewerObservation]) -> BucketStats {
 
 /// Evaluates whether a stream is "hot" based on current viewers and historical bucket stats.
 ///
+/// Uses hysteresis (Schmitt trigger) to prevent oscillation at the threshold boundary:
+/// - A stream becomes hot when z-score >= `z_threshold`
+/// - A hot stream cools off only when z-score < `z_cool_threshold`
+/// - Between the two thresholds, the previous state is preserved
+///
+/// `was_hot` indicates whether the stream was hot on the previous evaluation.
+///
 /// Returns `None` if there are insufficient observations or zero standard deviation
 /// (all historical observations were identical).
 pub fn compute_hotness(
@@ -130,6 +140,7 @@ pub fn compute_hotness(
     current_viewers: u32,
     stats: &BucketStats,
     config: &HotnessConfig,
+    was_hot: bool,
 ) -> Option<HotnessInfo> {
     if stats.count < config.min_observations
         || stats.distinct_streams < config.min_streams
@@ -141,10 +152,18 @@ pub fn compute_hotness(
     let z_score =
         (anscombe(f64::from(current_viewers)) - stats.transformed_mean) / stats.transformed_stddev;
 
+    let is_hot = if was_hot {
+        // Already hot — stay hot unless z drops below cool threshold
+        z_score >= config.z_cool_threshold
+    } else {
+        // Not hot — only become hot if z exceeds entry threshold
+        z_score >= config.z_threshold
+    };
+
     Some(HotnessInfo {
         broadcaster_id: broadcaster_id.to_string(),
         z_score,
-        is_hot: z_score >= config.z_threshold,
+        is_hot,
         mean_viewers: stats.mean,
         stddev: stats.stddev,
         current_viewers,
@@ -307,10 +326,11 @@ mod tests {
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
+            z_cool_threshold: 1.0,
             min_observations: 5,
             min_streams: 1,
         };
-        let info = compute_hotness("123", 3500, &stats, &config).unwrap();
+        let info = compute_hotness("123", 3500, &stats, &config, false).unwrap();
         // z = (anscombe(3500) - 44.0) / 5.0
         let expected_z = ((3500.0_f64 + 0.375).sqrt() - 44.0) / 5.0;
         assert!((info.z_score - expected_z).abs() < f64::EPSILON);
@@ -330,10 +350,11 @@ mod tests {
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
+            z_cool_threshold: 1.0,
             min_observations: 5,
             min_streams: 1,
         };
-        let info = compute_hotness("123", 4000, &stats, &config).unwrap();
+        let info = compute_hotness("123", 4000, &stats, &config, false).unwrap();
         assert!(info.is_hot);
         assert_eq!(info.current_viewers, 4000);
         assert!((info.mean_viewers - 2000.0).abs() < f64::EPSILON);
@@ -352,10 +373,11 @@ mod tests {
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
+            z_cool_threshold: 1.0,
             min_observations: 5,
             min_streams: 1,
         };
-        let info = compute_hotness("123", 2500, &stats, &config).unwrap();
+        let info = compute_hotness("123", 2500, &stats, &config, false).unwrap();
         assert!(!info.is_hot);
     }
 
@@ -376,10 +398,11 @@ mod tests {
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
+            z_cool_threshold: 1.0,
             min_observations: 5,
             min_streams: 1,
         };
-        let info = compute_hotness("123", 3600, &stats, &config).unwrap();
+        let info = compute_hotness("123", 3600, &stats, &config, false).unwrap();
         assert!(info.is_hot);
     }
 
@@ -395,10 +418,11 @@ mod tests {
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
+            z_cool_threshold: 1.0,
             min_observations: 5,
             min_streams: 1,
         };
-        assert!(compute_hotness("123", 5000, &stats, &config).is_none());
+        assert!(compute_hotness("123", 5000, &stats, &config, false).is_none());
     }
 
     #[test]
@@ -413,10 +437,11 @@ mod tests {
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
+            z_cool_threshold: 1.0,
             min_observations: 5,
             min_streams: 1,
         };
-        assert!(compute_hotness("123", 5000, &stats, &config).is_none());
+        assert!(compute_hotness("123", 5000, &stats, &config, false).is_none());
     }
 
     // === compute_hotness_profile ===
@@ -507,10 +532,11 @@ mod tests {
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
+            z_cool_threshold: 1.0,
             min_observations: 5,
             min_streams: 7,
         };
-        assert!(compute_hotness("123", 5000, &stats, &config).is_none());
+        assert!(compute_hotness("123", 5000, &stats, &config, false).is_none());
     }
 
     #[test]
@@ -526,10 +552,11 @@ mod tests {
         };
         let config = HotnessConfig {
             z_threshold: 2.0,
+            z_cool_threshold: 1.0,
             min_observations: 5,
             min_streams: 7,
         };
-        let info = compute_hotness("123", 5000, &stats, &config).unwrap();
+        let info = compute_hotness("123", 5000, &stats, &config, false).unwrap();
         assert!(info.is_hot);
     }
 
@@ -601,12 +628,13 @@ mod tests {
 
         let config = HotnessConfig {
             z_threshold: 2.0,
+            z_cool_threshold: 1.0,
             min_observations: 5,
             min_streams: 7,
         };
 
-        let small_info = compute_hotness("1", 16, &small_stats, &config).unwrap();
-        let large_info = compute_hotness("2", 16000, &large_stats, &config).unwrap();
+        let small_info = compute_hotness("1", 16, &small_stats, &config, false).unwrap();
+        let large_info = compute_hotness("2", 16000, &large_stats, &config, false).unwrap();
 
         // The z-scores should be in the same ballpark (both ~60% above mean)
         // rather than the small streamer having a dramatically higher z-score
@@ -615,6 +643,87 @@ mod tests {
             "z-scores should be comparable: small={:.2}, large={:.2}",
             small_info.z_score,
             large_info.z_score
+        );
+    }
+
+    // === hysteresis (Schmitt trigger) ===
+
+    #[test]
+    fn hot_stream_stays_hot_in_dead_zone() {
+        // z ≈ 1.5 — between cool threshold (1.0) and entry threshold (2.0)
+        // was_hot=true → should remain hot
+        let stats = BucketStats {
+            mean: 2000.0,
+            stddev: 500.0,
+            count: 10,
+            distinct_streams: 5,
+            transformed_mean: 40.0,
+            transformed_stddev: 10.0,
+        };
+        let config = HotnessConfig {
+            z_threshold: 2.0,
+            z_cool_threshold: 1.0,
+            min_observations: 5,
+            min_streams: 1,
+        };
+        // anscombe(v) = 40 + 1.5*10 = 55 → v = 55²-0.375 ≈ 3024.625
+        let info = compute_hotness("123", 3025, &stats, &config, true).unwrap();
+        assert!(
+            info.is_hot,
+            "z={:.2} should stay hot (above cool threshold)",
+            info.z_score
+        );
+    }
+
+    #[test]
+    fn cold_stream_stays_cold_in_dead_zone() {
+        // Same z ≈ 1.5 but was_hot=false → should stay cold
+        let stats = BucketStats {
+            mean: 2000.0,
+            stddev: 500.0,
+            count: 10,
+            distinct_streams: 5,
+            transformed_mean: 40.0,
+            transformed_stddev: 10.0,
+        };
+        let config = HotnessConfig {
+            z_threshold: 2.0,
+            z_cool_threshold: 1.0,
+            min_observations: 5,
+            min_streams: 1,
+        };
+        let info = compute_hotness("123", 3025, &stats, &config, false).unwrap();
+        assert!(
+            !info.is_hot,
+            "z={:.2} should stay cold (below entry threshold)",
+            info.z_score
+        );
+    }
+
+    #[test]
+    fn hot_stream_cools_off_below_cool_threshold() {
+        // z < 1.0 and was_hot=true → should become not hot
+        let stats = BucketStats {
+            mean: 2000.0,
+            stddev: 500.0,
+            count: 10,
+            distinct_streams: 5,
+            transformed_mean: 40.0,
+            transformed_stddev: 10.0,
+        };
+        let config = HotnessConfig {
+            z_threshold: 2.0,
+            z_cool_threshold: 1.0,
+            min_observations: 5,
+            min_streams: 1,
+        };
+        // anscombe(v) needs to be < 40 + 1.0*10 = 50 → v < 2500-0.375
+        // Use 2000 viewers → anscombe(2000) ≈ 44.72, z ≈ 0.47
+        let info = compute_hotness("123", 2000, &stats, &config, true).unwrap();
+        assert!(
+            !info.is_hot,
+            "z={:.2} should cool off (below cool threshold)",
+            info.z_score
         );
     }
 }

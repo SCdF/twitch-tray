@@ -23,6 +23,7 @@ pub const DEFAULT_HOTNESS_Z_THRESHOLD: f64 = 2.0;
 pub const DEFAULT_HOTNESS_MIN_OBSERVATIONS: usize = 5;
 pub const DEFAULT_HOTNESS_MIN_STREAMS: usize = 7;
 pub const DEFAULT_HOTNESS_LOOKBACK_DAYS: u32 = 30;
+pub const DEFAULT_HOTNESS_Z_COOL_THRESHOLD: f64 = 1.0;
 pub const DEFAULT_HOTNESS_AGE_WINDOW_DIVISOR: u32 = 2;
 pub const DEFAULT_NOTIFY_ON_HOT: bool = true;
 
@@ -105,6 +106,10 @@ pub struct Config {
     /// How many days of historical data to consider for hotness detection (default: 30).
     #[serde(default = "default_hotness_lookback_days")]
     pub hotness_lookback_days: u32,
+    /// Z-score threshold below which a hot stream is considered "cooled off" (default: 1.0).
+    /// Creates a dead zone between entry and exit thresholds to prevent oscillation.
+    #[serde(default = "default_hotness_z_cool_threshold")]
+    pub hotness_z_cool_threshold: f64,
     /// Age window divisor: half-width = max(stream_age / divisor, 5 min) (default: 2).
     /// Lower values = wider comparison windows. Higher = narrower, more precise.
     #[serde(default = "default_hotness_age_window_divisor")]
@@ -180,6 +185,10 @@ fn default_hotness_lookback_days() -> u32 {
     DEFAULT_HOTNESS_LOOKBACK_DAYS
 }
 
+fn default_hotness_z_cool_threshold() -> f64 {
+    DEFAULT_HOTNESS_Z_COOL_THRESHOLD
+}
+
 fn default_hotness_age_window_divisor() -> u32 {
     DEFAULT_HOTNESS_AGE_WINDOW_DIVISOR
 }
@@ -206,6 +215,7 @@ impl Default for Config {
             hotness_min_observations: DEFAULT_HOTNESS_MIN_OBSERVATIONS,
             hotness_min_streams: DEFAULT_HOTNESS_MIN_STREAMS,
             hotness_lookback_days: DEFAULT_HOTNESS_LOOKBACK_DAYS,
+            hotness_z_cool_threshold: DEFAULT_HOTNESS_Z_COOL_THRESHOLD,
             hotness_age_window_divisor: DEFAULT_HOTNESS_AGE_WINDOW_DIVISOR,
             notify_on_hot: DEFAULT_NOTIFY_ON_HOT,
             followed_categories: Vec::new(),
@@ -476,6 +486,7 @@ mod tests {
             live_menu_limit: 7,
             schedule_menu_limit: 3,
             hotness_z_threshold: 3.0,
+            hotness_z_cool_threshold: 1.5,
             hotness_min_observations: 10,
             hotness_min_streams: 5,
             hotness_lookback_days: 14,
@@ -527,6 +538,10 @@ mod tests {
         );
         assert!(
             (deserialized.hotness_z_threshold - original.hotness_z_threshold).abs() < f64::EPSILON
+        );
+        assert!(
+            (deserialized.hotness_z_cool_threshold - original.hotness_z_cool_threshold).abs()
+                < f64::EPSILON
         );
         assert_eq!(
             deserialized.hotness_min_observations,

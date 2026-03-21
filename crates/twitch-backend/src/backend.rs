@@ -581,12 +581,18 @@ impl Backend {
 
                 let hotness_cfg = HotnessConfig {
                     z_threshold,
+                    z_cool_threshold: cfg.hotness_z_cool_threshold,
                     min_observations: cfg.hotness_min_observations,
                     min_streams: cfg.hotness_min_streams,
                 };
 
-                let result =
-                    compute_hotness(&stream.user_id, stream.viewer_count, &stats, &hotness_cfg);
+                let result = compute_hotness(
+                    &stream.user_id,
+                    stream.viewer_count,
+                    &stats,
+                    &hotness_cfg,
+                    cached.was_hot,
+                );
 
                 // Cache for display path
                 cached.last_hotness.clone_from(&result);

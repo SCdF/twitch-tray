@@ -60,10 +60,14 @@ Examples:
 
 This naturally handles the viewer ramp-up without modeling the curve shape.
 
-**Thresholds**: a stream is "hot" when all of the following are true:
-- `z >= hotness_z_threshold` (default 2.0)
+**Thresholds with hysteresis (Schmitt trigger)**: dual z-score thresholds prevent oscillation when a streamer hovers near the boundary:
+- A stream **becomes hot** when `z >= hotness_z_threshold` (default 2.0)
+- A hot stream **cools off** only when `z < hotness_z_cool_threshold` (default 1.0)
+- Between the two thresholds, the previous state is preserved (dead zone)
 - At least `hotness_min_observations` (default 5) data points in the bucket
 - At least `hotness_min_streams` (default 7) distinct streams contributed to the bucket
+
+The dead zone (default: 1.0 to 2.0) means a streamer who becomes hot at z=2.0 won't lose their hot status until they drop below z=1.0. This is the standard approach in signal processing — analogous to warning vs action limits in statistical process control charts.
 
 The `min_streams` gate ensures the baseline is built from multiple independent streams rather than a single session. This prevents false positives when the app has only observed one or two streams for a streamer. Zero transformed stddev (all identical historical values after transform) returns no result rather than dividing by zero.
 
@@ -82,7 +86,8 @@ The debug profiles view (`get_debug_hotness_profiles`) still computes the 12 fix
 ### Configuration
 
 Global config (`~/.config/twitch-tray/config.json`):
-- `hotness_z_threshold: f64` (default 2.0)
+- `hotness_z_threshold: f64` (default 2.0) — z-score to enter hot state
+- `hotness_z_cool_threshold: f64` (default 1.0) — z-score below which a hot stream cools off
 - `hotness_min_observations: usize` (default 5)
 - `hotness_min_streams: usize` (default 7) — minimum distinct streams observed before detection activates
 - `notify_on_hot: bool` (default true)
@@ -166,6 +171,20 @@ The fix adds `stream_started_at` to each observation row and counts distinct `st
 
 Distinct streams was chosen over distinct calendar days because streams can span midnight, and a streamer who does two streams in one day provides more independent signal than one.
 
+### Hysteresis (dual thresholds) over single threshold
+
+A single z-score threshold causes oscillation ("flickering") when a streamer hovers near the boundary — every 60-second poll might flip between hot and not-hot. The standard signal processing solution is a **Schmitt trigger**: separate entry and exit thresholds with a dead zone between them.
+
+**Alternatives considered:**
+
+- **Percentage buffer** (cool off when z < threshold * 0.75): Just an indirect way to express the same dual-threshold idea, but the percentage has no statistical meaning and is harder to reason about.
+
+- **Time-based cooldown** (require N consecutive not-hot polls): Ignores the actual signal. A streamer who drops to z=-1.0 would still show as hot for N minutes. Also adds temporal state that interacts awkwardly with the existing `was_hot` preservation on insufficient data.
+
+- **Exponential moving average of z-scores**: Smoothing naturally adds hysteresis but changes the statistical interpretation, adds hidden state, and introduces a new parameter (decay rate) that's harder to reason about than a second z-score threshold.
+
+The dual-threshold approach stays entirely within the z-score framework, adds exactly one parameter (`hotness_z_cool_threshold`), and is the most transparent to users.
+
 ### Edge-triggered notifications
 
 One notification per not-hot → hot transition. If the streamer cools off and spikes again, that's a new transition and fires a new notification. This avoids notification spam while still catching multiple hot periods within a single stream.
@@ -195,6 +214,8 @@ Built in 8 phases, following the project's crate-boundary architecture:
 9. **Dynamic sliding window** — replaced precomputed 12-age-point profiles with per-poll dynamic DB queries at the exact current stream age. Added `get_viewer_observations_excluding_stream` to `db.rs` (filters by `stream_started_at != current`). `CachedHotnessProfile` now stores `stream_started_at` + `was_hot` + `last_hotness` instead of the full profile. `was_hot` is preserved on insufficient data to prevent false cool-off notifications. `evaluate_hotness` reads from `last_hotness` cache instead of re-querying.
 
 10. **Anscombe variance-stabilizing transform** — applied `sqrt(x + 3/8)` transform to viewer counts before computing z-scores, making detection scale-invariant across streamers of different sizes. `BucketStats` now carries `transformed_mean` and `transformed_stddev` alongside raw values. `compute_hotness` computes z-score in transformed space; raw mean/stddev preserved for display. No DB, config, or display changes needed — the transform is internal to the detection math.
+
+11. **Hysteresis (dual z-score thresholds)** — added `z_cool_threshold` (default 1.0) to prevent oscillation when a streamer's z-score hovers near the entry threshold. `compute_hotness` now takes `was_hot: bool` and uses the entry threshold (`z_threshold`) when cold, or the exit threshold (`z_cool_threshold`) when already hot. Between the two thresholds, the previous state is preserved. Added `hotness_z_cool_threshold` to `Config` and the settings UI.
 
 ### Dependency graph
 

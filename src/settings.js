@@ -23,6 +23,7 @@ const notifyOnLiveInput = document.getElementById('notify_on_live');
 const notifyOnCategoryInput = document.getElementById('notify_on_category');
 const notifyOnHotInput = document.getElementById('notify_on_hot');
 const hotnessZThresholdInput = document.getElementById('hotness_z_threshold');
+const hotnessZCoolThresholdInput = document.getElementById('hotness_z_cool_threshold');
 const hotnessMinObservationsInput = document.getElementById('hotness_min_observations');
 const hotnessMinStreamsInput = document.getElementById('hotness_min_streams');
 const hotnessLookbackDaysInput = document.getElementById('hotness_lookback_days');
@@ -107,6 +108,7 @@ function populateForm() {
   notifyOnCategoryInput.checked = config.notify_on_category;
   notifyOnHotInput.checked = config.notify_on_hot;
   hotnessZThresholdInput.value = config.hotness_z_threshold;
+  hotnessZCoolThresholdInput.value = config.hotness_z_cool_threshold;
   hotnessMinObservationsInput.value = config.hotness_min_observations;
   hotnessMinStreamsInput.value = config.hotness_min_streams;
   hotnessLookbackDaysInput.value = config.hotness_lookback_days;
@@ -497,6 +499,7 @@ async function autoSave() {
         notify_on_category: notifyOnCategoryInput.checked,
         notify_on_hot: notifyOnHotInput.checked,
         hotness_z_threshold: parseFloat(hotnessZThresholdInput.value) || 2.0,
+        hotness_z_cool_threshold: parseFloat(hotnessZCoolThresholdInput.value) || 1.0,
         hotness_min_observations: parseInt(hotnessMinObservationsInput.value, 10) || 5,
         hotness_min_streams: parseInt(hotnessMinStreamsInput.value, 10) || 7,
         hotness_lookback_days: parseInt(hotnessLookbackDaysInput.value, 10) || 30,
@@ -512,6 +515,7 @@ async function autoSave() {
       newConfig.poll_interval_sec = Math.max(30, Math.min(300, newConfig.poll_interval_sec));
       newConfig.notify_max_gap_min = Math.max(1, Math.min(60, newConfig.notify_max_gap_min));
       newConfig.hotness_z_threshold = Math.max(0.5, Math.min(5.0, newConfig.hotness_z_threshold));
+      newConfig.hotness_z_cool_threshold = Math.max(0.0, Math.min(newConfig.hotness_z_threshold, newConfig.hotness_z_cool_threshold));
       newConfig.hotness_min_observations = Math.max(1, Math.min(50, newConfig.hotness_min_observations));
       newConfig.hotness_min_streams = Math.max(1, Math.min(30, newConfig.hotness_min_streams));
       newConfig.hotness_lookback_days = Math.max(7, Math.min(90, newConfig.hotness_lookback_days));
