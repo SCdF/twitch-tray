@@ -33,6 +33,8 @@ pub fn start_listener(
                 streamer_settings: raw.config.streamer_settings.clone(),
                 schedule_lookahead_hours: raw.config.schedule_lookahead_hours,
                 live_limit: raw.config.live_menu_limit,
+                always_show_favourites: raw.config.always_show_favourites,
+                always_show_hot: raw.config.always_show_hot,
                 schedule_limit: raw.config.schedule_menu_limit,
                 hot_stream_ids: raw.hot_stream_ids.clone(),
             };

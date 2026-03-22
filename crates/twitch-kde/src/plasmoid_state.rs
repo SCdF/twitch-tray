@@ -144,9 +144,28 @@ pub fn compute_plasmoid_state(
             .then(b.viewer_count.cmp(&a.viewer_count))
     });
 
-    let live_limit = raw.config.live_menu_limit;
-    let (live_visible_raw, live_overflow_raw) = if streams.len() > live_limit {
-        let (main, over) = streams.split_at(live_limit);
+    let effective_limit = {
+        let mut limit = raw.config.live_menu_limit.min(streams.len());
+        if raw.config.always_show_favourites || raw.config.always_show_hot {
+            for (i, s) in streams.iter().enumerate().skip(limit) {
+                let dominated_by_fav = raw.config.always_show_favourites
+                    && get_importance(&s.user_login, settings) == StreamerImportance::Favourite;
+                let dominated_by_hot =
+                    raw.config.always_show_hot && raw.hot_stream_ids.contains(&s.user_id);
+                let is_fav =
+                    get_importance(&s.user_login, settings) == StreamerImportance::Favourite;
+                let is_hot = raw.hot_stream_ids.contains(&s.user_id);
+                if dominated_by_fav || dominated_by_hot {
+                    limit = i + 1;
+                } else if !is_fav && !is_hot {
+                    break;
+                }
+            }
+        }
+        limit
+    };
+    let (live_visible_raw, live_overflow_raw) = if streams.len() > effective_limit {
+        let (main, over) = streams.split_at(effective_limit);
         (main.to_vec(), over.to_vec())
     } else {
         (streams, vec![])

@@ -29,6 +29,8 @@ const hotnessMinStreamsInput = document.getElementById('hotness_min_streams');
 const hotnessLookbackDaysInput = document.getElementById('hotness_lookback_days');
 const hotnessAgeWindowDivisorInput = document.getElementById('hotness_age_window_divisor');
 const liveMenuLimitInput = document.getElementById('live_menu_limit');
+const alwaysShowFavouritesInput = document.getElementById('always_show_favourites');
+const alwaysShowHotInput = document.getElementById('always_show_hot');
 const scheduleMenuLimitInput = document.getElementById('schedule_menu_limit');
 const categorySearchInput = document.getElementById('category_search');
 const searchResultsDiv = document.getElementById('search_results');
@@ -115,6 +117,8 @@ function populateForm() {
   hotnessAgeWindowDivisorInput.value = config.hotness_age_window_divisor;
   scheduleLookaheadInput.value = config.schedule_lookahead_hours;
   liveMenuLimitInput.value = config.live_menu_limit;
+  alwaysShowFavouritesInput.checked = config.always_show_favourites;
+  alwaysShowHotInput.checked = config.always_show_hot;
   scheduleMenuLimitInput.value = config.schedule_menu_limit;
 
   renderCategoryList();
@@ -412,7 +416,7 @@ function setupEventListeners() {
   [pollIntervalInput, notifyMaxGapInput, scheduleLookaheadInput, liveMenuLimitInput, scheduleMenuLimitInput, hotnessZThresholdInput, hotnessMinObservationsInput, hotnessMinStreamsInput, hotnessLookbackDaysInput, hotnessAgeWindowDivisorInput].forEach(input => {
     input.addEventListener('change', () => autoSave());
   });
-  [notifyOnLiveInput, notifyOnCategoryInput, notifyOnHotInput].forEach(input => {
+  [notifyOnLiveInput, notifyOnCategoryInput, notifyOnHotInput, alwaysShowFavouritesInput, alwaysShowHotInput].forEach(input => {
     input.addEventListener('change', () => autoSave());
   });
 }
@@ -506,6 +510,8 @@ async function autoSave() {
         hotness_age_window_divisor: parseInt(hotnessAgeWindowDivisorInput.value, 10) || 2,
         schedule_lookahead_hours: parseInt(scheduleLookaheadInput.value, 10) || 6,
         live_menu_limit: parseInt(liveMenuLimitInput.value, 10) || 10,
+        always_show_favourites: alwaysShowFavouritesInput.checked,
+        always_show_hot: alwaysShowHotInput.checked,
         schedule_menu_limit: parseInt(scheduleMenuLimitInput.value, 10) || 5,
         followed_categories: config.followed_categories || [],
         streamer_settings: config.streamer_settings || {}

@@ -90,6 +90,10 @@ pub struct DisplayConfig {
     pub schedule_lookahead_hours: u64,
     /// Maximum live streams shown in the main menu before the overflow submenu.
     pub live_limit: usize,
+    /// Always show favourite streams in the main menu, even beyond the live limit.
+    pub always_show_favourites: bool,
+    /// Always show hot streams in the main menu, even beyond the live limit.
+    pub always_show_hot: bool,
     /// Maximum scheduled streams shown in the main menu before the overflow submenu.
     pub schedule_limit: usize,
     /// User IDs of streams currently detected as "hot" (significantly above normal viewers).
@@ -184,8 +188,34 @@ pub fn compute_display_state(
             .then(b.viewer_count.cmp(&a.viewer_count))
     });
 
-    let (live_visible_raw, live_overflow_raw) = if streams.len() > config.live_limit {
-        let (main, over) = streams.split_at(config.live_limit);
+    // Compute effective limit: start with live_limit, then extend to include
+    // any favourites/hot streams that fall beyond the base limit.
+    let effective_limit = {
+        let mut limit = config.live_limit.min(streams.len());
+        if config.always_show_favourites || config.always_show_hot {
+            for (i, s) in streams.iter().enumerate().skip(limit) {
+                let dominated_by_fav = config.always_show_favourites
+                    && get_importance(&s.user_login, settings) == StreamerImportance::Favourite;
+                let dominated_by_hot =
+                    config.always_show_hot && config.hot_stream_ids.contains(&s.user_id);
+                let is_fav =
+                    get_importance(&s.user_login, settings) == StreamerImportance::Favourite;
+                let is_hot = config.hot_stream_ids.contains(&s.user_id);
+                if dominated_by_fav || dominated_by_hot {
+                    limit = i + 1;
+                } else if !is_fav && !is_hot {
+                    // Truly normal stream — everything after is normal too.
+                    break;
+                }
+                // Otherwise it's a hot/fav stream whose flag is off; skip it
+                // but keep scanning for streams whose flag IS on.
+            }
+        }
+        limit
+    };
+
+    let (live_visible_raw, live_overflow_raw) = if streams.len() > effective_limit {
+        let (main, over) = streams.split_at(effective_limit);
         (main.to_vec(), over.to_vec())
     } else {
         (streams, Vec::new())
@@ -337,6 +367,8 @@ mod tests {
             streamer_settings: HashMap::new(),
             schedule_lookahead_hours: 6,
             live_limit: 10,
+            always_show_favourites: true,
+            always_show_hot: true,
             schedule_limit: 5,
             hot_stream_ids: HashSet::new(),
         }
@@ -357,6 +389,8 @@ mod tests {
             streamer_settings: settings,
             schedule_lookahead_hours: 6,
             live_limit: 10,
+            always_show_favourites: true,
+            always_show_hot: true,
             schedule_limit: 5,
             hot_stream_ids: HashSet::new(),
         }
@@ -658,6 +692,238 @@ mod tests {
 
         assert_eq!(state.live_section.visible.len(), 5);
         assert!(state.live_section.overflow.is_empty());
+    }
+
+    #[test]
+    fn always_show_favourites_extends_visible_beyond_limit() {
+        // Sort order: hot > favourite > normal. With 3 hot streams filling the
+        // limit, a favourite would overflow. always_show_favourites extends
+        // the visible section to include it.
+        let mut hot_ids = HashSet::new();
+        let mut streams: Vec<Stream> = (0..3)
+            .map(|i| {
+                let mut s = make_stream(&format!("hot{i}"), &format!("Hot{i}"));
+                s.viewer_count = 1000 - i as u32;
+                s.user_id = format!("uid_hot{i}");
+                hot_ids.insert(s.user_id.clone());
+                s
+            })
+            .collect();
+        let mut fav = make_stream("favuser", "FavUser");
+        fav.viewer_count = 500;
+        streams.push(fav);
+
+        let (cats, cat_streams) = no_categories();
+        let mut settings = HashMap::new();
+        settings.insert(
+            "favuser".to_string(),
+            StreamerSettings {
+                display_name: "FavUser".to_string(),
+                importance: StreamerImportance::Favourite,
+                hotness_z_threshold_override: None,
+            },
+        );
+        let config = DisplayConfig {
+            streamer_settings: settings,
+            live_limit: 3,
+            always_show_favourites: true,
+            always_show_hot: true,
+            hot_stream_ids: hot_ids,
+            ..default_config()
+        };
+
+        let state = compute_display_state(
+            streams,
+            no_scheduled(),
+            true,
+            &cats,
+            &cat_streams,
+            &config,
+            Utc::now(),
+        );
+
+        // 3 hot + 1 favourite = 4 visible (limit extended from 3)
+        assert_eq!(state.live_section.visible.len(), 4);
+        assert!(state.live_section.overflow.is_empty());
+    }
+
+    #[test]
+    fn always_show_favourites_disabled_respects_limit() {
+        // Same setup as above, but always_show_favourites=false — fav overflows.
+        let mut hot_ids = HashSet::new();
+        let mut streams: Vec<Stream> = (0..3)
+            .map(|i| {
+                let mut s = make_stream(&format!("hot{i}"), &format!("Hot{i}"));
+                s.viewer_count = 1000 - i as u32;
+                s.user_id = format!("uid_hot{i}");
+                hot_ids.insert(s.user_id.clone());
+                s
+            })
+            .collect();
+        let mut fav = make_stream("favuser", "FavUser");
+        fav.viewer_count = 500;
+        streams.push(fav);
+
+        let (cats, cat_streams) = no_categories();
+        let config = DisplayConfig {
+            live_limit: 3,
+            always_show_favourites: false,
+            always_show_hot: false,
+            hot_stream_ids: hot_ids,
+            ..config_with_importance("favuser", StreamerImportance::Favourite)
+        };
+
+        let state = compute_display_state(
+            streams,
+            no_scheduled(),
+            true,
+            &cats,
+            &cat_streams,
+            &config,
+            Utc::now(),
+        );
+
+        assert_eq!(state.live_section.visible.len(), 3);
+        assert_eq!(state.live_section.overflow.len(), 1);
+    }
+
+    #[test]
+    fn always_show_hot_extends_visible_beyond_limit() {
+        // 3 favourites fill the limit, 1 hot stream would overflow.
+        // always_show_hot extends the visible section.
+        let mut settings = HashMap::new();
+        let mut streams: Vec<Stream> = (0..3)
+            .map(|i| {
+                let name = format!("fav{i}");
+                let mut s = make_stream(&name, &format!("Fav{i}"));
+                s.viewer_count = 1000 - i as u32;
+                settings.insert(
+                    name,
+                    StreamerSettings {
+                        display_name: format!("Fav{i}"),
+                        importance: StreamerImportance::Favourite,
+                        hotness_z_threshold_override: None,
+                    },
+                );
+                s
+            })
+            .collect();
+        let mut hot = make_stream("hotuser", "HotUser");
+        hot.viewer_count = 10;
+        hot.user_id = "uid_hot".to_string();
+        streams.push(hot);
+
+        let (cats, cat_streams) = no_categories();
+        let config = DisplayConfig {
+            streamer_settings: settings,
+            live_limit: 3,
+            always_show_favourites: true,
+            always_show_hot: true,
+            hot_stream_ids: HashSet::from(["uid_hot".to_string()]),
+            ..default_config()
+        };
+
+        let state = compute_display_state(
+            streams,
+            no_scheduled(),
+            true,
+            &cats,
+            &cat_streams,
+            &config,
+            Utc::now(),
+        );
+
+        // Hot is sorted first, then 3 favourites. Limit=3 would cut the last fav,
+        // but always_show_favourites extends to include it. Result: 1 hot + 3 fav = 4.
+        assert_eq!(state.live_section.visible.len(), 4);
+        assert!(state.live_section.overflow.is_empty());
+    }
+
+    #[test]
+    fn always_show_hot_disabled_respects_limit() {
+        // Hot stream sorted first, 3 normals after. Limit=3, hot disabled,
+        // so limit is respected strictly.
+        let mut streams: Vec<Stream> = (0..3)
+            .map(|i| {
+                let mut s = make_stream(&format!("normal{i}"), &format!("Normal{i}"));
+                s.viewer_count = 100 - i as u32;
+                s.user_id = format!("uid_normal{i}");
+                s
+            })
+            .collect();
+        let mut hot = make_stream("hotuser", "HotUser");
+        hot.viewer_count = 5000; // high viewers + hot → sorted first
+        hot.user_id = "uid_hot".to_string();
+        streams.push(hot);
+
+        let (cats, cat_streams) = no_categories();
+        let config = DisplayConfig {
+            live_limit: 3,
+            always_show_hot: false,
+            always_show_favourites: false,
+            hot_stream_ids: HashSet::from(["uid_hot".to_string()]),
+            ..default_config()
+        };
+
+        let state = compute_display_state(
+            streams,
+            no_scheduled(),
+            true,
+            &cats,
+            &cat_streams,
+            &config,
+            Utc::now(),
+        );
+
+        assert_eq!(state.live_section.visible.len(), 3);
+        assert_eq!(state.live_section.overflow.len(), 1);
+    }
+
+    #[test]
+    fn always_show_favourites_scans_past_hot_when_hot_disabled() {
+        // Sort order: hot > favourite > normal. With limit=2 and 2 hot streams
+        // filling it, favourites sit at position 2+. If always_show_hot=false,
+        // the scan must skip past the hot streams to find the favourite.
+        let mut hot_ids = HashSet::new();
+        let mut streams: Vec<Stream> = (0..2)
+            .map(|i| {
+                let mut s = make_stream(&format!("hot{i}"), &format!("Hot{i}"));
+                s.viewer_count = 1000 - i as u32;
+                s.user_id = format!("uid_hot{i}");
+                hot_ids.insert(s.user_id.clone());
+                s
+            })
+            .collect();
+        let mut fav = make_stream("favuser", "FavUser");
+        fav.viewer_count = 500;
+        streams.push(fav);
+        // Add a normal stream that should stay in overflow
+        let mut normal = make_stream("normal0", "Normal0");
+        normal.viewer_count = 50;
+        streams.push(normal);
+
+        let (cats, cat_streams) = no_categories();
+        let config = DisplayConfig {
+            live_limit: 2,
+            always_show_favourites: true,
+            always_show_hot: false,
+            hot_stream_ids: hot_ids,
+            ..config_with_importance("favuser", StreamerImportance::Favourite)
+        };
+
+        let state = compute_display_state(
+            streams,
+            no_scheduled(),
+            true,
+            &cats,
+            &cat_streams,
+            &config,
+            Utc::now(),
+        );
+
+        // 2 hot + 1 favourite visible; normal in overflow
+        assert_eq!(state.live_section.visible.len(), 3);
+        assert_eq!(state.live_section.overflow.len(), 1);
     }
 
     #[test]

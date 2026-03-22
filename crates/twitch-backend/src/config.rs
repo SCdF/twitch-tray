@@ -57,6 +57,7 @@ pub struct FollowedCategory {
 
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Config {
     #[serde(default = "default_poll_interval")]
     pub poll_interval_sec: u64,
@@ -88,6 +89,12 @@ pub struct Config {
     /// Maximum live streams shown directly in the main menu before the overflow submenu.
     #[serde(default = "default_live_menu_limit")]
     pub live_menu_limit: usize,
+    /// Always show favourite streams in the main menu, even beyond the live limit.
+    #[serde(default = "default_true")]
+    pub always_show_favourites: bool,
+    /// Always show hot streams in the main menu, even beyond the live limit.
+    #[serde(default = "default_true")]
+    pub always_show_hot: bool,
     /// Maximum scheduled streams shown directly in the main menu before the overflow submenu.
     #[serde(default = "default_schedule_menu_limit")]
     pub schedule_menu_limit: usize,
@@ -197,6 +204,10 @@ fn default_notify_on_hot() -> bool {
     DEFAULT_NOTIFY_ON_HOT
 }
 
+fn default_true() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -210,6 +221,8 @@ impl Default for Config {
             schedule_lookahead_hours: DEFAULT_SCHEDULE_LOOKAHEAD_HOURS,
             schedule_before_now_min: DEFAULT_SCHEDULE_BEFORE_NOW_MIN,
             live_menu_limit: DEFAULT_LIVE_MENU_LIMIT,
+            always_show_favourites: true,
+            always_show_hot: true,
             schedule_menu_limit: DEFAULT_SCHEDULE_MENU_LIMIT,
             hotness_z_threshold: DEFAULT_HOTNESS_Z_THRESHOLD,
             hotness_min_observations: DEFAULT_HOTNESS_MIN_OBSERVATIONS,
@@ -484,6 +497,8 @@ mod tests {
             schedule_lookahead_hours: 12,
             schedule_before_now_min: 20,
             live_menu_limit: 7,
+            always_show_favourites: true,
+            always_show_hot: false,
             schedule_menu_limit: 3,
             hotness_z_threshold: 3.0,
             hotness_z_cool_threshold: 1.5,
