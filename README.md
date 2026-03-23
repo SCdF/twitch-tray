@@ -10,6 +10,8 @@ A cross-platform system tray application for Twitch viewers. Get notified when y
 - **Cross-Platform**: Works on Linux, macOS, and Windows
 - **KDE Plasmoid**: Native KDE Plasma panel widget (Linux/KDE only)
 
+![KDE Plasmoid Example](./screenshot.png)
+
 ## Installation
 
 ### Pre-built Binaries
