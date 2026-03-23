@@ -9,7 +9,7 @@ use crate::auth::{TokenStore, CLIENT_ID};
 use crate::config::ConfigManager;
 use crate::db::Database;
 use crate::events::BackendEvent;
-use crate::handle::{AuthCommand, BackendHandle, LoginProgress, RawDisplayData};
+use crate::handle::{AuthCommand, BackendHandle, HotnessDebugData, LoginProgress, RawDisplayData};
 use crate::hotness_detection::{
     compute_age_window, compute_bucket_stats, compute_hotness, compute_hotness_profile,
     find_nearest_bucket, HotnessConfig, HotnessInfo, ViewerObservation,
@@ -420,6 +420,12 @@ impl Backend {
             .map(|h| h.broadcaster_id.clone())
             .collect();
 
+        let hotness_debug = if cfg!(debug_assertions) {
+            self.collect_hotness_debug(&live_streams)
+        } else {
+            HashMap::new()
+        };
+
         let raw = RawDisplayData {
             is_authenticated: self.state.is_authenticated().await,
             live_streams,
@@ -432,6 +438,7 @@ impl Backend {
             profile_image_urls,
             box_art_urls,
             hot_stream_ids,
+            hotness_debug,
         };
         let _ = display_tx.send(raw);
     }
@@ -637,6 +644,32 @@ impl Backend {
         streams
             .iter()
             .filter_map(|s| cache.get(&s.user_id)?.last_hotness.clone())
+            .collect()
+    }
+
+    /// Collects debug hotness data from the cache for all live streams.
+    fn collect_hotness_debug(
+        &self,
+        streams: &[crate::twitch::Stream],
+    ) -> HashMap<String, HotnessDebugData> {
+        let cache = self.hotness_cache.lock().unwrap();
+        streams
+            .iter()
+            .filter_map(|s| {
+                let cached = cache.get(&s.user_id)?;
+                let (age_lo, age_hi) = cached.last_age_window?;
+                let hotness = cached.last_hotness.as_ref()?;
+                Some((
+                    s.user_id.clone(),
+                    HotnessDebugData {
+                        mean_viewers: hotness.mean_viewers,
+                        z_score: hotness.z_score,
+                        age_window_lo: age_lo,
+                        age_window_hi: age_hi,
+                        observation_count: cached.last_observation_count,
+                    },
+                ))
+            })
             .collect()
     }
 

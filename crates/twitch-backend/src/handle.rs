@@ -9,6 +9,16 @@ use crate::config::{Config, FollowedCategory};
 use crate::events::BackendEvent;
 use crate::twitch::{FollowedChannel, ScheduledStream, Stream};
 
+/// Debug-only hotness statistics for a single stream.
+#[derive(Clone, Debug)]
+pub struct HotnessDebugData {
+    pub mean_viewers: f64,
+    pub z_score: f64,
+    pub age_window_lo: i64,
+    pub age_window_hi: i64,
+    pub observation_count: usize,
+}
+
 /// Raw display data sent by the backend whenever state changes.
 ///
 /// The menu crate subscribes to `BackendHandle.display_rx` and calls
@@ -29,6 +39,8 @@ pub struct RawDisplayData {
     pub box_art_urls: HashMap<String, String>,
     /// User IDs of streams currently detected as "hot" (significantly above normal viewers).
     pub hot_stream_ids: HashSet<String>,
+    /// Per-stream hotness debug data (only populated in debug builds).
+    pub hotness_debug: HashMap<String, HotnessDebugData>,
 }
 
 /// Commands sent to the backend auth task.

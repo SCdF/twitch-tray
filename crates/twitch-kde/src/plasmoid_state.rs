@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use chrono::{DateTime, Duration, Utc};
 use twitch_backend::{
     config::{StreamerImportance, StreamerSettings},
-    handle::{LoginProgress, RawDisplayData},
+    handle::{HotnessDebugData, LoginProgress, RawDisplayData},
     twitch::{format_viewer_count, ScheduledStream, Stream},
 };
 
@@ -38,15 +38,28 @@ fn map_login_state(login_progress: Option<&LoginProgress>) -> LoginStateDto {
     }
 }
 
+fn format_hotness_debug(debug: &HotnessDebugData) -> String {
+    let mean = format_viewer_count(debug.mean_viewers.round() as u32);
+    format!(
+        "{mean} σ{:.1} ({}\u{2013}{} / {})",
+        debug.z_score, debug.age_window_lo, debug.age_window_hi, debug.observation_count
+    )
+}
+
 fn live_stream_to_dto(
     s: Stream,
     settings: &HashMap<String, StreamerSettings>,
     hot_stream_ids: &HashSet<String>,
+    hotness_debug: &HashMap<String, HotnessDebugData>,
 ) -> LiveStreamDto {
     let is_favourite = get_importance(&s.user_login, settings) == StreamerImportance::Favourite;
     let is_hot = hot_stream_ids.contains(&s.user_id);
     let viewer_count_formatted = s.format_viewer_count();
     let duration_formatted = s.format_duration();
+    let debug_str = hotness_debug
+        .get(&s.user_id)
+        .map(format_hotness_debug)
+        .unwrap_or_default();
     LiveStreamDto {
         user_login: s.user_login,
         user_name: s.user_name,
@@ -57,6 +70,7 @@ fn live_stream_to_dto(
         duration_formatted,
         is_favourite,
         is_hot,
+        hotness_debug: debug_str,
     }
 }
 
@@ -174,11 +188,11 @@ pub fn compute_plasmoid_state(
     let live = LiveSectionDto {
         visible: live_visible_raw
             .into_iter()
-            .map(|s| live_stream_to_dto(s, settings, &raw.hot_stream_ids))
+            .map(|s| live_stream_to_dto(s, settings, &raw.hot_stream_ids, &raw.hotness_debug))
             .collect(),
         overflow: live_overflow_raw
             .into_iter()
-            .map(|s| live_stream_to_dto(s, settings, &raw.hot_stream_ids))
+            .map(|s| live_stream_to_dto(s, settings, &raw.hot_stream_ids, &raw.hotness_debug))
             .collect(),
     };
 
@@ -335,6 +349,7 @@ mod tests {
             profile_image_urls: HashMap::new(),
             box_art_urls: HashMap::new(),
             hot_stream_ids: HashSet::new(),
+            hotness_debug: HashMap::new(),
         }
     }
 
@@ -365,6 +380,7 @@ mod tests {
             profile_image_urls: HashMap::new(),
             box_art_urls: HashMap::new(),
             hot_stream_ids: HashSet::new(),
+            hotness_debug: HashMap::new(),
         }
     }
 
