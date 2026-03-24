@@ -36,6 +36,11 @@ ColumnLayout {
 
                 property real overflow: Math.max(0, contentWidth - width)
 
+                // Taps on empty space (not on an avatar) expand the section
+                TapHandler {
+                    onTapped: root.expanded = true
+                }
+
                 Row {
                     id: avatarList
                     objectName: "avatarList"
