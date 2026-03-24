@@ -214,7 +214,7 @@ pub fn compute_display_state(
         limit
     };
 
-    let (live_visible_raw, live_overflow_raw) = if streams.len() > effective_limit {
+    let (live_visible_raw, live_overflow_raw) = if streams.len() > effective_limit + 1 {
         let (main, over) = streams.split_at(effective_limit);
         (main.to_vec(), over.to_vec())
     } else {
@@ -292,7 +292,7 @@ pub fn compute_display_state(
         .collect();
 
     let (sched_visible_raw, sched_overflow_raw) =
-        if filtered_scheduled.len() > config.schedule_limit {
+        if filtered_scheduled.len() > config.schedule_limit + 1 {
             let (main, over) = filtered_scheduled.split_at(config.schedule_limit);
             (main.to_vec(), over.to_vec())
         } else {
@@ -640,7 +640,7 @@ mod tests {
 
     #[test]
     fn live_overflow_split_at_limit() {
-        let streams: Vec<Stream> = (0..12)
+        let streams: Vec<Stream> = (0..13)
             .map(|i| {
                 let name = format!("streamer{i}");
                 make_stream(&name, &name)
@@ -665,9 +665,33 @@ mod tests {
         );
         assert_eq!(
             state.live_section.overflow.len(),
-            2,
+            3,
             "remainder in overflow"
         );
+    }
+
+    #[test]
+    fn live_one_over_limit_no_overflow() {
+        let streams: Vec<Stream> = (0..11)
+            .map(|i| {
+                let name = format!("streamer{i}");
+                make_stream(&name, &name)
+            })
+            .collect();
+        let (cats, cat_streams) = no_categories();
+
+        let state = compute_display_state(
+            streams,
+            no_scheduled(),
+            true,
+            &cats,
+            &cat_streams,
+            &default_config(),
+            Utc::now(),
+        );
+
+        assert_eq!(state.live_section.visible.len(), 11);
+        assert!(state.live_section.overflow.is_empty());
     }
 
     #[test]
@@ -750,6 +774,7 @@ mod tests {
     #[test]
     fn always_show_favourites_disabled_respects_limit() {
         // Same setup as above, but always_show_favourites=false — fav overflows.
+        // Need limit+3 items so the overflow has 2+ entries (1-over-limit is absorbed).
         let mut hot_ids = HashSet::new();
         let mut streams: Vec<Stream> = (0..3)
             .map(|i| {
@@ -763,6 +788,12 @@ mod tests {
         let mut fav = make_stream("favuser", "FavUser");
         fav.viewer_count = 500;
         streams.push(fav);
+        let mut normal1 = make_stream("normal1", "Normal1");
+        normal1.viewer_count = 50;
+        streams.push(normal1);
+        let mut normal2 = make_stream("normal2", "Normal2");
+        normal2.viewer_count = 40;
+        streams.push(normal2);
 
         let (cats, cat_streams) = no_categories();
         let config = DisplayConfig {
@@ -784,7 +815,7 @@ mod tests {
         );
 
         assert_eq!(state.live_section.visible.len(), 3);
-        assert_eq!(state.live_section.overflow.len(), 1);
+        assert_eq!(state.live_section.overflow.len(), 3);
     }
 
     #[test]
@@ -841,9 +872,9 @@ mod tests {
 
     #[test]
     fn always_show_hot_disabled_respects_limit() {
-        // Hot stream sorted first, 3 normals after. Limit=3, hot disabled,
-        // so limit is respected strictly.
-        let mut streams: Vec<Stream> = (0..3)
+        // Hot stream sorted first, normals after. Limit=3, hot disabled,
+        // so limit is respected strictly. Need limit+3 to trigger overflow.
+        let mut streams: Vec<Stream> = (0..5)
             .map(|i| {
                 let mut s = make_stream(&format!("normal{i}"), &format!("Normal{i}"));
                 s.viewer_count = 100 - i as u32;
@@ -876,7 +907,7 @@ mod tests {
         );
 
         assert_eq!(state.live_section.visible.len(), 3);
-        assert_eq!(state.live_section.overflow.len(), 1);
+        assert_eq!(state.live_section.overflow.len(), 3);
     }
 
     #[test]
@@ -897,10 +928,12 @@ mod tests {
         let mut fav = make_stream("favuser", "FavUser");
         fav.viewer_count = 500;
         streams.push(fav);
-        // Add a normal stream that should stay in overflow
-        let mut normal = make_stream("normal0", "Normal0");
-        normal.viewer_count = 50;
-        streams.push(normal);
+        // Add normal streams to overflow (need 2+ to trigger overflow)
+        for i in 0..2 {
+            let mut normal = make_stream(&format!("normal{i}"), &format!("Normal{i}"));
+            normal.viewer_count = 50 - i as u32;
+            streams.push(normal);
+        }
 
         let (cats, cat_streams) = no_categories();
         let config = DisplayConfig {
@@ -921,9 +954,9 @@ mod tests {
             Utc::now(),
         );
 
-        // 2 hot + 1 favourite visible; normal in overflow
+        // 2 hot + 1 favourite visible; 2 normals in overflow
         assert_eq!(state.live_section.visible.len(), 3);
-        assert_eq!(state.live_section.overflow.len(), 1);
+        assert_eq!(state.live_section.overflow.len(), 2);
     }
 
     #[test]
@@ -1103,7 +1136,7 @@ mod tests {
 
     #[test]
     fn schedule_overflow_split_at_limit() {
-        let scheduled: Vec<_> = (0..7)
+        let scheduled: Vec<_> = (0..8)
             .map(|i| make_scheduled(&format!("bc{i}"), i as i64 + 1))
             .collect();
         let (cats, cat_streams) = no_categories();
@@ -1119,7 +1152,28 @@ mod tests {
         );
 
         assert_eq!(state.schedule_section.visible.len(), 5);
-        assert_eq!(state.schedule_section.overflow.len(), 2);
+        assert_eq!(state.schedule_section.overflow.len(), 3);
+    }
+
+    #[test]
+    fn schedule_one_over_limit_no_overflow() {
+        let scheduled: Vec<_> = (0..6)
+            .map(|i| make_scheduled(&format!("bc{i}"), i as i64 + 1))
+            .collect();
+        let (cats, cat_streams) = no_categories();
+
+        let state = compute_display_state(
+            vec![],
+            scheduled,
+            true,
+            &cats,
+            &cat_streams,
+            &default_config(),
+            Utc::now(),
+        );
+
+        assert_eq!(state.schedule_section.visible.len(), 6);
+        assert!(state.schedule_section.overflow.is_empty());
     }
 
     #[test]

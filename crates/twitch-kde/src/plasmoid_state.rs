@@ -178,7 +178,7 @@ pub fn compute_plasmoid_state(
         }
         limit
     };
-    let (live_visible_raw, live_overflow_raw) = if streams.len() > effective_limit {
+    let (live_visible_raw, live_overflow_raw) = if streams.len() > effective_limit + 1 {
         let (main, over) = streams.split_at(effective_limit);
         (main.to_vec(), over.to_vec())
     } else {
@@ -253,7 +253,7 @@ pub fn compute_plasmoid_state(
     });
 
     let schedule_limit = raw.config.schedule_menu_limit;
-    let (sched_visible_raw, sched_overflow_raw) = if scheduled.len() > schedule_limit {
+    let (sched_visible_raw, sched_overflow_raw) = if scheduled.len() > schedule_limit + 1 {
         let (main, over) = scheduled.split_at(schedule_limit);
         (main.to_vec(), over.to_vec())
     } else {
@@ -490,13 +490,24 @@ mod tests {
 
     #[test]
     fn live_overflow_split_at_limit() {
-        let streams: Vec<_> = (0..12)
+        let streams: Vec<_> = (0..13)
             .map(|i| make_stream(&i.to_string(), &format!("streamer{i}")))
             .collect();
         let state = compute_plasmoid_state(raw(streams, vec![]), None, Utc::now());
 
         assert_eq!(state.live.visible.len(), DEFAULT_LIVE_MENU_LIMIT);
-        assert_eq!(state.live.overflow.len(), 2);
+        assert_eq!(state.live.overflow.len(), 3);
+    }
+
+    #[test]
+    fn live_one_over_limit_no_overflow() {
+        let streams: Vec<_> = (0..DEFAULT_LIVE_MENU_LIMIT + 1)
+            .map(|i| make_stream(&i.to_string(), &format!("streamer{i}")))
+            .collect();
+        let state = compute_plasmoid_state(raw(streams, vec![]), None, Utc::now());
+
+        assert_eq!(state.live.visible.len(), DEFAULT_LIVE_MENU_LIMIT + 1);
+        assert!(state.live.overflow.is_empty());
     }
 
     #[test]
@@ -624,13 +635,27 @@ mod tests {
 
     #[test]
     fn schedule_overflow_split_at_limit() {
-        let scheduled: Vec<_> = (0..7)
+        let scheduled: Vec<_> = (0..8)
             .map(|i| make_scheduled(&format!("bc{i}"), i as i64 + 1))
             .collect();
         let state = compute_plasmoid_state(raw(vec![], scheduled), None, Utc::now());
 
         assert_eq!(state.schedule.visible.len(), DEFAULT_SCHEDULE_MENU_LIMIT);
-        assert_eq!(state.schedule.overflow.len(), 2);
+        assert_eq!(state.schedule.overflow.len(), 3);
+    }
+
+    #[test]
+    fn schedule_one_over_limit_no_overflow() {
+        let scheduled: Vec<_> = (0..DEFAULT_SCHEDULE_MENU_LIMIT + 1)
+            .map(|i| make_scheduled(&format!("bc{i}"), i as i64 + 1))
+            .collect();
+        let state = compute_plasmoid_state(raw(vec![], scheduled), None, Utc::now());
+
+        assert_eq!(
+            state.schedule.visible.len(),
+            DEFAULT_SCHEDULE_MENU_LIMIT + 1
+        );
+        assert!(state.schedule.overflow.is_empty());
     }
 
     #[test]
