@@ -309,17 +309,23 @@ Before considering any code change complete:
 
 ## Versioning & Releases
 
-Version is set in `crates/twitch-app-tauri/Cargo.toml` and `crates/twitch-app-tauri/tauri.conf.json`.
+Version is defined once in `Cargo.toml` under `[workspace.package]`. All crates inherit it
+via `version.workspace = true`. The two `tauri.conf.json` files must be kept in sync manually
+(the `make version` target handles this).
+
+**Version sources:**
+- `Cargo.toml` — `[workspace.package] version` (single source of truth for Rust)
+- `crates/twitch-app-tauri/tauri.conf.json` — must match
+- `crates/twitch-kde/tauri.conf.json` — must match
 
 **To release a new version:**
-1. Update version in both files
-2. Commit and tag:
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+make version BUMP=patch   # or minor, or major
+git push && git push --tags
 ```
 
-This triggers the release workflow which:
+This commits the version bump, creates a `vX.Y.Z` git tag, and the tag push triggers the
+release workflow which:
 1. Builds binaries for Linux, macOS (amd64/arm64), and Windows
 2. Creates a GitHub release with binaries and checksums
 

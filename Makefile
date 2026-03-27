@@ -1,4 +1,4 @@
-.PHONY: all build build-kde dev run run-kde clean lint lint-kde test test-plasmoid test-all install-plasmoid
+.PHONY: all build build-kde dev run run-kde clean lint lint-kde test test-plasmoid test-all install-plasmoid version
 
 # Build directory
 DIST=dist
@@ -89,6 +89,37 @@ dist-kde: release-kde
 	@echo ""
 	@echo "Install plasmoid:  kpackagetool6 --type Plasma/Applet --install $(DIST)/twitch-kde-plasmoid"
 	@echo "Install daemon:    sudo cp $(DIST)/twitch-kde /usr/bin/twitch-kde"
+
+# Bump version: make version BUMP=patch|minor|major
+version:
+ifndef BUMP
+	$(error Usage: make version BUMP=patch|minor|major)
+endif
+	@CURRENT=$$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/'); \
+	IFS='.' read -r MAJOR MINOR PATCH <<< "$$CURRENT"; \
+	case "$(BUMP)" in \
+		major) MAJOR=$$((MAJOR + 1)); MINOR=0; PATCH=0;; \
+		minor) MINOR=$$((MINOR + 1)); PATCH=0;; \
+		patch) PATCH=$$((PATCH + 1));; \
+		*) echo "ERROR: BUMP must be major, minor, or patch"; exit 1;; \
+	esac; \
+	NEW="$$MAJOR.$$MINOR.$$PATCH"; \
+	sed -i "s/^version = \"$$CURRENT\"/version = \"$$NEW\"/" Cargo.toml; \
+	for f in crates/twitch-app-tauri/tauri.conf.json crates/twitch-kde/tauri.conf.json; do \
+		sed -i "s/\"version\": \"$$CURRENT\"/\"version\": \"$$NEW\"/" "$$f"; \
+	done; \
+	echo "Version: $$CURRENT -> $$NEW"; \
+	echo ""; \
+	echo "Files updated:"; \
+	echo "  Cargo.toml (workspace.package.version)"; \
+	echo "  crates/twitch-app-tauri/tauri.conf.json"; \
+	echo "  crates/twitch-kde/tauri.conf.json"; \
+	echo ""; \
+	git add Cargo.toml crates/twitch-app-tauri/tauri.conf.json crates/twitch-kde/tauri.conf.json; \
+	git commit -m "Release v$$NEW"; \
+	git tag "v$$NEW"; \
+	echo ""; \
+	echo "Tagged v$$NEW. Push with: git push && git push --tags"
 
 # Install plasmoid to local KDE (development)
 install-plasmoid:

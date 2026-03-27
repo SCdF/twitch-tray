@@ -170,6 +170,22 @@ make test-plasmoid
 make fmt
 ```
 
+## Releasing
+
+```bash
+make version BUMP=patch   # 0.1.0 → 0.1.1
+make version BUMP=minor   # 0.1.0 → 0.2.0
+make version BUMP=major   # 0.1.0 → 1.0.0
+```
+
+This updates the version everywhere, commits, and creates a git tag. Then push to trigger the release workflow:
+
+```bash
+git push && git push --tags
+```
+
+The CI builds binaries for Linux, macOS (amd64/arm64), and Windows, and creates a GitHub release with checksums.
+
 ## Built With
 
 This project was built entirely by [Claude](https://claude.ai), Anthropic's AI assistant, using [Claude Code](https://claude.ai/claude-code).
