@@ -4,30 +4,20 @@ This is the only file a human has edited.
 
 ## Bugs!
 
-- version when starting and tag version (used for creating builds in CI) are different. What is the idiomatic rust way of solving this? I want to set the version once. We can create a CI task for releasing if that's appropriate
-
-Avatars and network:
-- scheduled stream avatars are blank if they couldn't load the image, not the fallback ("C" for cohh)
-- if there are network issues images don't load, and won't re-load until some kind of refresh is forced when the network is working. Examples: live avatars were missing, came back after 60sec when the live counts were updated; scheduled stream avatars were missing, forced them to show by changing how many display before being punted to the sub menu. 
-- check index usage, I think we might be missing one on the stream start time for observed stream viewer counts?
-
 
 ## TODO:
 
-- refactor DB so there is an at-startup db migration, instead of it being shat all over the codebase
 - debug DB. Show disk usage. Can we also get debug stats from sqlite, showing bad / slow queries? Button to clear historic data our algorithms don't use. I think this would right now mean > 1 month, but we should check and be specific
+- cron to periodically delete data older than N months from the database
 - how can we tell how much CPU / etc are used over time? I want to make sure this doesn't use a lot of background resources, doesn't drain battery, etc.
-- better debug of streamer hotness. Show table of live streamers (or all followed streamers you can filter), that shows name on row, then columns for each bucket, and the cell shows the average+-standard dev. It shows this "raw", regardless of if there is enough data to predict hotness for that bucket. Cell is bolded if the bucket has enough details, otherwise normal. Hover shows full stats details for that bucket (stream count, average, standard dev, etc etc)
 - add a streamer setting to hide their schedule, and this should filter at the menu level, hiding scheuled and inferred streams
   eg to hide MANvsGAME's schedules.
 - investigate if we can make linux notifications richer
-- horizontal scrolling on collapsed streamer icons
 
 - ask it about the security of the user's credential. How is it stored, can we take another crack at storing it in the keychain?
 - get a better tray icon, this one looks too large comparatively
   look at it again? I'm not that sure this is true, I might be used to it now.
 - better packaging, installed "properly" (arch aur?), starts at startup etc
-- cron to periodically delete data older than N months from the database
 - refactor DB usage so it handles logout / login. Maybe name the DB the logged in user's id?
 
 - RUST: do we really need a makefile now? If we need an external build, is there something better than make?
@@ -78,4 +68,11 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 - broadcaster_name vs broadcaster_login, what is this? Why are there two? Surely we only need one.
   ANSWER: login is the ascii name, name could have eg chinese characters in it
 - inferred magic schedules. I'm reasonably sure this is accurate, now we have a debug voiew
-
+- version when starting and tag version (used for creating builds in CI) are different. What is the idiomatic rust way of solving this? I want to set the version once. We can create a CI task for releasing if that's appropriate
+Avatars and network:
+- scheduled stream avatars are blank if they couldn't load the image, not the fallback ("C" for cohh)
+- if there are network issues images don't load, and won't re-load until some kind of refresh is forced when the network is working. Examples: live avatars were missing, came back after 60sec when the live counts were updated; scheduled stream avatars were missing, forced them to show by changing how many display before being punted to the sub menu. 
+- check index usage, I think we might be missing one on the stream start time for observed stream viewer counts?
+- refactor DB so there is an at-startup db migration, instead of it being shat all over the codebase
+- better debug of streamer hotness. Show table of live streamers (or all followed streamers you can filter), that shows name on row, then columns for each bucket, and the cell shows the average+-standard dev. It shows this "raw", regardless of if there is enough data to predict hotness for that bucket. Cell is bolded if the bucket has enough details, otherwise normal. Hover shows full stats details for that bucket (stream count, average, standard dev, etc etc)
+- horizontal scrolling on collapsed streamer icons
