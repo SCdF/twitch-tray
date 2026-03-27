@@ -243,7 +243,7 @@ impl Notifier for DesktopNotifier {
         let message = if stream.title.is_empty() {
             stream.game_name.clone()
         } else {
-            format!("{} - {}", stream.game_name, truncate(&stream.title, 50))
+            format!("{} - {}", stream.game_name, stream.title)
         };
 
         let url = stream.channel_url();
@@ -264,7 +264,7 @@ impl Notifier for DesktopNotifier {
         let message = if stream.title.is_empty() {
             stream.game_name.clone()
         } else {
-            format!("{} - {}", stream.game_name, truncate(&stream.title, 50))
+            format!("{} - {}", stream.game_name, stream.title)
         };
 
         let url = stream.channel_url();
@@ -284,7 +284,7 @@ impl Notifier for DesktopNotifier {
         let title = format!("{} changed category", stream.user_name);
         let mut message = format!("{} → {}", old_category, stream.game_name);
         if !stream.title.is_empty() {
-            message = format!("{}\n{}", message, truncate(&stream.title, 50));
+            message = format!("{}\n{}", message, stream.title);
         }
 
         let url = stream.channel_url();
@@ -304,7 +304,7 @@ impl Notifier for DesktopNotifier {
         let message = if stream.title.is_empty() {
             stream.game_name.clone()
         } else {
-            format!("{} - {}", stream.game_name, truncate(&stream.title, 50))
+            format!("{} - {}", stream.game_name, stream.title)
         };
 
         let url = stream.channel_url();
@@ -324,7 +324,7 @@ impl Notifier for DesktopNotifier {
             "\u{1f525}\u{1f525}\u{1f525} ({:.1}\u{03c3}) {} on {} IS HOT",
             info.z_score, stream.user_name, stream.game_name,
         );
-        let message = truncate(&stream.title, 80);
+        let message = stream.title.clone();
 
         let url = stream.channel_url();
         let settings = self.make_settings_info(stream);
