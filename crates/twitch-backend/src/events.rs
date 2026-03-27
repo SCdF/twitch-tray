@@ -1,4 +1,4 @@
-use crate::state::CategoryChange;
+use crate::state::{CategoryChange, TitleChange};
 use crate::twitch::{ScheduledStream, Stream};
 
 /// Events emitted by the backend to all subscribers.
@@ -8,6 +8,7 @@ pub enum BackendEvent {
     StreamsUpdated {
         newly_live: Vec<Stream>,
         category_changes: Vec<CategoryChange>,
+        title_changes: Vec<TitleChange>,
         all_live: Vec<Stream>,
     },
     /// Schedule state was updated.

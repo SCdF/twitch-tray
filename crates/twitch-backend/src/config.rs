@@ -11,6 +11,7 @@ const CONFIG_FILE: &str = "config.json";
 pub const DEFAULT_POLL_INTERVAL_SEC: u64 = 60;
 pub const DEFAULT_NOTIFY_ON_LIVE: bool = true;
 pub const DEFAULT_NOTIFY_ON_CATEGORY: bool = true;
+pub const DEFAULT_NOTIFY_ON_TITLE: bool = true;
 pub const DEFAULT_NOTIFY_MAX_GAP_MIN: u64 = 10;
 pub const DEFAULT_SCHEDULE_STALE_HOURS: u64 = 24;
 pub const DEFAULT_SCHEDULE_CHECK_INTERVAL_SEC: u64 = 10;
@@ -65,6 +66,8 @@ pub struct Config {
     pub notify_on_live: bool,
     #[serde(default = "default_notify_on_category")]
     pub notify_on_category: bool,
+    #[serde(default = "default_notify_on_title")]
+    pub notify_on_title: bool,
     /// Maximum gap (in minutes) between refreshes to still send notifications.
     /// If the app was asleep/suspended longer than this, notifications are suppressed
     /// to avoid a flood of alerts on wake.
@@ -144,6 +147,10 @@ fn default_notify_on_category() -> bool {
     DEFAULT_NOTIFY_ON_CATEGORY
 }
 
+fn default_notify_on_title() -> bool {
+    DEFAULT_NOTIFY_ON_TITLE
+}
+
 fn default_notify_max_gap() -> u64 {
     DEFAULT_NOTIFY_MAX_GAP_MIN
 }
@@ -214,6 +221,7 @@ impl Default for Config {
             poll_interval_sec: DEFAULT_POLL_INTERVAL_SEC,
             notify_on_live: DEFAULT_NOTIFY_ON_LIVE,
             notify_on_category: DEFAULT_NOTIFY_ON_CATEGORY,
+            notify_on_title: DEFAULT_NOTIFY_ON_TITLE,
             notify_max_gap_min: DEFAULT_NOTIFY_MAX_GAP_MIN,
             schedule_stale_hours: DEFAULT_SCHEDULE_STALE_HOURS,
             schedule_check_interval_sec: DEFAULT_SCHEDULE_CHECK_INTERVAL_SEC,
@@ -490,6 +498,7 @@ mod tests {
             poll_interval_sec: 90,
             notify_on_live: true,
             notify_on_category: false,
+            notify_on_title: false,
             notify_max_gap_min: 15,
             schedule_stale_hours: 48,
             schedule_check_interval_sec: 20,
@@ -520,6 +529,7 @@ mod tests {
         assert_eq!(deserialized.poll_interval_sec, original.poll_interval_sec);
         assert_eq!(deserialized.notify_on_live, original.notify_on_live);
         assert_eq!(deserialized.notify_on_category, original.notify_on_category);
+        assert_eq!(deserialized.notify_on_title, original.notify_on_title);
         assert_eq!(deserialized.notify_max_gap_min, original.notify_max_gap_min);
         assert_eq!(
             deserialized.schedule_stale_hours,

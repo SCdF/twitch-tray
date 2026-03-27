@@ -80,6 +80,13 @@ impl NotificationDispatcher {
                             }
                         }
                     }
+                    if cfg.notify_on_title {
+                        for change in decision.titles_to_notify {
+                            if let Err(e) = self.notifier.title_changed(&change.stream) {
+                                tracing::error!("Notification error: {}", e);
+                            }
+                        }
+                    }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!("Notification listener lagged by {} events", n);
@@ -124,6 +131,7 @@ mod tests {
             streams: vec![stream.clone()],
             newly_live: vec![stream],
             category_changes: vec![],
+            title_changes: vec![],
         }
     }
 
@@ -137,6 +145,18 @@ mod tests {
                 stream,
                 old_category: "Old Game".to_string(),
             }],
+            title_changes: vec![],
+        }
+    }
+
+    fn make_title_event(user_login: &str) -> StreamsUpdated {
+        use crate::state::TitleChange;
+        let stream = make_stream(user_login);
+        StreamsUpdated {
+            streams: vec![stream.clone()],
+            newly_live: vec![],
+            category_changes: vec![],
+            title_changes: vec![TitleChange { stream }],
         }
     }
 
@@ -212,6 +232,47 @@ mod tests {
         notifier.clear();
 
         tx.send(make_category_event("streamer")).unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            notifier.notification_count(),
+            0,
+            "no notification expected after config change"
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn title_notifications_suppressed_when_config_disabled_without_restart() {
+        let notifier = Arc::new(RecordingNotifier::new());
+        let config = Arc::new(ConfigManager::with_config(Config {
+            notify_on_title: true,
+            ..Config::default()
+        }));
+        let initial_load_done = Arc::new(AtomicBool::new(true));
+
+        let dispatcher =
+            NotificationDispatcher::new(notifier.clone(), config.clone(), initial_load_done);
+
+        let (tx, rx) = broadcast::channel(16);
+        let handle = tokio::spawn(async move { dispatcher.listen(rx).await });
+
+        tx.send(make_title_event("streamer")).unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        assert_eq!(
+            notifier.notification_count(),
+            1,
+            "expected notification when enabled"
+        );
+
+        // Disable title notifications at runtime — no restart
+        config.set(Config {
+            notify_on_title: false,
+            ..Config::default()
+        });
+        notifier.clear();
+
+        tx.send(make_title_event("streamer")).unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         assert_eq!(
             notifier.notification_count(),

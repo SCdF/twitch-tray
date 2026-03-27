@@ -20,12 +20,19 @@ pub struct CategoryChange {
     pub old_category: String,
 }
 
+/// A title change event
+#[derive(Debug, Clone)]
+pub struct TitleChange {
+    pub stream: Stream,
+}
+
 /// Event sent when followed streams are updated
 #[derive(Debug, Clone)]
 pub struct StreamsUpdated {
     pub streams: Vec<Stream>,
     pub newly_live: Vec<Stream>,
     pub category_changes: Vec<CategoryChange>,
+    pub title_changes: Vec<TitleChange>,
 }
 
 /// Application state
@@ -47,6 +54,9 @@ struct StateInner {
 
     // Track previous game per stream (by user_id) for category change detection
     stream_games: HashMap<String, (String, String)>, // user_id -> (game_id, game_name)
+
+    // Track previous title per stream (by user_id) for title change detection
+    stream_titles: HashMap<String, String>, // user_id -> title
 
     // Streams by followed category (category_id -> streams)
     category_streams: HashMap<String, Vec<Stream>>,
@@ -143,9 +153,22 @@ impl AppState {
             }
         }
 
-        // Update tracked categories based on current live streams
+        // Find title changes for streams that were already live
+        let mut title_changes = Vec::new();
+        for stream in &streams {
+            if let Some(old_title) = state.stream_titles.get(&stream.user_id) {
+                if *old_title != stream.title && !old_title.is_empty() {
+                    title_changes.push(TitleChange {
+                        stream: stream.clone(),
+                    });
+                }
+            }
+        }
+
+        // Update tracked categories and titles based on current live streams
         state.tracked_categories.clear();
         state.stream_games.clear();
+        state.stream_titles.clear();
         for stream in &streams {
             if !stream.game_id.is_empty() {
                 state
@@ -156,6 +179,9 @@ impl AppState {
                 stream.user_id.clone(),
                 (stream.game_id.clone(), stream.game_name.clone()),
             );
+            state
+                .stream_titles
+                .insert(stream.user_id.clone(), stream.title.clone());
         }
 
         state.followed_streams.clone_from(&streams);
@@ -168,6 +194,7 @@ impl AppState {
             streams,
             newly_live,
             category_changes,
+            title_changes,
         });
     }
 
@@ -490,6 +517,83 @@ mod tests {
         let event = rx.recv().await.unwrap();
 
         assert_eq!(event.category_changes.len(), 2);
+    }
+
+    // === title change detection tests ===
+
+    #[tokio::test]
+    async fn title_change_detected() {
+        let state = AppState::new();
+        let mut rx = state.subscribe_streams();
+
+        // Initial: streamer has a title
+        let mut stream1 = make_stream("1", "StreamerA");
+        stream1.title = "Playing ranked".to_string();
+        state.set_followed_streams(vec![stream1]).await;
+        let _ = rx.recv().await;
+
+        // Update: title changed
+        let mut stream2 = make_stream("1", "StreamerA");
+        stream2.title = "Chill vibes now".to_string();
+        state.set_followed_streams(vec![stream2]).await;
+        let event = rx.recv().await.unwrap();
+
+        assert_eq!(event.title_changes.len(), 1);
+        assert_eq!(event.title_changes[0].stream.title, "Chill vibes now");
+    }
+
+    #[tokio::test]
+    async fn no_title_change_when_same_title() {
+        let state = AppState::new();
+        let mut rx = state.subscribe_streams();
+
+        let stream = make_stream("1", "StreamerA");
+        state.set_followed_streams(vec![stream.clone()]).await;
+        let _ = rx.recv().await;
+
+        // Same title
+        state.set_followed_streams(vec![stream]).await;
+        let event = rx.recv().await.unwrap();
+
+        assert!(event.title_changes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn no_title_change_for_newly_live() {
+        let state = AppState::new();
+        let mut rx = state.subscribe_streams();
+
+        state.set_followed_streams(vec![]).await;
+        let _ = rx.recv().await;
+
+        // New stream comes online
+        let stream = make_stream("1", "StreamerA");
+        state.set_followed_streams(vec![stream]).await;
+        let event = rx.recv().await.unwrap();
+
+        assert_eq!(event.newly_live.len(), 1);
+        assert!(event.title_changes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn no_title_change_from_empty_title() {
+        let state = AppState::new();
+        let mut rx = state.subscribe_streams();
+
+        // Initial: stream with empty title
+        let mut stream1 = make_stream("1", "StreamerA");
+        stream1.title = "".to_string();
+        state.set_followed_streams(vec![stream1]).await;
+        let _ = rx.recv().await;
+
+        // Update: now has a title
+        let mut stream2 = make_stream("1", "StreamerA");
+        stream2.title = "New title".to_string();
+        state.set_followed_streams(vec![stream2]).await;
+        let event = rx.recv().await.unwrap();
+
+        // Not counted as a title change (was empty before)
+        assert!(event.title_changes.is_empty());
     }
 
     // === authentication state tests ===

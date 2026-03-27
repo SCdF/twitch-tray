@@ -55,6 +55,9 @@ pub trait Notifier: Send + Sync {
     /// Sends a notification when a streamer changes category
     fn category_changed(&self, stream: &Stream, old_category: &str) -> anyhow::Result<()>;
 
+    /// Sends a notification when a streamer changes their title
+    fn title_changed(&self, stream: &Stream) -> anyhow::Result<()>;
+
     /// Sends a notification when a stream is detected as "hot"
     fn stream_hot(&self, stream: &Stream, info: &HotnessInfo) -> anyhow::Result<()>;
 
@@ -210,6 +213,8 @@ mod categories {
     pub const STREAM_LIVE: &str = "presence.online";
     /// Category for "category changed" notifications
     pub const CATEGORY_CHANGE: &str = "category.changed";
+    /// Category for "title changed" notifications
+    pub const TITLE_CHANGE: &str = "title.changed";
     /// Category for "stream is hot" notifications
     pub const STREAM_HOT: &str = "presence.hot";
 }
@@ -277,7 +282,10 @@ impl Notifier for DesktopNotifier {
 
     fn category_changed(&self, stream: &Stream, old_category: &str) -> anyhow::Result<()> {
         let title = format!("{} changed category", stream.user_name);
-        let message = format!("{} → {}", old_category, stream.game_name);
+        let mut message = format!("{} → {}", old_category, stream.game_name);
+        if !stream.title.is_empty() {
+            message = format!("{}\n{}", message, truncate(&stream.title, 50));
+        }
 
         let url = stream.channel_url();
         let settings = self.make_settings_info(stream);
@@ -286,6 +294,26 @@ impl Notifier for DesktopNotifier {
             &message,
             Some(&url),
             Some(categories::CATEGORY_CHANGE),
+            None,
+            settings,
+        )
+    }
+
+    fn title_changed(&self, stream: &Stream) -> anyhow::Result<()> {
+        let title = format!("{} changed stream title", stream.user_name);
+        let message = if stream.title.is_empty() {
+            stream.game_name.clone()
+        } else {
+            format!("{} - {}", stream.game_name, truncate(&stream.title, 50))
+        };
+
+        let url = stream.channel_url();
+        let settings = self.make_settings_info(stream);
+        self.send_notification(
+            &title,
+            &message,
+            Some(&url),
+            Some(categories::TITLE_CHANGE),
             None,
             settings,
         )
@@ -349,6 +377,7 @@ pub mod mock {
         StreamLive,
         StreamReminder,
         CategoryChange,
+        TitleChange,
         StreamHot,
         Error,
     }
@@ -438,13 +467,36 @@ pub mod mock {
 
         fn category_changed(&self, stream: &Stream, old_category: &str) -> anyhow::Result<()> {
             let title = format!("{} changed category", stream.user_name);
-            let message = format!("{} → {}", old_category, stream.game_name);
+            let mut message = format!("{} → {}", old_category, stream.game_name);
+            if !stream.title.is_empty() {
+                message = format!("{}\n{}", message, stream.title);
+            }
 
             self.notifications
                 .write()
                 .unwrap()
                 .push(RecordedNotification {
                     notification_type: NotificationType::CategoryChange,
+                    title,
+                    message,
+                });
+
+            Ok(())
+        }
+
+        fn title_changed(&self, stream: &Stream) -> anyhow::Result<()> {
+            let title = format!("{} changed stream title", stream.user_name);
+            let message = if !stream.title.is_empty() {
+                format!("{} - {}", stream.game_name, stream.title)
+            } else {
+                stream.game_name.clone()
+            };
+
+            self.notifications
+                .write()
+                .unwrap()
+                .push(RecordedNotification {
+                    notification_type: NotificationType::TitleChange,
                     title,
                     message,
                 });
@@ -584,17 +636,32 @@ mod tests {
         assert!(notifications[0].title.contains("TestStreamer"));
         assert!(notifications[0].message.contains("Fortnite"));
         assert!(notifications[0].message.contains("Minecraft"));
+        assert!(notifications[0].message.contains("Building a castle!"));
     }
 
     #[test]
-    fn category_change_shows_arrow() {
+    fn category_change_shows_arrow_and_title() {
         let notifier = RecordingNotifier::new();
-        let stream = make_stream("Streamer", "New Game", "Title");
+        let stream = make_stream("Streamer", "New Game", "My Stream Title");
 
         notifier.category_changed(&stream, "Old Game").unwrap();
 
         let notifications = notifier.get_notifications();
         assert!(notifications[0].message.contains("→"));
+        assert_eq!(
+            notifications[0].message,
+            "Old Game → New Game\nMy Stream Title"
+        );
+    }
+
+    #[test]
+    fn category_change_no_title_line_when_empty() {
+        let notifier = RecordingNotifier::new();
+        let stream = make_stream("Streamer", "New Game", "");
+
+        notifier.category_changed(&stream, "Old Game").unwrap();
+
+        let notifications = notifier.get_notifications();
         assert_eq!(notifications[0].message, "Old Game → New Game");
     }
 

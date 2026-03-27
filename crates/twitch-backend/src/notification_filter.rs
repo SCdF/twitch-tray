@@ -1,15 +1,16 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 
 use crate::config::{StreamerImportance, StreamerSettings};
-use crate::state::{CategoryChange, StreamsUpdated};
+use crate::state::{CategoryChange, StreamsUpdated, TitleChange};
 use crate::twitch::Stream;
 
-/// Streams and category changes that should be dispatched to the notifier.
+/// Streams, category changes, and title changes that should be dispatched to the notifier.
 pub struct NotificationDecision {
     pub streams_to_notify: Vec<Stream>,
     pub categories_to_notify: Vec<CategoryChange>,
+    pub titles_to_notify: Vec<TitleChange>,
 }
 
 /// Determines which notifications (if any) to send for a stream update event.
@@ -31,6 +32,7 @@ pub fn filter_notifications(
     let empty = NotificationDecision {
         streams_to_notify: Vec::new(),
         categories_to_notify: Vec::new(),
+        titles_to_notify: Vec::new(),
     };
 
     // Suppress everything during the initial baseline load.
@@ -68,16 +70,34 @@ pub fn filter_notifications(
         .cloned()
         .collect();
 
-    let categories_to_notify = event
+    let categories_to_notify: Vec<CategoryChange> = event
         .category_changes
         .iter()
         .filter(|c| !is_silent_or_ignored(&c.stream.user_login))
         .cloned()
         .collect();
 
+    // Suppress title-change notifications for streams that already have a category change,
+    // since the category notification already includes the stream title.
+    let category_change_user_ids: HashSet<&str> = categories_to_notify
+        .iter()
+        .map(|c| c.stream.user_id.as_str())
+        .collect();
+
+    let titles_to_notify = event
+        .title_changes
+        .iter()
+        .filter(|t| {
+            !is_silent_or_ignored(&t.stream.user_login)
+                && !category_change_user_ids.contains(t.stream.user_id.as_str())
+        })
+        .cloned()
+        .collect();
+
     NotificationDecision {
         streams_to_notify,
         categories_to_notify,
+        titles_to_notify,
     }
 }
 
@@ -112,6 +132,7 @@ mod tests {
             streams: newly_live.clone(),
             newly_live,
             category_changes,
+            title_changes: vec![],
         }
     }
 
@@ -265,6 +286,78 @@ mod tests {
         let settings = settings_with("quietstreamer", StreamerImportance::Silent);
         let decision = filter_notifications(&event, None, now, 600, true, &settings);
         assert!(decision.categories_to_notify.is_empty());
+    }
+
+    #[test]
+    fn silent_streamer_excluded_from_title_changes() {
+        use crate::state::TitleChange;
+        let stream = make_stream("quietstreamer");
+        let change = TitleChange { stream };
+        let event = StreamsUpdated {
+            streams: vec![],
+            newly_live: vec![],
+            category_changes: vec![],
+            title_changes: vec![change],
+        };
+        let now = Utc::now();
+        let settings = settings_with("quietstreamer", StreamerImportance::Silent);
+        let decision = filter_notifications(&event, None, now, 600, true, &settings);
+        assert!(decision.titles_to_notify.is_empty());
+    }
+
+    #[test]
+    fn title_change_suppressed_when_category_also_changed() {
+        use crate::state::TitleChange;
+        let stream = make_stream("streamer");
+        let cat_change = CategoryChange {
+            stream: stream.clone(),
+            old_category: "Old Game".to_string(),
+        };
+        let title_change = TitleChange {
+            stream: stream.clone(),
+        };
+        let event = StreamsUpdated {
+            streams: vec![stream],
+            newly_live: vec![],
+            category_changes: vec![cat_change],
+            title_changes: vec![title_change],
+        };
+        let now = Utc::now();
+        let decision = filter_notifications(&event, None, now, 600, true, &HashMap::new());
+        assert_eq!(decision.categories_to_notify.len(), 1);
+        assert!(
+            decision.titles_to_notify.is_empty(),
+            "title notification should be suppressed when category also changed"
+        );
+    }
+
+    #[test]
+    fn title_change_not_suppressed_when_different_stream_has_category_change() {
+        use crate::state::TitleChange;
+        let stream_a = make_stream("streamer_a");
+        let mut stream_b = make_stream("streamer_b");
+        stream_b.user_id = "200".to_string();
+        let cat_change = CategoryChange {
+            stream: stream_a.clone(),
+            old_category: "Old Game".to_string(),
+        };
+        let title_change = TitleChange {
+            stream: stream_b.clone(),
+        };
+        let event = StreamsUpdated {
+            streams: vec![stream_a, stream_b],
+            newly_live: vec![],
+            category_changes: vec![cat_change],
+            title_changes: vec![title_change],
+        };
+        let now = Utc::now();
+        let decision = filter_notifications(&event, None, now, 600, true, &HashMap::new());
+        assert_eq!(decision.categories_to_notify.len(), 1);
+        assert_eq!(
+            decision.titles_to_notify.len(),
+            1,
+            "title notification for a different stream should not be suppressed"
+        );
     }
 
     #[test]

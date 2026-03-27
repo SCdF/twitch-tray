@@ -21,6 +21,7 @@ const notifyMaxGapInput = document.getElementById('notify_max_gap');
 const scheduleLookaheadInput = document.getElementById('schedule_lookahead');
 const notifyOnLiveInput = document.getElementById('notify_on_live');
 const notifyOnCategoryInput = document.getElementById('notify_on_category');
+const notifyOnTitleInput = document.getElementById('notify_on_title');
 const notifyOnHotInput = document.getElementById('notify_on_hot');
 const hotnessZThresholdInput = document.getElementById('hotness_z_threshold');
 const hotnessZCoolThresholdInput = document.getElementById('hotness_z_cool_threshold');
@@ -108,6 +109,7 @@ function populateForm() {
   notifyMaxGapInput.value = config.notify_max_gap_min;
   notifyOnLiveInput.checked = config.notify_on_live;
   notifyOnCategoryInput.checked = config.notify_on_category;
+  notifyOnTitleInput.checked = config.notify_on_title !== false;
   notifyOnHotInput.checked = config.notify_on_hot;
   hotnessZThresholdInput.value = config.hotness_z_threshold;
   hotnessZCoolThresholdInput.value = config.hotness_z_cool_threshold;
@@ -416,7 +418,7 @@ function setupEventListeners() {
   [pollIntervalInput, notifyMaxGapInput, scheduleLookaheadInput, liveMenuLimitInput, scheduleMenuLimitInput, hotnessZThresholdInput, hotnessMinObservationsInput, hotnessMinStreamsInput, hotnessLookbackDaysInput, hotnessAgeWindowDivisorInput].forEach(input => {
     input.addEventListener('change', () => autoSave());
   });
-  [notifyOnLiveInput, notifyOnCategoryInput, notifyOnHotInput, alwaysShowFavouritesInput, alwaysShowHotInput].forEach(input => {
+  [notifyOnLiveInput, notifyOnCategoryInput, notifyOnTitleInput, notifyOnHotInput, alwaysShowFavouritesInput, alwaysShowHotInput].forEach(input => {
     input.addEventListener('change', () => autoSave());
   });
 }
@@ -501,6 +503,7 @@ async function autoSave() {
         notify_max_gap_min: parseInt(notifyMaxGapInput.value, 10) || 10,
         notify_on_live: notifyOnLiveInput.checked,
         notify_on_category: notifyOnCategoryInput.checked,
+        notify_on_title: notifyOnTitleInput.checked,
         notify_on_hot: notifyOnHotInput.checked,
         hotness_z_threshold: parseFloat(hotnessZThresholdInput.value) || 2.0,
         hotness_z_cool_threshold: parseFloat(hotnessZCoolThresholdInput.value) || 1.0,
