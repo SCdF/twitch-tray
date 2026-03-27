@@ -4,9 +4,72 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{Connection, OptionalExtension};
+use rusqlite_migration::{Migrations, M};
 
 use crate::hotness_detection::ViewerObservation;
 use crate::twitch::{FollowedChannel, ScheduledStream, Stream};
+
+static MIGRATIONS: std::sync::LazyLock<Migrations<'static>> = std::sync::LazyLock::new(|| {
+    Migrations::new(vec![
+            // 1: Initial schema
+            M::up(
+                "CREATE TABLE stream_history (
+                    user_id INTEGER NOT NULL,
+                    started_at INTEGER NOT NULL,
+                    UNIQUE(user_id, started_at)
+                );
+                CREATE INDEX idx_stream_history_user_id ON stream_history(user_id);
+
+                CREATE TABLE followed (
+                    broadcaster_id INTEGER PRIMARY KEY,
+                    broadcaster_login TEXT NOT NULL,
+                    broadcaster_name TEXT NOT NULL,
+                    followed_at INTEGER NOT NULL
+                );
+
+                CREATE TABLE schedule_last_checked (
+                    broadcaster_id INTEGER PRIMARY KEY,
+                    last_checked_at INTEGER NOT NULL DEFAULT 0
+                );
+
+                CREATE TABLE scheduled_streams (
+                    id TEXT NOT NULL,
+                    broadcaster_id INTEGER NOT NULL,
+                    title TEXT NOT NULL DEFAULT '',
+                    start_time INTEGER NOT NULL,
+                    end_time INTEGER,
+                    category_name TEXT,
+                    category_id INTEGER,
+                    is_recurring INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (id, broadcaster_id)
+                );
+                CREATE INDEX idx_scheduled_streams_start ON scheduled_streams(start_time);
+                CREATE INDEX idx_scheduled_streams_broadcaster ON scheduled_streams(broadcaster_id);
+
+                CREATE TABLE viewer_observations (
+                    broadcaster_id    INTEGER NOT NULL,
+                    observed_at       INTEGER NOT NULL,
+                    stream_age_min    INTEGER NOT NULL,
+                    viewer_count      INTEGER NOT NULL
+                );
+                CREATE INDEX idx_vo_broadcaster_age ON viewer_observations(broadcaster_id, stream_age_min);
+                CREATE INDEX idx_vo_observed_at ON viewer_observations(observed_at);",
+            ),
+            // 2: Add broadcaster_timezone to followed
+            M::up("ALTER TABLE followed ADD COLUMN broadcaster_timezone TEXT;"),
+            // 3: Add stream_started_at to viewer_observations
+            M::up(
+                "ALTER TABLE viewer_observations ADD COLUMN stream_started_at INTEGER NOT NULL DEFAULT 0;",
+            ),
+            // 4: Fix indexes (drop redundant, add missing, replace suboptimal with composite)
+            M::up(
+                "DROP INDEX IF EXISTS idx_stream_history_user_id;
+                CREATE INDEX idx_stream_history_started_at ON stream_history(started_at);
+                DROP INDEX IF EXISTS idx_scheduled_streams_broadcaster;
+                CREATE INDEX idx_scheduled_streams_broadcaster_start ON scheduled_streams(broadcaster_id, start_time);",
+            ),
+        ])
+});
 
 /// Database for recording stream history, followed channels, and schedules.
 #[derive(Clone)]
@@ -29,74 +92,32 @@ impl Database {
             }
         }
 
-        let conn = Connection::open(db_path)?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS stream_history (
-                user_id INTEGER NOT NULL,
-                started_at INTEGER NOT NULL,
-                UNIQUE(user_id, started_at)
-            );
-            CREATE INDEX IF NOT EXISTS idx_stream_history_user_id
-                ON stream_history(user_id);
+        let mut conn = Connection::open(db_path)?;
 
-            CREATE TABLE IF NOT EXISTS followed (
-                broadcaster_id INTEGER PRIMARY KEY,
-                broadcaster_login TEXT NOT NULL,
-                broadcaster_name TEXT NOT NULL,
-                followed_at INTEGER NOT NULL,
-                broadcaster_timezone TEXT
-            );
+        // Bootstrap: existing databases have user_version=0 but already have tables.
+        // Detect which migrations are already applied so we don't replay them.
+        let user_version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        let has_tables: bool = conn
+            .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='stream_history'")
+            .and_then(|mut s| s.exists([]))
+            .unwrap_or(false);
 
-            CREATE TABLE IF NOT EXISTS schedule_last_checked (
-                broadcaster_id INTEGER PRIMARY KEY,
-                last_checked_at INTEGER NOT NULL DEFAULT 0
-            );
-
-            CREATE TABLE IF NOT EXISTS scheduled_streams (
-                id TEXT NOT NULL,
-                broadcaster_id INTEGER NOT NULL,
-                title TEXT NOT NULL DEFAULT '',
-                start_time INTEGER NOT NULL,
-                end_time INTEGER,
-                category_name TEXT,
-                category_id INTEGER,
-                is_recurring INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (id, broadcaster_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_scheduled_streams_start
-                ON scheduled_streams(start_time);
-            CREATE INDEX IF NOT EXISTS idx_scheduled_streams_broadcaster
-                ON scheduled_streams(broadcaster_id);
-
-            CREATE TABLE IF NOT EXISTS viewer_observations (
-                broadcaster_id    INTEGER NOT NULL,
-                observed_at       INTEGER NOT NULL,
-                stream_age_min    INTEGER NOT NULL,
-                viewer_count      INTEGER NOT NULL,
-                stream_started_at INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE INDEX IF NOT EXISTS idx_vo_broadcaster_age
-                ON viewer_observations(broadcaster_id, stream_age_min);
-            CREATE INDEX IF NOT EXISTS idx_vo_observed_at
-                ON viewer_observations(observed_at);",
-        )?;
-        // Migrate: add broadcaster_timezone column to followed if missing
-        let has_tz_col: bool = conn
-            .prepare("SELECT broadcaster_timezone FROM followed LIMIT 0")
-            .is_ok();
-        if !has_tz_col {
-            conn.execute_batch("ALTER TABLE followed ADD COLUMN broadcaster_timezone TEXT")?;
+        if user_version == 0 && has_tables {
+            let has_tz = conn
+                .prepare("SELECT broadcaster_timezone FROM followed LIMIT 0")
+                .is_ok();
+            let has_started = conn
+                .prepare("SELECT stream_started_at FROM viewer_observations LIMIT 0")
+                .is_ok();
+            let version = match (has_tz, has_started) {
+                (true, true) => 3,
+                (true, false) => 2,
+                _ => 1,
+            };
+            conn.pragma_update(None, "user_version", version)?;
         }
 
-        // Migrate: add stream_started_at column to viewer_observations if missing
-        let has_stream_started_at: bool = conn
-            .prepare("SELECT stream_started_at FROM viewer_observations LIMIT 0")
-            .is_ok();
-        if !has_stream_started_at {
-            conn.execute_batch(
-                "ALTER TABLE viewer_observations ADD COLUMN stream_started_at INTEGER NOT NULL DEFAULT 0",
-            )?;
-        }
+        MIGRATIONS.to_latest(&mut conn)?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -661,58 +682,8 @@ mod tests {
     }
 
     fn in_memory_db() -> Database {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS stream_history (
-                user_id INTEGER NOT NULL,
-                started_at INTEGER NOT NULL,
-                UNIQUE(user_id, started_at)
-            );
-            CREATE INDEX IF NOT EXISTS idx_stream_history_user_id
-                ON stream_history(user_id);
-
-            CREATE TABLE IF NOT EXISTS followed (
-                broadcaster_id INTEGER PRIMARY KEY,
-                broadcaster_login TEXT NOT NULL,
-                broadcaster_name TEXT NOT NULL,
-                followed_at INTEGER NOT NULL,
-                broadcaster_timezone TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS schedule_last_checked (
-                broadcaster_id INTEGER PRIMARY KEY,
-                last_checked_at INTEGER NOT NULL DEFAULT 0
-            );
-
-            CREATE TABLE IF NOT EXISTS scheduled_streams (
-                id TEXT NOT NULL,
-                broadcaster_id INTEGER NOT NULL,
-                title TEXT NOT NULL DEFAULT '',
-                start_time INTEGER NOT NULL,
-                end_time INTEGER,
-                category_name TEXT,
-                category_id INTEGER,
-                is_recurring INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (id, broadcaster_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_scheduled_streams_start
-                ON scheduled_streams(start_time);
-            CREATE INDEX IF NOT EXISTS idx_scheduled_streams_broadcaster
-                ON scheduled_streams(broadcaster_id);
-
-            CREATE TABLE IF NOT EXISTS viewer_observations (
-                broadcaster_id    INTEGER NOT NULL,
-                observed_at       INTEGER NOT NULL,
-                stream_age_min    INTEGER NOT NULL,
-                viewer_count      INTEGER NOT NULL,
-                stream_started_at INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE INDEX IF NOT EXISTS idx_vo_broadcaster_age
-                ON viewer_observations(broadcaster_id, stream_age_min);
-            CREATE INDEX IF NOT EXISTS idx_vo_observed_at
-                ON viewer_observations(observed_at);",
-        )
-        .unwrap();
+        let mut conn = Connection::open_in_memory().unwrap();
+        MIGRATIONS.to_latest(&mut conn).unwrap();
         Database {
             conn: Arc::new(Mutex::new(conn)),
         }
@@ -737,14 +708,40 @@ mod tests {
     }
 
     #[test]
-    fn index_exists_on_user_id() {
+    fn expected_indexes_exist() {
         let db = in_memory_db();
         let conn = db.conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_stream_history_user_id'")
-            .unwrap();
-        let exists: bool = stmt.exists([]).unwrap();
-        assert!(exists, "Index idx_stream_history_user_id should exist");
+        let expected = [
+            "idx_stream_history_started_at",
+            "idx_scheduled_streams_start",
+            "idx_scheduled_streams_broadcaster_start",
+            "idx_vo_broadcaster_age",
+            "idx_vo_observed_at",
+        ];
+        for idx_name in expected {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND name='{idx_name}'"
+                ))
+                .unwrap();
+            assert!(stmt.exists([]).unwrap(), "Index {idx_name} should exist");
+        }
+        // Verify redundant indexes were removed
+        let removed = [
+            "idx_stream_history_user_id",
+            "idx_scheduled_streams_broadcaster",
+        ];
+        for idx_name in removed {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND name='{idx_name}'"
+                ))
+                .unwrap();
+            assert!(
+                !stmt.exists([]).unwrap(),
+                "Index {idx_name} should have been removed"
+            );
+        }
     }
 
     #[test]
@@ -1152,6 +1149,98 @@ mod tests {
         assert!(new_path.exists());
     }
 
+    #[test]
+    fn existing_db_bootstrap_applies_new_migrations() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("data.db");
+
+        // Create a database with the full pre-migration schema (simulating an existing user's DB)
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE stream_history (
+                user_id INTEGER NOT NULL,
+                started_at INTEGER NOT NULL,
+                UNIQUE(user_id, started_at)
+            );
+            CREATE INDEX idx_stream_history_user_id ON stream_history(user_id);
+
+            CREATE TABLE followed (
+                broadcaster_id INTEGER PRIMARY KEY,
+                broadcaster_login TEXT NOT NULL,
+                broadcaster_name TEXT NOT NULL,
+                followed_at INTEGER NOT NULL,
+                broadcaster_timezone TEXT
+            );
+
+            CREATE TABLE schedule_last_checked (
+                broadcaster_id INTEGER PRIMARY KEY,
+                last_checked_at INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE scheduled_streams (
+                id TEXT NOT NULL,
+                broadcaster_id INTEGER NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                start_time INTEGER NOT NULL,
+                end_time INTEGER,
+                category_name TEXT,
+                category_id INTEGER,
+                is_recurring INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (id, broadcaster_id)
+            );
+            CREATE INDEX idx_scheduled_streams_start ON scheduled_streams(start_time);
+            CREATE INDEX idx_scheduled_streams_broadcaster ON scheduled_streams(broadcaster_id);
+
+            CREATE TABLE viewer_observations (
+                broadcaster_id    INTEGER NOT NULL,
+                observed_at       INTEGER NOT NULL,
+                stream_age_min    INTEGER NOT NULL,
+                viewer_count      INTEGER NOT NULL,
+                stream_started_at INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX idx_vo_broadcaster_age ON viewer_observations(broadcaster_id, stream_age_min);
+            CREATE INDEX idx_vo_observed_at ON viewer_observations(observed_at);",
+        )
+        .unwrap();
+        drop(conn);
+
+        // Open with Database::new() — should bootstrap and apply migration 4
+        let db = Database::new(&db_path).unwrap();
+        let conn = db.conn.lock().unwrap();
+
+        // Migration 4 indexes should exist
+        for idx_name in [
+            "idx_stream_history_started_at",
+            "idx_scheduled_streams_broadcaster_start",
+        ] {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND name='{idx_name}'"
+                ))
+                .unwrap();
+            assert!(
+                stmt.exists([]).unwrap(),
+                "Index {idx_name} should exist after bootstrap"
+            );
+        }
+
+        // Old redundant indexes should be gone
+        for idx_name in [
+            "idx_stream_history_user_id",
+            "idx_scheduled_streams_broadcaster",
+        ] {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND name='{idx_name}'"
+                ))
+                .unwrap();
+            assert!(
+                !stmt.exists([]).unwrap(),
+                "Index {idx_name} should have been removed after bootstrap"
+            );
+        }
+    }
+
     // === Viewer observation tests ===
 
     #[test]
@@ -1277,20 +1366,6 @@ mod tests {
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].viewer_count, 500);
-    }
-
-    #[test]
-    fn observation_indexes_exist() {
-        let db = in_memory_db();
-        let conn = db.conn.lock().unwrap();
-        for idx_name in ["idx_vo_broadcaster_age", "idx_vo_observed_at"] {
-            let mut stmt = conn
-                .prepare(&format!(
-                    "SELECT name FROM sqlite_master WHERE type='index' AND name='{idx_name}'"
-                ))
-                .unwrap();
-            assert!(stmt.exists([]).unwrap(), "Index {idx_name} should exist");
-        }
     }
 
     #[test]
