@@ -24,17 +24,18 @@ This is the only file a human has edited.
 - cron to periodically delete data older than N months from the database
 - refactor DB usage so it handles logout / login. Maybe name the DB the logged in user's id?
 
-- add a streamer setting to hide their schedule, and this should filter at the menu level, hiding scheuled and inferred streams
-  eg to hide MANvsGAME's schedules.
-
 - investigate if we can make linux notifications richer
 - plasmoid: on hover, load and show the current thumbnail in popup
 
+- investigate: could we support listening to the chat of all live streams, and experiementally bypass viewers as a metric, with messages/min as an alternative. 
+
 - flesh out more: improve streamer settings and management
   - all settings that are general should be available per streamer, automatically (eg if I add a new settings in a certain place it will auto be available at the streamer level)
+  - hide schedules for streamers
   - streamer settings should be available from the plasmoid panel, eg maybe if you hover over their avatar a settings icon appears in the bottom left of it?
   - support unfollowing as an action, in the top of their settings
   - consider: some kind of temporary notification management for a streamer, eg mute them in certain ways for some amount of time. 
+  - streamer debug view, graph of their typical stream momentum, etc
 
 - ask it about the security of the user's credential. How is it stored, can we take another crack at storing it in the keychain?
 - get a better tray icon, this one looks too large comparatively
