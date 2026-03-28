@@ -4,21 +4,41 @@ This is the only file a human has edited.
 
 ## Bugs!
 
+- if a stream goes offline by accident, when it comes back up hotness is keyed "incorrectly", because their stream looks younger than it really is. We should be able to detect this by looking at historic streams?
 
 ## TODO:
 
+- Better packaging / public facing consumption
+  - Actual installable builds for Windows (exc) and MacOS (dmg)
+  - Build for plasmoid installer
+  - Linux:
+    - easiest: single binary you put whereever
+    - something for Linux that is cross-distro (flatpak?)
+    - usual suspects (deb, rpm)
+    - how to deal with cross linux vs plasmoid? Can we bundle the KDE build in one thing?
+  - Cross platform settings to start at startup, exposed in settings
+
 - debug DB. Show disk usage. Can we also get debug stats from sqlite, showing bad / slow queries? Button to clear historic data our algorithms don't use. I think this would right now mean > 1 month, but we should check and be specific
-- cron to periodically delete data older than N months from the database
 - how can we tell how much CPU / etc are used over time? I want to make sure this doesn't use a lot of background resources, doesn't drain battery, etc.
+
+- cron to periodically delete data older than N months from the database
+- refactor DB usage so it handles logout / login. Maybe name the DB the logged in user's id?
+
 - add a streamer setting to hide their schedule, and this should filter at the menu level, hiding scheuled and inferred streams
   eg to hide MANvsGAME's schedules.
+
 - investigate if we can make linux notifications richer
+- plasmoid: on hover, load and show the current thumbnail in popup
+
+- flesh out more: improve streamer settings and management
+  - all settings that are general should be available per streamer, automatically (eg if I add a new settings in a certain place it will auto be available at the streamer level)
+  - streamer settings should be available from the plasmoid panel, eg maybe if you hover over their avatar a settings icon appears in the bottom left of it?
+  - support unfollowing as an action, in the top of their settings
+  - consider: some kind of temporary notification management for a streamer, eg mute them in certain ways for some amount of time. 
 
 - ask it about the security of the user's credential. How is it stored, can we take another crack at storing it in the keychain?
 - get a better tray icon, this one looks too large comparatively
   look at it again? I'm not that sure this is true, I might be used to it now.
-- better packaging, installed "properly" (arch aur?), starts at startup etc
-- refactor DB usage so it handles logout / login. Maybe name the DB the logged in user's id?
 
 - RUST: do we really need a makefile now? If we need an external build, is there something better than make?
 
