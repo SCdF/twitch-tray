@@ -12,7 +12,7 @@ use crate::events::BackendEvent;
 use crate::handle::{AuthCommand, BackendHandle, HotnessDebugData, LoginProgress, RawDisplayData};
 use crate::hotness_detection::{
     compute_age_window, compute_bucket_stats, compute_hotness, compute_hotness_profile,
-    find_nearest_bucket, HotnessConfig, HotnessInfo, ViewerObservation,
+    find_nearest_bucket, is_within_hotness_window, HotnessConfig, HotnessInfo, ViewerObservation,
 };
 use crate::notification_dispatcher::NotificationDispatcher;
 use crate::notify::{DesktopNotifier, Notifier, SnoozeRequest, StreamerSettingsRequest};
@@ -553,6 +553,11 @@ impl Backend {
                 };
 
                 let age = (now - stream.started_at).num_minutes().max(0);
+
+                if !is_within_hotness_window(age, cfg.hotness_max_stream_age_min) {
+                    continue;
+                }
+
                 let (age_lo, age_hi) = compute_age_window(age, cfg.hotness_age_window_divisor);
 
                 let obs = match self.db.get_viewer_observations_excluding_stream(

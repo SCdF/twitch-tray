@@ -23,6 +23,7 @@ const notifyOnLiveInput = document.getElementById('notify_on_live');
 const notifyOnCategoryInput = document.getElementById('notify_on_category');
 const notifyOnTitleInput = document.getElementById('notify_on_title');
 const notifyOnHotInput = document.getElementById('notify_on_hot');
+const hotnessMaxStreamAgeInput = document.getElementById('hotness_max_stream_age_min');
 const hotnessZThresholdInput = document.getElementById('hotness_z_threshold');
 const hotnessZCoolThresholdInput = document.getElementById('hotness_z_cool_threshold');
 const hotnessMinObservationsInput = document.getElementById('hotness_min_observations');
@@ -111,6 +112,7 @@ function populateForm() {
   notifyOnCategoryInput.checked = config.notify_on_category;
   notifyOnTitleInput.checked = config.notify_on_title !== false;
   notifyOnHotInput.checked = config.notify_on_hot;
+  hotnessMaxStreamAgeInput.value = config.hotness_max_stream_age_min;
   hotnessZThresholdInput.value = config.hotness_z_threshold;
   hotnessZCoolThresholdInput.value = config.hotness_z_cool_threshold;
   hotnessMinObservationsInput.value = config.hotness_min_observations;
@@ -415,7 +417,7 @@ function setupEventListeners() {
   });
 
   // Auto-save on general settings changes
-  [pollIntervalInput, notifyMaxGapInput, scheduleLookaheadInput, liveMenuLimitInput, scheduleMenuLimitInput, hotnessZThresholdInput, hotnessMinObservationsInput, hotnessMinStreamsInput, hotnessLookbackDaysInput, hotnessAgeWindowDivisorInput].forEach(input => {
+  [pollIntervalInput, notifyMaxGapInput, scheduleLookaheadInput, liveMenuLimitInput, scheduleMenuLimitInput, hotnessMaxStreamAgeInput, hotnessZThresholdInput, hotnessMinObservationsInput, hotnessMinStreamsInput, hotnessLookbackDaysInput, hotnessAgeWindowDivisorInput].forEach(input => {
     input.addEventListener('change', () => autoSave());
   });
   [notifyOnLiveInput, notifyOnCategoryInput, notifyOnTitleInput, notifyOnHotInput, alwaysShowFavouritesInput, alwaysShowHotInput].forEach(input => {
@@ -505,6 +507,7 @@ async function autoSave() {
         notify_on_category: notifyOnCategoryInput.checked,
         notify_on_title: notifyOnTitleInput.checked,
         notify_on_hot: notifyOnHotInput.checked,
+        hotness_max_stream_age_min: parseInt(hotnessMaxStreamAgeInput.value, 10) || 0,
         hotness_z_threshold: parseFloat(hotnessZThresholdInput.value) || 2.0,
         hotness_z_cool_threshold: parseFloat(hotnessZCoolThresholdInput.value) || 1.0,
         hotness_min_observations: parseInt(hotnessMinObservationsInput.value, 10) || 5,
@@ -523,6 +526,7 @@ async function autoSave() {
       // Validate
       newConfig.poll_interval_sec = Math.max(30, Math.min(300, newConfig.poll_interval_sec));
       newConfig.notify_max_gap_min = Math.max(1, Math.min(60, newConfig.notify_max_gap_min));
+      newConfig.hotness_max_stream_age_min = Math.max(0, Math.min(600, newConfig.hotness_max_stream_age_min));
       newConfig.hotness_z_threshold = Math.max(0.5, Math.min(5.0, newConfig.hotness_z_threshold));
       newConfig.hotness_z_cool_threshold = Math.max(0.0, Math.min(newConfig.hotness_z_threshold, newConfig.hotness_z_cool_threshold));
       newConfig.hotness_min_observations = Math.max(1, Math.min(50, newConfig.hotness_min_observations));

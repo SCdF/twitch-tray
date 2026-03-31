@@ -26,6 +26,7 @@ pub const DEFAULT_HOTNESS_MIN_STREAMS: usize = 7;
 pub const DEFAULT_HOTNESS_LOOKBACK_DAYS: u32 = 30;
 pub const DEFAULT_HOTNESS_Z_COOL_THRESHOLD: f64 = 1.0;
 pub const DEFAULT_HOTNESS_AGE_WINDOW_DIVISOR: u32 = 2;
+pub const DEFAULT_HOTNESS_MAX_STREAM_AGE_MIN: u64 = 90;
 pub const DEFAULT_NOTIFY_ON_HOT: bool = true;
 
 /// Importance level for a streamer, affecting display and notifications
@@ -124,6 +125,10 @@ pub struct Config {
     /// Lower values = wider comparison windows. Higher = narrower, more precise.
     #[serde(default = "default_hotness_age_window_divisor")]
     pub hotness_age_window_divisor: u32,
+    /// Maximum stream age in minutes for hotness evaluation (default: 90).
+    /// Streams older than this are not evaluated for hotness. 0 means no limit.
+    #[serde(default = "default_hotness_max_stream_age_min")]
+    pub hotness_max_stream_age_min: u64,
     /// Send desktop notifications when a stream is detected as hot (default: true)
     #[serde(default = "default_notify_on_hot")]
     pub notify_on_hot: bool,
@@ -207,6 +212,10 @@ fn default_hotness_age_window_divisor() -> u32 {
     DEFAULT_HOTNESS_AGE_WINDOW_DIVISOR
 }
 
+fn default_hotness_max_stream_age_min() -> u64 {
+    DEFAULT_HOTNESS_MAX_STREAM_AGE_MIN
+}
+
 fn default_notify_on_hot() -> bool {
     DEFAULT_NOTIFY_ON_HOT
 }
@@ -238,6 +247,7 @@ impl Default for Config {
             hotness_lookback_days: DEFAULT_HOTNESS_LOOKBACK_DAYS,
             hotness_z_cool_threshold: DEFAULT_HOTNESS_Z_COOL_THRESHOLD,
             hotness_age_window_divisor: DEFAULT_HOTNESS_AGE_WINDOW_DIVISOR,
+            hotness_max_stream_age_min: DEFAULT_HOTNESS_MAX_STREAM_AGE_MIN,
             notify_on_hot: DEFAULT_NOTIFY_ON_HOT,
             followed_categories: Vec::new(),
             streamer_settings: HashMap::new(),
@@ -515,6 +525,7 @@ mod tests {
             hotness_min_streams: 5,
             hotness_lookback_days: 14,
             hotness_age_window_divisor: 3,
+            hotness_max_stream_age_min: 120,
             notify_on_hot: false,
             followed_categories: vec![FollowedCategory {
                 id: "12345".to_string(),
@@ -583,6 +594,10 @@ mod tests {
         assert_eq!(
             deserialized.hotness_age_window_divisor,
             original.hotness_age_window_divisor
+        );
+        assert_eq!(
+            deserialized.hotness_max_stream_age_min,
+            original.hotness_max_stream_age_min
         );
         assert_eq!(deserialized.notify_on_hot, original.notify_on_hot);
     }
@@ -738,6 +753,29 @@ mod tests {
         let config: Config = serde_json::from_str(json).unwrap();
         let settings = config.streamer_settings.get("ninja").unwrap();
         assert_eq!(settings.hotness_z_threshold_override, None);
+    }
+
+    #[test]
+    fn default_hotness_max_stream_age_min_is_90() {
+        let config = Config::default();
+        assert_eq!(
+            config.hotness_max_stream_age_min,
+            DEFAULT_HOTNESS_MAX_STREAM_AGE_MIN
+        );
+    }
+
+    #[test]
+    fn deserialize_hotness_max_stream_age_min() {
+        let json = r#"{"hotness_max_stream_age_min": 120}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.hotness_max_stream_age_min, 120);
+    }
+
+    #[test]
+    fn deserialize_hotness_max_stream_age_min_zero_means_infinite() {
+        let json = r#"{"hotness_max_stream_age_min": 0}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.hotness_max_stream_age_min, 0);
     }
 
     #[test]

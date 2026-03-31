@@ -88,6 +88,7 @@ The debug profiles view (`get_debug_hotness_profiles`) still computes the 12 fix
 Global config (`~/.config/twitch-tray/config.json`):
 - `hotness_z_threshold: f64` (default 2.0) — z-score to enter hot state
 - `hotness_z_cool_threshold: f64` (default 1.0) — z-score below which a hot stream cools off
+- `hotness_max_stream_age_min: u64` (default 90) — only evaluate hotness within this many minutes of stream start; 0 = no limit. Most streams have normalised their viewership by ~90 minutes, and disabling detection after this window avoids false positives from raids on smaller streams (a raid massively inflates viewer counts but doesn't indicate the stream is genuinely "hot")
 - `hotness_min_observations: usize` (default 5)
 - `hotness_min_streams: usize` (default 7) — minimum distinct streams observed before detection activates
 - `notify_on_hot: bool` (default true)

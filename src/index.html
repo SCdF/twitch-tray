@@ -104,6 +104,12 @@
         </div>
 
         <div class="form-group">
+          <label for="hotness_max_stream_age_min">Detection Window (minutes)</label>
+          <input type="number" id="hotness_max_stream_age_min" min="0" max="600" step="1" value="90">
+          <span class="help-text">Only detect hotness within this many minutes of stream start. 0 = no limit (default 90)</span>
+        </div>
+
+        <div class="form-group">
           <label for="hotness_z_threshold">Z-Score Threshold (Hot)</label>
           <input type="number" id="hotness_z_threshold" min="0.5" max="5.0" step="0.1" value="2.0">
           <span class="help-text">Z-score to become hot — standard deviations above average (default 2.0)</span>

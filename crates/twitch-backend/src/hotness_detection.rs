@@ -195,6 +195,14 @@ pub fn compute_hotness_profile(
         .collect()
 }
 
+/// Returns whether a stream's age is within the hotness evaluation window.
+///
+/// If `max_stream_age_min` is 0, the window is infinite (always evaluate).
+/// Otherwise, the stream must be at most `max_stream_age_min` minutes old.
+pub fn is_within_hotness_window(stream_age_min: i64, max_stream_age_min: u64) -> bool {
+    max_stream_age_min == 0 || stream_age_min <= max_stream_age_min as i64
+}
+
 /// Finds the bucket with the closest age point to `stream_age_min`.
 ///
 /// Returns `None` if the profile is empty.
@@ -725,5 +733,33 @@ mod tests {
             "z={:.2} should cool off (below cool threshold)",
             info.z_score
         );
+    }
+
+    // === is_within_hotness_window ===
+
+    #[test]
+    fn within_window_when_age_below_max() {
+        assert!(is_within_hotness_window(60, 90));
+    }
+
+    #[test]
+    fn within_window_at_exact_boundary() {
+        assert!(is_within_hotness_window(90, 90));
+    }
+
+    #[test]
+    fn outside_window_when_age_exceeds_max() {
+        assert!(!is_within_hotness_window(91, 90));
+    }
+
+    #[test]
+    fn zero_max_means_infinite_window() {
+        assert!(is_within_hotness_window(999_999, 0));
+    }
+
+    #[test]
+    fn zero_age_always_within_window() {
+        assert!(is_within_hotness_window(0, 90));
+        assert!(is_within_hotness_window(0, 0));
     }
 }
