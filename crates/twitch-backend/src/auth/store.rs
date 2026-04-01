@@ -181,6 +181,15 @@ impl TokenStore {
 }
 
 #[cfg(test)]
+impl TokenStore {
+    pub fn with_path(path: std::path::PathBuf) -> Self {
+        Self {
+            inner: FileTokenStore::with_path(path),
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Duration;

@@ -1239,6 +1239,74 @@ pub fn start() -> anyhow::Result<BackendHandle> {
 }
 
 #[cfg(test)]
+impl Backend {
+    fn with_test_deps(
+        config: crate::config::Config,
+        db_path: &std::path::Path,
+        token_path: &std::path::Path,
+    ) -> Self {
+        use std::sync::atomic::AtomicBool;
+        use tokio::sync::RwLock;
+
+        let config = Arc::new(ConfigManager::with_config(config));
+        let state = AppState::new();
+        let (snooze_tx, snooze_rx) = mpsc::unbounded_channel();
+        let (settings_tx, settings_rx) = mpsc::unbounded_channel();
+        let notifier: Arc<dyn Notifier> = Arc::new(crate::notify::mock::RecordingNotifier::new());
+        let client = TwitchClient::new("test".into());
+        let db = Database::new(db_path).expect("test db");
+        let (auth_cancel_tx, auth_cancel_rx) = watch::channel(false);
+
+        let store = crate::auth::TokenStore::with_path(token_path.to_path_buf());
+
+        let (session, login_progress_rx) = SessionManager::new(
+            store,
+            client.clone(),
+            state.clone(),
+            db.clone(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(Mutex::new(())),
+        );
+
+        let walker = Arc::new(ScheduleWalker::new(
+            db.clone(),
+            client.clone(),
+            state.clone(),
+            config.clone(),
+            session.clone(),
+        ));
+
+        let dispatcher = Arc::new(NotificationDispatcher::new(
+            notifier.clone(),
+            config.clone(),
+            session.initial_load_done.clone(),
+        ));
+
+        Self {
+            state,
+            config,
+            client,
+            notifier,
+            db,
+            session,
+            walker,
+            dispatcher,
+            auth_cancel_tx,
+            auth_cancel_rx,
+            login_progress_rx,
+            snooze_tx,
+            snooze_rx: Arc::new(Mutex::new(Some(snooze_rx))),
+            settings_tx,
+            settings_rx: Arc::new(Mutex::new(Some(settings_rx))),
+            profile_image_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            box_art_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            hotness_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::hotness_detection::BucketStats;
@@ -1425,5 +1493,98 @@ mod tests {
         let result = evaluate_stream_hotness(&mut cached, &params);
         assert!(result.is_none());
         assert!(!cached.was_hot);
+    }
+
+    // === tick_stream_poll / tick_followed_channels tests ===
+
+    use crate::config::Config;
+    use chrono::Duration;
+    use tempfile::TempDir;
+
+    fn make_test_backend(poll_interval_sec: u64) -> (Backend, TempDir) {
+        let tmp = TempDir::new().expect("tempdir");
+        let db_path = tmp.path().join("data.db");
+        let token_path = tmp.path().join("token.json");
+
+        let config = Config {
+            poll_interval_sec,
+            ..Config::default()
+        };
+
+        let backend = Backend::with_test_deps(config, &db_path, &token_path);
+        (backend, tmp)
+    }
+
+    #[tokio::test]
+    async fn tick_stream_poll_skips_when_unauthenticated() {
+        let (backend, _tmp) = make_test_backend(60);
+        let now = Utc::now();
+        assert!(!backend.tick_stream_poll(now).await);
+    }
+
+    #[tokio::test]
+    async fn tick_stream_poll_refreshes_on_first_call() {
+        let (backend, _tmp) = make_test_backend(60);
+        // Simulate authenticated state
+        backend
+            .state
+            .set_authenticated(true, "user123".into(), "testuser".into())
+            .await;
+
+        let now = Utc::now();
+        let result = backend.tick_stream_poll(now).await;
+        // last_live_refresh is None on first call, so should_refresh = true
+        assert!(result);
+    }
+
+    #[tokio::test]
+    async fn tick_stream_poll_skips_within_interval() {
+        let (backend, _tmp) = make_test_backend(60);
+        backend
+            .state
+            .set_authenticated(true, "user123".into(), "testuser".into())
+            .await;
+
+        // Set last_live_refresh to 30 seconds ago (within 60s interval)
+        let now = Utc::now();
+        *backend.session.last_live_refresh.write().await = Some(now - Duration::seconds(30));
+
+        assert!(!backend.tick_stream_poll(now).await);
+    }
+
+    #[tokio::test]
+    async fn tick_stream_poll_refreshes_after_interval() {
+        let (backend, _tmp) = make_test_backend(60);
+        backend
+            .state
+            .set_authenticated(true, "user123".into(), "testuser".into())
+            .await;
+
+        // Set last_live_refresh to 61 seconds ago (past 60s interval)
+        let now = Utc::now();
+        *backend.session.last_live_refresh.write().await = Some(now - Duration::seconds(61));
+
+        assert!(backend.tick_stream_poll(now).await);
+    }
+
+    #[tokio::test]
+    async fn tick_followed_channels_skips_when_unauthenticated() {
+        let (backend, _tmp) = make_test_backend(60);
+        let now = Utc::now();
+        assert!(!backend.tick_followed_channels(now, None, 900).await);
+    }
+
+    #[tokio::test]
+    async fn tick_followed_channels_skips_within_interval() {
+        let (backend, _tmp) = make_test_backend(60);
+        backend
+            .state
+            .set_authenticated(true, "user123".into(), "testuser".into())
+            .await;
+
+        let now = Utc::now();
+        let last_refresh = Some(now - Duration::seconds(100));
+        // interval is 900s, last refresh was 100s ago — should skip
+        assert!(!backend.tick_followed_channels(now, last_refresh, 900).await);
     }
 }
