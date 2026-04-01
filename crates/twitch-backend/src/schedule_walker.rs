@@ -369,4 +369,95 @@ mod tests {
         let result = convert_schedule_segments(&data);
         assert!(result.is_empty());
     }
+
+    // === refresh_schedules_from_db tests ===
+
+    use crate::config::ConfigManager;
+    use crate::db::Database;
+    use crate::state::AppState;
+    use crate::twitch::FollowedChannel;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    fn make_test_walker() -> (ScheduleWalker, Arc<AppState>, Database, TempDir) {
+        let tmp = TempDir::new().unwrap();
+        let db = Database::new(&tmp.path().join("test.db")).unwrap();
+        let state = AppState::new();
+        let config = Arc::new(ConfigManager::with_config(crate::config::Config::default()));
+        let client = TwitchClient::new("test".into());
+
+        use std::sync::atomic::AtomicBool;
+        use tokio::sync::{Mutex, RwLock};
+        let (session, _) = crate::session::SessionManager::new(
+            crate::auth::TokenStore::with_path(tmp.path().join("token.json")),
+            client.clone(),
+            state.clone(),
+            db.clone(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(Mutex::new(())),
+        );
+
+        let walker = ScheduleWalker::new(db.clone(), client, state.clone(), config, session);
+        (walker, state, db, tmp)
+    }
+
+    #[tokio::test]
+    async fn refresh_schedules_from_db_empty_when_no_data() {
+        let (walker, state, _db, _tmp) = make_test_walker();
+        walker.refresh_schedules_from_db().await;
+        let schedules = state.get_scheduled_streams().await;
+        assert!(schedules.is_empty());
+    }
+
+    #[tokio::test]
+    async fn refresh_schedules_from_db_returns_api_schedules() {
+        let (walker, state, db, _tmp) = make_test_walker();
+
+        let channel = FollowedChannel {
+            broadcaster_id: "123".to_string(),
+            broadcaster_login: "teststreamer".to_string(),
+            broadcaster_name: "TestStreamer".to_string(),
+            followed_at: Utc::now(),
+        };
+        db.sync_followed(&[channel.clone()]).unwrap();
+        state.set_followed_channels(vec![channel]).await;
+
+        let ids = db.get_followed_ids().unwrap();
+        db.ensure_schedule_queue_entries(&ids).unwrap();
+
+        let schedule_time = Utc::now() + Duration::hours(2);
+        let api_schedule = ScheduledStream {
+            id: "sched1".to_string(),
+            broadcaster_id: "123".to_string(),
+            broadcaster_name: "TestStreamer".to_string(),
+            broadcaster_login: "teststreamer".to_string(),
+            title: "API Schedule".to_string(),
+            start_time: schedule_time,
+            end_time: Some(schedule_time + Duration::hours(3)),
+            category: None,
+            category_id: None,
+            is_recurring: false,
+            is_inferred: false,
+        };
+        db.replace_future_schedules(123, &[api_schedule]).unwrap();
+
+        walker.refresh_schedules_from_db().await;
+
+        let schedules = state.get_scheduled_streams().await;
+        assert!(
+            !schedules.is_empty(),
+            "should have at least the API schedule"
+        );
+        assert_eq!(schedules[0].broadcaster_id, "123");
+        assert_eq!(schedules[0].title, "API Schedule");
+    }
+
+    #[tokio::test]
+    async fn tick_returns_ok_when_unauthenticated() {
+        let (walker, _state, _db, _tmp) = make_test_walker();
+        // Unauthenticated — tick should return Ok without doing work
+        let result = walker.tick().await;
+        assert!(result.is_ok());
+    }
 }
