@@ -600,4 +600,150 @@ mod tests {
             .unwrap();
         assert!(result.is_empty());
     }
+
+    // === Error handling tests (get / get_optional) ===
+
+    #[tokio::test]
+    async fn get_returns_unauthorized_on_401() {
+        let mock = MockHttpClient::new().on_get(
+            "https://api.twitch.tv/helix/streams/followed?user_id=user123&first=100",
+            401,
+            r#"{"error":"Unauthorized"}"#,
+        );
+
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+        client.set_access_token("expired_token".to_string()).await;
+        client.set_user_id("user123".to_string()).await;
+
+        let result = client.get_followed_streams().await;
+        assert!(matches!(result, Err(ApiError::Unauthorized)));
+    }
+
+    #[tokio::test]
+    async fn get_returns_other_on_server_error() {
+        let mock = MockHttpClient::new().on_get(
+            "https://api.twitch.tv/helix/streams/followed?user_id=user123&first=100",
+            500,
+            r#"{"error":"Internal Server Error"}"#,
+        );
+
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+        client.set_access_token("test_token".to_string()).await;
+        client.set_user_id("user123".to_string()).await;
+
+        let result = client.get_followed_streams().await;
+        assert!(matches!(result, Err(ApiError::Other(_))));
+    }
+
+    #[tokio::test]
+    async fn get_fails_when_no_access_token_set() {
+        let mock = MockHttpClient::new();
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+        client.set_user_id("user123".to_string()).await;
+
+        let result = client.get_followed_streams().await;
+        assert!(result.is_err(), "should fail without access token");
+    }
+
+    // === get_optional (schedule) error paths ===
+
+    #[tokio::test]
+    async fn get_schedule_returns_none_on_404() {
+        let mock = MockHttpClient::new().on_get(
+            "https://api.twitch.tv/helix/schedule?broadcaster_id=123&first=10",
+            404,
+            r#"{"error":"Not Found"}"#,
+        );
+
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+        client.set_access_token("test_token".to_string()).await;
+
+        let result = client.get_schedule("123").await.unwrap();
+        assert!(result.is_none(), "404 should return None");
+    }
+
+    #[tokio::test]
+    async fn get_schedule_returns_none_on_server_error() {
+        let mock = MockHttpClient::new().on_get(
+            "https://api.twitch.tv/helix/schedule?broadcaster_id=123&first=10",
+            500,
+            r#"{"error":"Internal Server Error"}"#,
+        );
+
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+        client.set_access_token("test_token".to_string()).await;
+
+        let result = client.get_schedule("123").await.unwrap();
+        assert!(result.is_none(), "500 should return None for get_optional");
+    }
+
+    #[tokio::test]
+    async fn get_schedule_returns_unauthorized_on_401() {
+        let mock = MockHttpClient::new().on_get(
+            "https://api.twitch.tv/helix/schedule?broadcaster_id=123&first=10",
+            401,
+            r#"{"error":"Unauthorized"}"#,
+        );
+
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+        client.set_access_token("expired_token".to_string()).await;
+
+        let result = client.get_schedule("123").await;
+        assert!(matches!(result, Err(ApiError::Unauthorized)));
+    }
+
+    // === Pagination tests ===
+
+    #[tokio::test]
+    async fn get_all_followed_channels_paginates() {
+        let page1_json = r#"{
+            "data": [{"broadcaster_id": "1", "broadcaster_login": "streamer1", "broadcaster_name": "Streamer1", "followed_at": "2026-01-01T00:00:00Z"}],
+            "pagination": {"cursor": "cur1"}
+        }"#;
+        let page2_json = r#"{
+            "data": [{"broadcaster_id": "2", "broadcaster_login": "streamer2", "broadcaster_name": "Streamer2", "followed_at": "2026-01-01T00:00:00Z"}],
+            "pagination": {}
+        }"#;
+
+        let mock = MockHttpClient::new()
+            .on_get(
+                "https://api.twitch.tv/helix/channels/followed?user_id=user123&first=100",
+                200,
+                page1_json,
+            )
+            .on_get(
+                "https://api.twitch.tv/helix/channels/followed?user_id=user123&first=100&after=cur1",
+                200,
+                page2_json,
+            );
+
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+        client.set_access_token("test_token".to_string()).await;
+        client.set_user_id("user123".to_string()).await;
+
+        let result = client.get_all_followed_channels().await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].broadcaster_id, "1");
+        assert_eq!(result[1].broadcaster_id, "2");
+    }
+
+    #[tokio::test]
+    async fn get_all_followed_channels_single_page() {
+        let page_json = r#"{
+            "data": [{"broadcaster_id": "1", "broadcaster_login": "streamer1", "broadcaster_name": "Streamer1", "followed_at": "2026-01-01T00:00:00Z"}]
+        }"#;
+
+        let mock = MockHttpClient::new().on_get(
+            "https://api.twitch.tv/helix/channels/followed?user_id=user123&first=100",
+            200,
+            page_json,
+        );
+
+        let client = TwitchClient::with_http_client("test_client_id".to_string(), mock);
+        client.set_access_token("test_token".to_string()).await;
+        client.set_user_id("user123".to_string()).await;
+
+        let result = client.get_all_followed_channels().await.unwrap();
+        assert_eq!(result.len(), 1);
+    }
 }
