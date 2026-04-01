@@ -1587,4 +1587,146 @@ mod tests {
         // interval is 900s, last refresh was 100s ago — should skip
         assert!(!backend.tick_followed_channels(now, last_refresh, 900).await);
     }
+
+    // === record_and_evaluate_hotness cache lifecycle tests ===
+
+    use crate::state::StreamsUpdated;
+    use crate::test_helpers::make_stream;
+
+    #[test]
+    fn hotness_cache_initialised_for_newly_live_stream() {
+        let (backend, _tmp) = make_test_backend(60);
+        let stream = make_stream("123", "TestStreamer");
+
+        let event = StreamsUpdated {
+            streams: vec![stream.clone()],
+            newly_live: vec![stream],
+            category_changes: vec![],
+            title_changes: vec![],
+        };
+
+        backend.record_and_evaluate_hotness(&event);
+
+        let cache = backend.hotness_cache.lock().unwrap();
+        assert!(
+            cache.contains_key("123"),
+            "newly live stream should be in cache"
+        );
+        assert!(!cache["123"].was_hot, "new stream should not start hot");
+    }
+
+    #[test]
+    fn hotness_cache_evicts_offline_streams() {
+        let (backend, _tmp) = make_test_backend(60);
+        let stream = make_stream("123", "TestStreamer");
+
+        // Stream goes live
+        let event1 = StreamsUpdated {
+            streams: vec![stream.clone()],
+            newly_live: vec![stream],
+            category_changes: vec![],
+            title_changes: vec![],
+        };
+        backend.record_and_evaluate_hotness(&event1);
+        assert!(backend.hotness_cache.lock().unwrap().contains_key("123"));
+
+        // Stream goes offline
+        let event2 = StreamsUpdated {
+            streams: vec![],
+            newly_live: vec![],
+            category_changes: vec![],
+            title_changes: vec![],
+        };
+        backend.record_and_evaluate_hotness(&event2);
+        assert!(
+            !backend.hotness_cache.lock().unwrap().contains_key("123"),
+            "offline stream should be evicted from cache"
+        );
+    }
+
+    #[test]
+    fn hotness_records_viewer_observations_to_db() {
+        let (backend, _tmp) = make_test_backend(60);
+        let stream = make_stream("123", "TestStreamer");
+
+        let event = StreamsUpdated {
+            streams: vec![stream.clone()],
+            newly_live: vec![stream],
+            category_changes: vec![],
+            title_changes: vec![],
+        };
+        backend.record_and_evaluate_hotness(&event);
+
+        // Verify observations were recorded in the DB
+        let now = Utc::now().timestamp();
+        let obs = backend.db.get_all_recent_observations(now - 3600).unwrap();
+        assert!(!obs.is_empty(), "observations should be recorded in DB");
+        assert_eq!(obs[0].broadcaster_id, 123);
+        assert_eq!(obs[0].viewer_count, 1000); // default from make_stream
+    }
+
+    // === ensure_*_cached tests ===
+
+    #[tokio::test]
+    async fn ensure_profile_images_cached_noop_on_empty() {
+        let (backend, _tmp) = make_test_backend(60);
+        backend.ensure_profile_images_cached(&[]).await;
+        assert!(backend.profile_image_cache.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn ensure_box_art_cached_noop_on_empty() {
+        let (backend, _tmp) = make_test_backend(60);
+        backend.ensure_box_art_cached(&[]).await;
+        assert!(backend.box_art_cache.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn ensure_profile_images_cached_skips_fresh_entries() {
+        let (backend, _tmp) = make_test_backend(60);
+        // Pre-populate cache with a fresh entry
+        {
+            let mut cache = backend.profile_image_cache.lock().unwrap();
+            cache.insert(
+                "123".to_string(),
+                ("https://img.test/1.jpg".to_string(), Instant::now()),
+            );
+        }
+
+        // Request the same ID — should not attempt fetch (would fail without real token)
+        backend
+            .ensure_profile_images_cached(&["123".to_string()])
+            .await;
+
+        let cache = backend.profile_image_cache.lock().unwrap();
+        assert_eq!(cache.get("123").unwrap().0, "https://img.test/1.jpg");
+    }
+
+    #[tokio::test]
+    async fn ensure_box_art_cached_skips_fresh_entries() {
+        let (backend, _tmp) = make_test_backend(60);
+        {
+            let mut cache = backend.box_art_cache.lock().unwrap();
+            cache.insert(
+                "game1".to_string(),
+                ("https://img.test/art.jpg".to_string(), Instant::now()),
+            );
+        }
+
+        backend.ensure_box_art_cached(&["game1".to_string()]).await;
+
+        let cache = backend.box_art_cache.lock().unwrap();
+        assert_eq!(cache.get("game1").unwrap().0, "https://img.test/art.jpg");
+    }
+
+    // === refresh_category_streams tests ===
+
+    #[tokio::test]
+    async fn refresh_category_streams_noop_when_no_categories() {
+        let (backend, _tmp) = make_test_backend(60);
+        // Default config has no followed_categories
+        backend.refresh_category_streams().await;
+        let streams = backend.state.get_category_streams().await;
+        assert!(streams.is_empty());
+    }
 }
