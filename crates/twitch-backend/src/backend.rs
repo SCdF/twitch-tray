@@ -12,7 +12,8 @@ use crate::events::BackendEvent;
 use crate::handle::{AuthCommand, BackendHandle, HotnessDebugData, LoginProgress, RawDisplayData};
 use crate::hotness_detection::{
     compute_age_window, compute_bucket_stats, compute_hotness, compute_hotness_profile,
-    find_nearest_bucket, is_within_hotness_window, HotnessConfig, HotnessInfo, ViewerObservation,
+    find_nearest_bucket, is_within_hotness_window, BucketStats, HotnessConfig, HotnessInfo,
+    ViewerObservation,
 };
 use crate::notification_dispatcher::NotificationDispatcher;
 use crate::notify::{DesktopNotifier, Notifier, SnoozeRequest, StreamerSettingsRequest};
@@ -24,6 +25,69 @@ use tokio::task::JoinHandle;
 
 /// Age points (in minutes) at which to precompute hotness bucket stats.
 const HOTNESS_AGE_POINTS: &[i64] = &[0, 5, 10, 15, 30, 45, 60, 90, 120, 180, 240, 360];
+
+/// Parameters for per-stream hotness evaluation (groups values to avoid too many arguments).
+struct EvalHotnessParams<'a> {
+    stats: &'a BucketStats,
+    stream_age: i64,
+    max_stream_age_min: u64,
+    viewer_count: u32,
+    broadcaster_id: &'a str,
+    hotness_cfg: &'a HotnessConfig,
+    notify_on_hot: bool,
+}
+
+/// Evaluates hotness for a single stream and updates the cache entry.
+///
+/// Returns `Some(info)` when the stream transitions from not-hot to hot (notification edge).
+/// Returns `None` in all other cases (no transition, outside window, insufficient data).
+///
+/// Side effects on `cached`:
+/// - `last_observation_count`, `last_distinct_streams` — always updated
+/// - `last_hotness`, `was_hot` — updated when inside the detection window
+/// - When outside the window: hot status is preserved (streams don't lose 🔥 mid-stream)
+fn evaluate_stream_hotness(
+    cached: &mut CachedHotnessProfile,
+    params: &EvalHotnessParams<'_>,
+) -> Option<HotnessInfo> {
+    // Always update debug stats
+    cached.last_observation_count = params.stats.count;
+    cached.last_distinct_streams = params.stats.distinct_streams;
+
+    // Past the detection window: preserve existing hot status, no new evaluation
+    if !is_within_hotness_window(params.stream_age, params.max_stream_age_min) {
+        if cached.was_hot {
+            if let Some(ref mut info) = cached.last_hotness {
+                info.is_hot = true;
+            }
+        }
+        return None;
+    }
+
+    // Evaluate hotness
+    let result = compute_hotness(
+        params.broadcaster_id,
+        params.viewer_count,
+        params.stats,
+        params.hotness_cfg,
+        cached.was_hot,
+    );
+
+    cached.last_hotness.clone_from(&result);
+
+    // Preserve was_hot on None — don't forget hot status in data-sparse regions
+    if let Some(ref info) = result {
+        let was_hot = cached.was_hot;
+        cached.was_hot = info.is_hot;
+
+        // Edge detection: notify only on not-hot → hot transition
+        if info.is_hot && !was_hot && params.notify_on_hot {
+            return result;
+        }
+    }
+
+    None
+}
 
 /// Returns the observation retention period in seconds from config lookback days.
 fn observation_retention_secs(lookback_days: u32) -> i64 {
@@ -575,14 +639,7 @@ impl Backend {
 
                 let stats = compute_bucket_stats(&obs);
 
-                // Cache raw stats for debug view (always, even when gates block)
                 cached.last_age_window = Some((age_lo, age_hi));
-                cached.last_observation_count = stats.count;
-                cached.last_distinct_streams = stats.distinct_streams;
-
-                if !is_within_hotness_window(age, cfg.hotness_max_stream_age_min) {
-                    continue;
-                }
 
                 let z_threshold = cfg
                     .streamer_settings
@@ -597,36 +654,26 @@ impl Backend {
                     min_streams: cfg.hotness_min_streams,
                 };
 
-                let result = compute_hotness(
-                    &stream.user_id,
-                    stream.viewer_count,
-                    &stats,
-                    &hotness_cfg,
-                    cached.was_hot,
-                );
+                let params = EvalHotnessParams {
+                    stats: &stats,
+                    stream_age: age,
+                    max_stream_age_min: cfg.hotness_max_stream_age_min,
+                    viewer_count: stream.viewer_count,
+                    broadcaster_id: &stream.user_id,
+                    hotness_cfg: &hotness_cfg,
+                    notify_on_hot: cfg.notify_on_hot,
+                };
 
-                // Cache for display path
-                cached.last_hotness.clone_from(&result);
-
-                // Preserve was_hot on None — if we previously knew they were hot but
-                // now lack data, don't forget that just because we moved into
-                // a data-sparse region.
-                if let Some(info) = result {
-                    let was_hot = cached.was_hot;
-                    cached.was_hot = info.is_hot;
-
-                    // Edge detection: notify only on not-hot → hot transition
-                    if info.is_hot && !was_hot && cfg.notify_on_hot {
-                        tracing::info!(
-                            "🔥 {} is HOT (z={:.1}σ, {} viewers, avg {:.0})",
-                            stream.user_name,
-                            info.z_score,
-                            info.current_viewers,
-                            info.mean_viewers,
-                        );
-                        if let Err(e) = self.notifier.stream_hot(stream, &info) {
-                            tracing::error!("Hot notification error: {}", e);
-                        }
+                if let Some(info) = evaluate_stream_hotness(cached, &params) {
+                    tracing::info!(
+                        "🔥 {} is HOT (z={:.1}σ, {} viewers, avg {:.0})",
+                        stream.user_name,
+                        info.z_score,
+                        info.current_viewers,
+                        info.mean_viewers,
+                    );
+                    if let Err(e) = self.notifier.stream_hot(stream, &info) {
+                        tracing::error!("Hot notification error: {}", e);
                     }
                 }
             }
@@ -1189,4 +1236,194 @@ pub fn start() -> anyhow::Result<BackendHandle> {
         login_progress_rx,
         tasks,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hotness_detection::BucketStats;
+
+    fn make_cached(was_hot: bool) -> CachedHotnessProfile {
+        CachedHotnessProfile {
+            stream_started_at: 1_000_000,
+            was_hot,
+            last_hotness: if was_hot {
+                Some(HotnessInfo {
+                    broadcaster_id: "123".to_string(),
+                    z_score: 2.5,
+                    is_hot: true,
+                    mean_viewers: 100.0,
+                    stddev: 20.0,
+                    current_viewers: 200,
+                    observation_count: 10,
+                    distinct_streams: 7,
+                })
+            } else {
+                None
+            },
+            last_age_window: None,
+            last_observation_count: 0,
+            last_distinct_streams: 0,
+        }
+    }
+
+    fn make_stats(count: usize, distinct_streams: usize) -> BucketStats {
+        // Stats that will produce a high z-score for 500 viewers against mean of 100
+        BucketStats {
+            mean: 100.0,
+            stddev: 20.0,
+            count,
+            distinct_streams,
+            transformed_mean: 10.0, // sqrt(100 + 0.375) ≈ 10.02
+            transformed_stddev: 1.0,
+        }
+    }
+
+    fn default_hotness_cfg() -> HotnessConfig {
+        HotnessConfig {
+            z_threshold: 2.0,
+            z_cool_threshold: 1.0,
+            min_observations: 5,
+            min_streams: 7,
+        }
+    }
+
+    fn make_params<'a>(
+        stats: &'a BucketStats,
+        stream_age: i64,
+        max_stream_age_min: u64,
+        viewer_count: u32,
+        hotness_cfg: &'a HotnessConfig,
+        notify_on_hot: bool,
+    ) -> EvalHotnessParams<'a> {
+        EvalHotnessParams {
+            stats,
+            stream_age,
+            max_stream_age_min,
+            viewer_count,
+            broadcaster_id: "123",
+            hotness_cfg,
+            notify_on_hot,
+        }
+    }
+
+    // === Debug cache always updated ===
+
+    #[test]
+    fn debug_stats_updated_when_inside_window() {
+        let mut cached = make_cached(false);
+        let stats = make_stats(10, 7);
+        let cfg = default_hotness_cfg();
+        let params = make_params(&stats, 60, 90, 500, &cfg, true);
+        evaluate_stream_hotness(&mut cached, &params);
+        assert_eq!(cached.last_observation_count, 10);
+        assert_eq!(cached.last_distinct_streams, 7);
+    }
+
+    #[test]
+    fn debug_stats_updated_when_outside_window() {
+        let mut cached = make_cached(false);
+        let stats = make_stats(10, 7);
+        let cfg = default_hotness_cfg();
+        let params = make_params(&stats, 91, 90, 500, &cfg, true);
+        evaluate_stream_hotness(&mut cached, &params);
+        assert_eq!(cached.last_observation_count, 10);
+        assert_eq!(cached.last_distinct_streams, 7);
+    }
+
+    // === Window gate: no new hot detection after window ===
+
+    #[test]
+    fn cold_stream_stays_cold_after_window() {
+        let mut cached = make_cached(false);
+        let stats = make_stats(10, 7);
+        let cfg = default_hotness_cfg();
+        let params = make_params(&stats, 91, 90, 500, &cfg, true);
+        let result = evaluate_stream_hotness(&mut cached, &params);
+        assert!(result.is_none());
+        assert!(!cached.was_hot);
+    }
+
+    // === Window gate: hot streams stay hot after window ===
+
+    #[test]
+    fn hot_stream_stays_hot_after_window() {
+        let mut cached = make_cached(true);
+        let stats = make_stats(10, 7);
+        let cfg = default_hotness_cfg();
+        let params = make_params(&stats, 91, 90, 500, &cfg, true);
+        let result = evaluate_stream_hotness(&mut cached, &params);
+        // No notification (not a new transition)
+        assert!(result.is_none());
+        // But stays hot
+        assert!(cached.was_hot);
+        assert!(cached.last_hotness.as_ref().unwrap().is_hot);
+    }
+
+    // === Normal detection within window ===
+
+    #[test]
+    fn becomes_hot_within_window_returns_notification() {
+        let mut cached = make_cached(false);
+        let stats = make_stats(10, 7);
+        let cfg = default_hotness_cfg();
+        let params = make_params(&stats, 60, 90, 500, &cfg, true);
+        let result = evaluate_stream_hotness(&mut cached, &params);
+        assert!(result.is_some());
+        let info = result.unwrap();
+        assert!(info.is_hot);
+        assert!(cached.was_hot);
+    }
+
+    #[test]
+    fn becomes_hot_but_notify_disabled_returns_none() {
+        let mut cached = make_cached(false);
+        let stats = make_stats(10, 7);
+        let cfg = default_hotness_cfg();
+        let params = make_params(&stats, 60, 90, 500, &cfg, false);
+        let result = evaluate_stream_hotness(&mut cached, &params);
+        // No notification returned when notify_on_hot is false
+        assert!(result.is_none());
+        // But the stream IS hot
+        assert!(cached.was_hot);
+    }
+
+    #[test]
+    fn already_hot_within_window_no_notification() {
+        let mut cached = make_cached(true);
+        let stats = make_stats(10, 7);
+        let cfg = default_hotness_cfg();
+        let params = make_params(&stats, 60, 90, 500, &cfg, true);
+        let result = evaluate_stream_hotness(&mut cached, &params);
+        // No new transition → no notification
+        assert!(result.is_none());
+        assert!(cached.was_hot);
+    }
+
+    // === Zero max means infinite window ===
+
+    #[test]
+    fn zero_max_age_means_infinite_detection_window() {
+        let mut cached = make_cached(false);
+        let stats = make_stats(10, 7);
+        let cfg = default_hotness_cfg();
+        let params = make_params(&stats, 999, 0, 500, &cfg, true);
+        let result = evaluate_stream_hotness(&mut cached, &params);
+        // Should still evaluate (window is infinite)
+        assert!(result.is_some());
+        assert!(cached.was_hot);
+    }
+
+    // === Insufficient data ===
+
+    #[test]
+    fn insufficient_observations_returns_none() {
+        let mut cached = make_cached(false);
+        let stats = make_stats(3, 7); // below min_observations
+        let cfg = default_hotness_cfg();
+        let params = make_params(&stats, 60, 90, 500, &cfg, true);
+        let result = evaluate_stream_hotness(&mut cached, &params);
+        assert!(result.is_none());
+        assert!(!cached.was_hot);
+    }
 }
