@@ -325,4 +325,57 @@ mod tests {
         assert_eq!(deserialized.user_login, token.user_login);
         assert_eq!(deserialized.scopes, token.scopes);
     }
+
+    // === TokenStore wrapper tests ===
+
+    #[test]
+    fn token_store_save_load_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TokenStore::with_path(tmp.path().join("token.json"));
+
+        let token = make_token(1);
+        store.save_token(&token).unwrap();
+
+        let loaded = store.load_token().unwrap();
+        assert_eq!(loaded.access_token, token.access_token);
+        assert_eq!(loaded.refresh_token, token.refresh_token);
+        assert_eq!(loaded.user_id, token.user_id);
+        assert_eq!(loaded.user_login, token.user_login);
+    }
+
+    #[test]
+    fn token_store_load_returns_error_when_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TokenStore::with_path(tmp.path().join("token.json"));
+
+        let result = store.load_token();
+        assert!(
+            matches!(result, Err(StoreError::NoToken)),
+            "loading from empty store should return NoToken"
+        );
+    }
+
+    #[test]
+    fn token_store_delete_removes_token() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TokenStore::with_path(tmp.path().join("token.json"));
+
+        store.save_token(&make_token(1)).unwrap();
+        assert!(store.load_token().is_ok(), "token should exist after save");
+
+        store.delete_token().unwrap();
+        assert!(
+            store.load_token().is_err(),
+            "token should be gone after delete"
+        );
+    }
+
+    #[test]
+    fn token_store_delete_noop_when_no_token() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = TokenStore::with_path(tmp.path().join("token.json"));
+
+        // Should not error when deleting a non-existent token
+        assert!(store.delete_token().is_ok());
+    }
 }
