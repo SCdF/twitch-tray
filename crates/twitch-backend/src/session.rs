@@ -404,4 +404,76 @@ mod tests {
             *progress_rx.borrow()
         );
     }
+
+    // === SessionManager state management tests ===
+
+    use crate::db::Database;
+    use std::sync::atomic::Ordering;
+    use tempfile::TempDir;
+
+    fn make_test_session() -> (SessionManager, Arc<AppState>, TempDir) {
+        let tmp = TempDir::new().unwrap();
+        let db = Database::new(&tmp.path().join("test.db")).unwrap();
+        let state = AppState::new();
+        let initial_load_done = Arc::new(AtomicBool::new(false));
+
+        let store = crate::auth::TokenStore::with_path(tmp.path().join("token.json"));
+
+        let (session, _rx) = SessionManager::new(
+            store,
+            TwitchClient::new("test".into()),
+            state.clone(),
+            db,
+            initial_load_done,
+            Arc::new(RwLock::new(None)),
+            Arc::new(Mutex::new(())),
+        );
+
+        (session, state, tmp)
+    }
+
+    #[tokio::test]
+    async fn handle_logout_clears_auth_state() {
+        let (session, state, _tmp) = make_test_session();
+
+        // Simulate logged-in state
+        state
+            .set_authenticated(true, "user1".into(), "testuser".into())
+            .await;
+        session.initial_load_done.store(true, Ordering::SeqCst);
+        session.client.set_access_token("tok123".to_string()).await;
+
+        assert!(state.is_authenticated().await);
+
+        session.handle_logout().await;
+
+        assert!(
+            !state.is_authenticated().await,
+            "state should be cleared after logout"
+        );
+        assert!(
+            !session.initial_load_done.load(Ordering::SeqCst),
+            "initial_load_done should be reset after logout"
+        );
+        assert!(
+            session.client.get_access_token().await.is_none(),
+            "client auth should be cleared after logout"
+        );
+    }
+
+    #[tokio::test]
+    async fn mark_initial_load_done_sets_flag() {
+        let (session, _state, _tmp) = make_test_session();
+        assert!(!session.initial_load_done.load(Ordering::SeqCst));
+        session.mark_initial_load_done();
+        assert!(session.initial_load_done.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn record_and_read_last_live_refresh() {
+        let (session, _state, _tmp) = make_test_session();
+        assert!(session.last_live_refresh().await.is_none());
+        session.record_live_refresh().await;
+        assert!(session.last_live_refresh().await.is_some());
+    }
 }
