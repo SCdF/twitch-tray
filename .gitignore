@@ -19,5 +19,8 @@ Thumbs.db
 # Config (user-specific)
 config.json
 
+# Coverage reports
+/coverage/
+
 # Tauri
 gen/

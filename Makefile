@@ -1,4 +1,4 @@
-.PHONY: all build build-kde dev run run-kde clean lint lint-kde test test-plasmoid test-all install-plasmoid version
+.PHONY: all build build-kde dev run run-kde clean lint lint-kde test test-plasmoid test-all coverage install-plasmoid version
 
 # Build directory
 DIST=dist
@@ -66,6 +66,15 @@ test-plasmoid:
 
 # Run all tests (Rust + QML)
 test-all: test test-plasmoid
+
+# Run tests with code coverage report
+coverage:
+	@cargo llvm-cov --version >/dev/null 2>&1 || { \
+		echo "ERROR: cargo-llvm-cov not found."; \
+		echo "Install: cargo install cargo-llvm-cov"; \
+		exit 1; \
+	}
+	cargo llvm-cov --workspace --html --output-dir coverage/
 
 # Format code
 fmt:
