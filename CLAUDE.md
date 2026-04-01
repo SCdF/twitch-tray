@@ -402,11 +402,11 @@ boundaries. Each crate that needs a mock type must define its own copy.
 
 **Integration tests** (`twitch-app-tauri/tests/`) — test collaboration between real components.
 
-### Do not test through the wiring layer
+### The only untested file is `main.rs`
 
-`main.rs` is a wiring layer. Tests that construct the full app to test notification logic or
-display state are testing the wrong layer. Test `NotificationFilter`, `compute_display_state`,
-`ScheduleWalker::tick` directly in the crate where they live.
+`main.rs` is pure wiring — it starts the backend, connects listeners, and routes events.
+Every other file contains business logic and must have tests. If you are modifying a file
+that is not `main.rs`, that change needs a test.
 
 ### Test naming
 

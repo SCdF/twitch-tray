@@ -553,11 +553,6 @@ impl Backend {
                 };
 
                 let age = (now - stream.started_at).num_minutes().max(0);
-
-                if !is_within_hotness_window(age, cfg.hotness_max_stream_age_min) {
-                    continue;
-                }
-
                 let (age_lo, age_hi) = compute_age_window(age, cfg.hotness_age_window_divisor);
 
                 let obs = match self.db.get_viewer_observations_excluding_stream(
@@ -584,6 +579,10 @@ impl Backend {
                 cached.last_age_window = Some((age_lo, age_hi));
                 cached.last_observation_count = stats.count;
                 cached.last_distinct_streams = stats.distinct_streams;
+
+                if !is_within_hotness_window(age, cfg.hotness_max_stream_age_min) {
+                    continue;
+                }
 
                 let z_threshold = cfg
                     .streamer_settings
