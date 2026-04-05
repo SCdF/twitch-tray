@@ -28,6 +28,7 @@ pub const DEFAULT_HOTNESS_Z_COOL_THRESHOLD: f64 = 1.0;
 pub const DEFAULT_HOTNESS_AGE_WINDOW_DIVISOR: u32 = 2;
 pub const DEFAULT_HOTNESS_MAX_STREAM_AGE_MIN: u64 = 90;
 pub const DEFAULT_NOTIFY_ON_HOT: bool = true;
+pub const DEFAULT_STREAM_RESET_GRACE_MIN: u64 = 5;
 
 /// Importance level for a streamer, affecting display and notifications
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -132,6 +133,12 @@ pub struct Config {
     /// Send desktop notifications when a stream is detected as hot (default: true)
     #[serde(default = "default_notify_on_hot")]
     pub notify_on_hot: bool,
+    /// Grace period (in minutes) for treating a stream restart as the same stream.
+    /// If a streamer goes offline and comes back within this window, the original
+    /// start time is preserved — preventing false hotness detections and phantom
+    /// stream history entries from brief disconnects.
+    #[serde(default = "default_stream_reset_grace_min")]
+    pub stream_reset_grace_min: u64,
     /// Categories to follow for category-based stream listings
     #[serde(default)]
     pub followed_categories: Vec<FollowedCategory>,
@@ -220,6 +227,10 @@ fn default_notify_on_hot() -> bool {
     DEFAULT_NOTIFY_ON_HOT
 }
 
+fn default_stream_reset_grace_min() -> u64 {
+    DEFAULT_STREAM_RESET_GRACE_MIN
+}
+
 fn default_true() -> bool {
     true
 }
@@ -249,6 +260,7 @@ impl Default for Config {
             hotness_age_window_divisor: DEFAULT_HOTNESS_AGE_WINDOW_DIVISOR,
             hotness_max_stream_age_min: DEFAULT_HOTNESS_MAX_STREAM_AGE_MIN,
             notify_on_hot: DEFAULT_NOTIFY_ON_HOT,
+            stream_reset_grace_min: DEFAULT_STREAM_RESET_GRACE_MIN,
             followed_categories: Vec::new(),
             streamer_settings: HashMap::new(),
         }
@@ -527,6 +539,7 @@ mod tests {
             hotness_age_window_divisor: 3,
             hotness_max_stream_age_min: 120,
             notify_on_hot: false,
+            stream_reset_grace_min: 3,
             followed_categories: vec![FollowedCategory {
                 id: "12345".to_string(),
                 name: "Just Chatting".to_string(),
