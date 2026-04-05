@@ -105,6 +105,12 @@ struct CachedHotnessProfile {
     last_distinct_streams: usize,
 }
 
+/// A stream that recently went offline, tracked for grace-period reset detection.
+struct RecentStream {
+    original_started_at: DateTime<Utc>,
+    went_offline_at: Instant,
+}
+
 /// Internal backend orchestrator.
 pub(crate) struct Backend {
     pub(crate) state: Arc<AppState>,
@@ -137,6 +143,11 @@ pub(crate) struct Backend {
     /// In-memory cache for hotness profiles (broadcaster user_id -> profile).
     /// Populated when a stream goes live, evicted when it goes offline.
     hotness_cache: Arc<std::sync::Mutex<HashMap<String, CachedHotnessProfile>>>,
+
+    /// Recently-offline streams for detecting resets that span poll boundaries.
+    /// Maps user_id -> entry with original started_at and when it went offline.
+    /// Entries older than `stream_reset_grace_min` are pruned each poll.
+    recent_streams: Arc<std::sync::Mutex<HashMap<String, RecentStream>>>,
 }
 
 impl Backend {
@@ -197,6 +208,7 @@ impl Backend {
             profile_image_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
             box_art_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
             hotness_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            recent_streams: Arc::new(std::sync::Mutex::new(HashMap::new())),
         })
     }
 
@@ -556,6 +568,89 @@ impl Backend {
         }
     }
 
+    /// Detects stream resets and preserves original `started_at`.
+    ///
+    /// Two cases:
+    /// 1. **Instant reset**: stream was live last poll with a different `started_at`.
+    ///    The `started_at` is overwritten in-place.
+    /// 2. **Grace-period reset**: stream went offline for 1+ polls but returned within
+    ///    `stream_reset_grace_min`. The `started_at` is overwritten and the `user_id`
+    ///    is returned in the `resumed` set to suppress false `newly_live` detection.
+    ///
+    /// Also maintains the `recent_streams` map: stashes newly-offline streams and
+    /// prunes entries older than the grace period.
+    async fn normalize_stream_resets(
+        &self,
+        streams: &mut [crate::twitch::Stream],
+    ) -> HashSet<String> {
+        let grace = std::time::Duration::from_secs(self.config.get().stream_reset_grace_min * 60);
+
+        let old_streams = self.state.get_followed_streams().await;
+        let old_by_id: HashMap<&str, &crate::twitch::Stream> = old_streams
+            .iter()
+            .map(|s| (s.user_id.as_str(), s))
+            .collect();
+
+        let new_by_id: std::collections::HashSet<String> =
+            streams.iter().map(|s| s.user_id.clone()).collect();
+
+        let mut resumed = HashSet::new();
+
+        // Case 1: instant reset — same user_id still live, different started_at
+        for stream in streams.iter_mut() {
+            if let Some(old) = old_by_id.get(stream.user_id.as_str()) {
+                if stream.started_at != old.started_at {
+                    tracing::info!(
+                        "Stream reset detected for {} (instant) — preserving original started_at",
+                        stream.user_name,
+                    );
+                    stream.started_at = old.started_at;
+                }
+            }
+        }
+
+        // Stash streams that just went offline into the grace-period map
+        {
+            let mut recent = self.recent_streams.lock().unwrap();
+            for old in &old_streams {
+                if !new_by_id.contains(&old.user_id) {
+                    recent.insert(
+                        old.user_id.clone(),
+                        RecentStream {
+                            original_started_at: old.started_at,
+                            went_offline_at: Instant::now(),
+                        },
+                    );
+                }
+            }
+        }
+
+        // Case 2: grace-period reset — stream was offline, now back within grace window
+        {
+            let mut recent = self.recent_streams.lock().unwrap();
+            for stream in streams.iter_mut() {
+                if old_by_id.contains_key(stream.user_id.as_str()) {
+                    continue; // handled in case 1
+                }
+                if let Some(entry) = recent.remove(&stream.user_id) {
+                    if entry.went_offline_at.elapsed() < grace {
+                        tracing::info!(
+                            "Stream reset detected for {} (grace period) — preserving original started_at",
+                            stream.user_name,
+                        );
+                        stream.started_at = entry.original_started_at;
+                        resumed.insert(stream.user_id.clone());
+                    }
+                }
+            }
+
+            // Prune stale entries
+            recent.retain(|_, entry| entry.went_offline_at.elapsed() < grace);
+        }
+
+        resumed
+    }
+
     /// Records viewer observations and evaluates hotness for all live streams.
     ///
     /// For newly live streams, initialises the cache entry with `stream_started_at`.
@@ -748,8 +843,11 @@ impl Backend {
         // Enrich streams with profile image URLs from the Users API
         self.enrich_with_profile_images(&mut streams).await;
 
+        // Detect stream resets and preserve original started_at
+        let resumed = self.normalize_stream_resets(&mut streams).await;
+
         self.session.record_live_refresh().await;
-        self.state.set_followed_streams(streams, HashSet::new()).await;
+        self.state.set_followed_streams(streams, resumed).await;
     }
 
     /// Ensures all given user IDs have profile images in the cache.
@@ -1211,6 +1309,7 @@ impl Clone for Backend {
             profile_image_cache: self.profile_image_cache.clone(),
             box_art_cache: self.box_art_cache.clone(),
             hotness_cache: self.hotness_cache.clone(),
+            recent_streams: self.recent_streams.clone(),
         }
     }
 }
@@ -1302,6 +1401,7 @@ impl Backend {
             profile_image_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
             box_art_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
             hotness_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            recent_streams: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 }
@@ -1728,5 +1828,255 @@ mod tests {
         backend.refresh_category_streams().await;
         let streams = backend.state.get_category_streams().await;
         assert!(streams.is_empty());
+    }
+
+    // === normalize_stream_resets tests ===
+
+    fn make_test_backend_with_grace(poll_interval_sec: u64, grace_min: u64) -> (Backend, TempDir) {
+        let tmp = TempDir::new().expect("tempdir");
+        let db_path = tmp.path().join("data.db");
+        let token_path = tmp.path().join("token.json");
+
+        let config = Config {
+            poll_interval_sec,
+            stream_reset_grace_min: grace_min,
+            ..Config::default()
+        };
+
+        let backend = Backend::with_test_deps(config, &db_path, &token_path);
+        (backend, tmp)
+    }
+
+    #[tokio::test]
+    async fn started_at_preserved_when_stream_resets_within_same_poll() {
+        let (backend, _tmp) = make_test_backend(60);
+
+        let original_start = Utc::now() - Duration::hours(2);
+        let mut stream = make_stream("123", "TestStreamer");
+        stream.started_at = original_start;
+
+        backend
+            .state
+            .set_followed_streams(vec![stream.clone()], HashSet::new())
+            .await;
+
+        let mut reset_stream = stream.clone();
+        reset_stream.started_at = Utc::now();
+
+        let mut streams = vec![reset_stream];
+        let resumed = backend.normalize_stream_resets(&mut streams).await;
+
+        assert_eq!(streams[0].started_at, original_start);
+        assert!(
+            resumed.is_empty(),
+            "instant reset should not produce resumed IDs"
+        );
+    }
+
+    #[tokio::test]
+    async fn started_at_preserved_when_stream_returns_within_grace_period() {
+        let (backend, _tmp) = make_test_backend(60);
+
+        let original_start = Utc::now() - Duration::hours(2);
+        let mut stream = make_stream("123", "TestStreamer");
+        stream.started_at = original_start;
+
+        backend
+            .state
+            .set_followed_streams(vec![stream.clone()], HashSet::new())
+            .await;
+
+        let mut empty: Vec<crate::twitch::Stream> = vec![];
+        let _ = backend.normalize_stream_resets(&mut empty).await;
+        backend
+            .state
+            .set_followed_streams(vec![], HashSet::new())
+            .await;
+
+        let mut reset_stream = stream.clone();
+        reset_stream.started_at = Utc::now();
+        let mut streams = vec![reset_stream];
+        let resumed = backend.normalize_stream_resets(&mut streams).await;
+
+        assert_eq!(streams[0].started_at, original_start);
+        assert!(
+            resumed.contains("123"),
+            "grace-period return should be in resumed set"
+        );
+    }
+
+    #[tokio::test]
+    async fn new_started_at_used_when_stream_returns_after_grace_period() {
+        let (backend, _tmp) = make_test_backend_with_grace(60, 0);
+
+        let original_start = Utc::now() - Duration::hours(2);
+        let mut stream = make_stream("123", "TestStreamer");
+        stream.started_at = original_start;
+
+        backend
+            .state
+            .set_followed_streams(vec![stream.clone()], HashSet::new())
+            .await;
+
+        let mut empty: Vec<crate::twitch::Stream> = vec![];
+        let _ = backend.normalize_stream_resets(&mut empty).await;
+        backend
+            .state
+            .set_followed_streams(vec![], HashSet::new())
+            .await;
+
+        let new_start = Utc::now();
+        let mut reset_stream = stream.clone();
+        reset_stream.started_at = new_start;
+        let mut streams = vec![reset_stream];
+        let resumed = backend.normalize_stream_resets(&mut streams).await;
+
+        assert_eq!(
+            streams[0].started_at, new_start,
+            "should use new started_at after grace expires"
+        );
+        assert!(resumed.is_empty(), "should not be in resumed set");
+    }
+
+    #[tokio::test]
+    async fn stale_entries_pruned_from_grace_period_map() {
+        let (backend, _tmp) = make_test_backend_with_grace(60, 0);
+
+        {
+            let mut recent = backend.recent_streams.lock().unwrap();
+            recent.insert(
+                "old_user".to_string(),
+                RecentStream {
+                    original_started_at: Utc::now() - Duration::hours(1),
+                    went_offline_at: Instant::now(),
+                },
+            );
+        }
+
+        let mut streams: Vec<crate::twitch::Stream> = vec![];
+        backend.normalize_stream_resets(&mut streams).await;
+
+        let recent = backend.recent_streams.lock().unwrap();
+        assert!(recent.is_empty(), "stale entry should be pruned");
+    }
+
+    #[tokio::test]
+    async fn started_at_preserved_across_multiple_resets() {
+        let (backend, _tmp) = make_test_backend(60);
+
+        let original_start = Utc::now() - Duration::hours(3);
+        let mut stream = make_stream("123", "TestStreamer");
+        stream.started_at = original_start;
+
+        backend
+            .state
+            .set_followed_streams(vec![stream.clone()], HashSet::new())
+            .await;
+
+        let mut reset1 = stream.clone();
+        reset1.started_at = Utc::now() - Duration::hours(1);
+        let mut streams = vec![reset1];
+        let _ = backend.normalize_stream_resets(&mut streams).await;
+        assert_eq!(streams[0].started_at, original_start);
+        backend
+            .state
+            .set_followed_streams(streams, HashSet::new())
+            .await;
+
+        let mut reset2 = stream.clone();
+        reset2.started_at = Utc::now();
+        let mut streams = vec![reset2];
+        let _ = backend.normalize_stream_resets(&mut streams).await;
+        assert_eq!(streams[0].started_at, original_start);
+    }
+
+    #[tokio::test]
+    async fn no_live_notification_on_grace_period_return() {
+        let (backend, _tmp) = make_test_backend(60);
+
+        let original_start = Utc::now() - Duration::hours(2);
+        let mut stream = make_stream("123", "TestStreamer");
+        stream.started_at = original_start;
+
+        backend
+            .state
+            .set_followed_streams(vec![stream.clone()], HashSet::new())
+            .await;
+
+        let mut empty: Vec<crate::twitch::Stream> = vec![];
+        let _ = backend.normalize_stream_resets(&mut empty).await;
+        backend
+            .state
+            .set_followed_streams(vec![], HashSet::new())
+            .await;
+
+        let mut rx = backend.state.subscribe_streams();
+
+        let mut reset_stream = stream.clone();
+        reset_stream.started_at = Utc::now();
+        let mut streams = vec![reset_stream];
+        let resumed = backend.normalize_stream_resets(&mut streams).await;
+
+        backend.state.set_followed_streams(streams, resumed).await;
+        let event = rx.recv().await.unwrap();
+
+        assert!(
+            event.newly_live.is_empty(),
+            "grace-period return should not fire newly_live"
+        );
+    }
+
+    #[test]
+    fn viewer_count_recorded_at_original_stream_age_after_reset() {
+        let (backend, _tmp) = make_test_backend(60);
+
+        let original_start = Utc::now() - Duration::hours(2);
+        let mut stream = make_stream("123", "TestStreamer");
+        stream.started_at = original_start;
+
+        let event1 = StreamsUpdated {
+            streams: vec![stream.clone()],
+            newly_live: vec![stream.clone()],
+            category_changes: vec![],
+            title_changes: vec![],
+        };
+        backend.record_and_evaluate_hotness(&event1);
+
+        let event2 = StreamsUpdated {
+            streams: vec![stream.clone()],
+            newly_live: vec![],
+            category_changes: vec![],
+            title_changes: vec![],
+        };
+        backend.record_and_evaluate_hotness(&event2);
+
+        let now = Utc::now().timestamp();
+        let obs = backend.db.get_all_recent_observations(now - 3600).unwrap();
+        assert!(obs.len() >= 2);
+        for o in &obs {
+            assert!(
+                o.stream_age_min >= 110,
+                "stream_age_min should reflect original start, got {}",
+                o.stream_age_min,
+            );
+        }
+    }
+
+    #[test]
+    fn no_duplicate_stream_history_on_reset() {
+        let (backend, _tmp) = make_test_backend(60);
+
+        let original_start = Utc::now() - Duration::hours(2);
+        let mut stream = make_stream("123", "TestStreamer");
+        stream.started_at = original_start;
+
+        backend.db.record_streams(&[stream.clone()]).unwrap();
+        backend.db.record_streams(&[stream.clone()]).unwrap();
+
+        let from = Utc::now() - Duration::hours(3);
+        let to = Utc::now();
+        let history = backend.db.get_streams_in_range(&[123], from, to).unwrap();
+        let entries = history.get(&123).unwrap();
+        assert_eq!(entries.len(), 1, "should have exactly one history entry");
     }
 }
