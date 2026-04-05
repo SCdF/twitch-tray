@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, watch, Mutex};
 use tokio::time::{Duration, Instant};
@@ -749,7 +749,7 @@ impl Backend {
         self.enrich_with_profile_images(&mut streams).await;
 
         self.session.record_live_refresh().await;
-        self.state.set_followed_streams(streams).await;
+        self.state.set_followed_streams(streams, HashSet::new()).await;
     }
 
     /// Ensures all given user IDs have profile images in the cache.

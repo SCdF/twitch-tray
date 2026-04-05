@@ -2,6 +2,7 @@
 
 mod common;
 
+use std::collections::HashSet;
 use twitch_tray::state::AppState;
 
 #[tokio::test]
@@ -11,12 +12,12 @@ async fn state_tracks_newly_live_streams() {
 
     // Initial load
     let stream_a = common::make_stream("a", "StreamerA");
-    state.set_followed_streams(vec![stream_a.clone()]).await;
+    state.set_followed_streams(vec![stream_a.clone()], HashSet::new()).await;
     let _ = rx.recv().await;
 
     // New stream goes live
     let stream_b = common::make_stream("b", "StreamerB");
-    state.set_followed_streams(vec![stream_a, stream_b]).await;
+    state.set_followed_streams(vec![stream_a, stream_b], HashSet::new()).await;
     let event = rx.recv().await.unwrap();
 
     assert_eq!(event.newly_live.len(), 1);
@@ -32,12 +33,12 @@ async fn state_tracks_no_new_streams_when_unchanged() {
     let stream_a = common::make_stream("a", "StreamerA");
     let stream_b = common::make_stream("b", "StreamerB");
     state
-        .set_followed_streams(vec![stream_a.clone(), stream_b.clone()])
+        .set_followed_streams(vec![stream_a.clone(), stream_b.clone()], HashSet::new())
         .await;
     let _ = rx.recv().await;
 
     // Same streams again
-    state.set_followed_streams(vec![stream_a, stream_b]).await;
+    state.set_followed_streams(vec![stream_a, stream_b], HashSet::new()).await;
     let event = rx.recv().await.unwrap();
 
     assert!(event.newly_live.is_empty());
