@@ -122,7 +122,11 @@ impl AppState {
     }
 
     /// Updates the followed live streams and broadcasts changes
-    pub async fn set_followed_streams(&self, streams: Vec<Stream>, resumed_user_ids: HashSet<String>) {
+    pub async fn set_followed_streams(
+        &self,
+        streams: Vec<Stream>,
+        resumed_user_ids: HashSet<String>,
+    ) {
         let mut state = self.inner.write().await;
 
         // Build set for comparison
@@ -298,12 +302,16 @@ mod tests {
 
         // Initial state: stream A is live
         let stream_a = make_stream("a", "StreamerA");
-        state.set_followed_streams(vec![stream_a.clone()], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream_a.clone()], HashSet::new())
+            .await;
         let _ = rx.recv().await; // consume initial event
 
         // Update: both A and B are live
         let stream_b = make_stream("b", "StreamerB");
-        state.set_followed_streams(vec![stream_a, stream_b], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream_a, stream_b], HashSet::new())
+            .await;
         let event = rx.recv().await.unwrap();
 
         assert_eq!(event.newly_live.len(), 1);
@@ -325,7 +333,9 @@ mod tests {
         let _ = rx.recv().await;
 
         // Set same streams again
-        state.set_followed_streams(vec![stream_a, stream_b], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream_a, stream_b], HashSet::new())
+            .await;
         let event = rx.recv().await.unwrap();
 
         assert!(event.newly_live.is_empty());
@@ -340,7 +350,9 @@ mod tests {
         let stream_b = make_stream("b", "StreamerB");
 
         // First load - all streams are "newly live"
-        state.set_followed_streams(vec![stream_a, stream_b], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream_a, stream_b], HashSet::new())
+            .await;
         let event = rx.recv().await.unwrap();
 
         assert_eq!(event.newly_live.len(), 2);
@@ -356,7 +368,9 @@ mod tests {
         let _ = rx.recv().await;
 
         let stream_a = make_stream("a", "StreamerA");
-        state.set_followed_streams(vec![stream_a], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream_a], HashSet::new())
+            .await;
         let event = rx.recv().await.unwrap();
 
         assert_eq!(event.newly_live.len(), 1);
@@ -371,7 +385,9 @@ mod tests {
         let stream1 = make_stream_with_game("1", "game1", "Fortnite");
         let stream2 = make_stream_with_game("2", "game2", "Minecraft");
 
-        state.set_followed_streams(vec![stream1, stream2], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream1, stream2], HashSet::new())
+            .await;
 
         // Verify categories are tracked (accessing internal state for test)
         let inner = state.inner.read().await;
@@ -391,11 +407,15 @@ mod tests {
         let state = AppState::new();
 
         let stream1 = make_stream_with_game("1", "game1", "Fortnite");
-        state.set_followed_streams(vec![stream1], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream1], HashSet::new())
+            .await;
 
         // Now update with different stream
         let stream2 = make_stream_with_game("2", "game2", "Minecraft");
-        state.set_followed_streams(vec![stream2], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream2], HashSet::new())
+            .await;
 
         // Only the new category should be tracked
         let inner = state.inner.read().await;
@@ -414,7 +434,9 @@ mod tests {
         let mut stream = make_stream_with_game("1", "game1", "Fortnite");
         stream.game_id = "".to_string(); // Empty game ID
 
-        state.set_followed_streams(vec![stream], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream], HashSet::new())
+            .await;
 
         let inner = state.inner.read().await;
         assert!(inner.tracked_categories.is_empty());
@@ -429,12 +451,16 @@ mod tests {
 
         // Initial: streamer is playing Fortnite
         let stream1 = make_stream_with_game("1", "game1", "Fortnite");
-        state.set_followed_streams(vec![stream1], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream1], HashSet::new())
+            .await;
         let _ = rx.recv().await;
 
         // Update: streamer switched to Minecraft
         let stream2 = make_stream_with_game("1", "game2", "Minecraft");
-        state.set_followed_streams(vec![stream2], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream2], HashSet::new())
+            .await;
         let event = rx.recv().await.unwrap();
 
         assert_eq!(event.category_changes.len(), 1);
@@ -448,11 +474,15 @@ mod tests {
         let mut rx = state.subscribe_streams();
 
         let stream1 = make_stream_with_game("1", "game1", "Fortnite");
-        state.set_followed_streams(vec![stream1.clone()], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream1.clone()], HashSet::new())
+            .await;
         let _ = rx.recv().await;
 
         // Same game
-        state.set_followed_streams(vec![stream1], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream1], HashSet::new())
+            .await;
         let event = rx.recv().await.unwrap();
 
         assert!(event.category_changes.is_empty());
@@ -469,7 +499,9 @@ mod tests {
 
         // New stream comes online
         let stream = make_stream_with_game("1", "game1", "Fortnite");
-        state.set_followed_streams(vec![stream], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream], HashSet::new())
+            .await;
         let event = rx.recv().await.unwrap();
 
         // Should be newly_live, not a category change
@@ -485,12 +517,16 @@ mod tests {
         // Initial: stream with no game (empty game_id)
         let mut stream1 = make_stream_with_game("1", "", "");
         stream1.game_name = "".to_string();
-        state.set_followed_streams(vec![stream1], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream1], HashSet::new())
+            .await;
         let _ = rx.recv().await;
 
         // Update: now has a game
         let stream2 = make_stream_with_game("1", "game1", "Fortnite");
-        state.set_followed_streams(vec![stream2], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream2], HashSet::new())
+            .await;
         let event = rx.recv().await.unwrap();
 
         // Not counted as a category change (was empty before)
@@ -505,7 +541,9 @@ mod tests {
         // Initial: two streams
         let stream1 = make_stream_with_game("1", "game1", "Fortnite");
         let stream2 = make_stream_with_game("2", "game2", "Minecraft");
-        state.set_followed_streams(vec![stream1, stream2], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream1, stream2], HashSet::new())
+            .await;
         let _ = rx.recv().await;
 
         // Both change categories
@@ -529,13 +567,17 @@ mod tests {
         // Initial: streamer has a title
         let mut stream1 = make_stream("1", "StreamerA");
         stream1.title = "Playing ranked".to_string();
-        state.set_followed_streams(vec![stream1], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream1], HashSet::new())
+            .await;
         let _ = rx.recv().await;
 
         // Update: title changed
         let mut stream2 = make_stream("1", "StreamerA");
         stream2.title = "Chill vibes now".to_string();
-        state.set_followed_streams(vec![stream2], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream2], HashSet::new())
+            .await;
         let event = rx.recv().await.unwrap();
 
         assert_eq!(event.title_changes.len(), 1);
@@ -548,11 +590,15 @@ mod tests {
         let mut rx = state.subscribe_streams();
 
         let stream = make_stream("1", "StreamerA");
-        state.set_followed_streams(vec![stream.clone()], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream.clone()], HashSet::new())
+            .await;
         let _ = rx.recv().await;
 
         // Same title
-        state.set_followed_streams(vec![stream], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream], HashSet::new())
+            .await;
         let event = rx.recv().await.unwrap();
 
         assert!(event.title_changes.is_empty());
@@ -568,7 +614,9 @@ mod tests {
 
         // New stream comes online
         let stream = make_stream("1", "StreamerA");
-        state.set_followed_streams(vec![stream], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream], HashSet::new())
+            .await;
         let event = rx.recv().await.unwrap();
 
         assert_eq!(event.newly_live.len(), 1);
@@ -583,13 +631,17 @@ mod tests {
         // Initial: stream with empty title
         let mut stream1 = make_stream("1", "StreamerA");
         stream1.title = "".to_string();
-        state.set_followed_streams(vec![stream1], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream1], HashSet::new())
+            .await;
         let _ = rx.recv().await;
 
         // Update: now has a title
         let mut stream2 = make_stream("1", "StreamerA");
         stream2.title = "New title".to_string();
-        state.set_followed_streams(vec![stream2], HashSet::new()).await;
+        state
+            .set_followed_streams(vec![stream2], HashSet::new())
+            .await;
         let event = rx.recv().await.unwrap();
 
         // Not counted as a title change (was empty before)
@@ -701,9 +753,7 @@ mod tests {
 
         // Stream A returns — but marked as resumed
         let resumed: HashSet<String> = ["a".to_string()].into();
-        state
-            .set_followed_streams(vec![stream_a], resumed)
-            .await;
+        state.set_followed_streams(vec![stream_a], resumed).await;
         let event = rx.recv().await.unwrap();
 
         assert!(
