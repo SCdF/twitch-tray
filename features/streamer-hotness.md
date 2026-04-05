@@ -92,6 +92,7 @@ Global config (`~/.config/twitch-tray/config.json`):
 - `hotness_min_observations: usize` (default 5)
 - `hotness_min_streams: usize` (default 7) — minimum distinct streams observed before detection activates
 - `notify_on_hot: bool` (default true)
+- `stream_reset_grace_min: u64` (default 5) — grace period for detecting stream resets that span poll boundaries. If a streamer goes offline and comes back within this window, the restart is treated as the same stream.
 
 Per-streamer override:
 - `hotness_z_threshold_override: Option<f64>` in `StreamerSettings`
@@ -163,6 +164,19 @@ The baseline includes all streams regardless of category. A streamer who does a 
 ### No time-of-day bucketing (yet)
 
 Morning streams and evening streams may have different audience sizes. Discussed and deferred — splitting observations by time-of-day would fragment an already-sparse dataset. UTC timestamps are stored, so this can be added later if the debug view reveals time-dependent patterns.
+
+### Stream reset detection
+
+Twitch streams can reset briefly — OBS crashes, internet blips, etc. When this happens, Twitch assigns a new `stream.id` and `started_at`, but from the viewer's perspective the stream never ended. Without handling this:
+- Viewer observations would be recorded at stream age ~0 with a mature audience, poisoning the historical baseline
+- The reset stream would almost certainly trigger false hot detection
+- A phantom entry in `stream_history` would inflate distinct stream counts
+
+The fix normalizes `Stream.started_at` at the API boundary (`normalize_stream_resets` in `backend.rs`), before any downstream consumer sees the data. Two detection paths:
+1. **Instant reset**: same `user_id` still live with a different `started_at` → overwrite in-place
+2. **Grace-period reset**: stream went offline for 1+ polls but returned within `stream_reset_grace_min` (default 5 min) → overwrite and suppress `newly_live`
+
+Because every downstream system reads `Stream.started_at` after normalization, a single fix handles hotness detection, viewer observations, stream history, schedule inference, and display duration.
 
 ### Minimum distinct streams over minimum observations alone
 
