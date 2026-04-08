@@ -17,6 +17,7 @@ pub struct HotnessDebugData {
     pub age_window_lo: i64,
     pub age_window_hi: i64,
     pub observation_count: usize,
+    pub eligible: bool,
 }
 
 /// Raw display data sent by the backend whenever state changes.

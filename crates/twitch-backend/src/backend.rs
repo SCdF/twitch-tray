@@ -833,6 +833,7 @@ impl Backend {
                         age_window_lo: age_lo,
                         age_window_hi: age_hi,
                         observation_count: cached.last_observation_count,
+                        eligible: hotness.eligible,
                     },
                 ))
             })
@@ -1825,6 +1826,41 @@ mod tests {
         assert!(!obs.is_empty(), "observations should be recorded in DB");
         assert_eq!(obs[0].broadcaster_id, 123);
         assert_eq!(obs[0].viewer_count, 1000); // default from make_stream
+    }
+
+    #[test]
+    fn collect_hotness_debug_includes_eligible_flag() {
+        let (backend, _tmp) = make_test_backend(60);
+        let stream = make_stream("123", "TestStreamer");
+        {
+            let mut cache = backend.hotness_cache.lock().unwrap();
+            cache.insert(
+                "123".to_string(),
+                CachedHotnessProfile {
+                    stream_started_at: 0,
+                    was_hot: false,
+                    last_hotness: Some(HotnessInfo {
+                        broadcaster_id: "123".to_string(),
+                        z_score: 0.0,
+                        is_hot: false,
+                        eligible: false,
+                        mean_viewers: 1234.0,
+                        stddev: 0.0,
+                        current_viewers: 5000,
+                        observation_count: 3,
+                        distinct_streams: 2,
+                    }),
+                    last_age_window: Some((10, 20)),
+                    last_observation_count: 3,
+                    last_distinct_streams: 2,
+                },
+            );
+        }
+
+        let debug = backend.collect_hotness_debug(&[stream]);
+        let entry = debug.get("123").expect("entry present");
+        assert!(!entry.eligible);
+        assert_eq!(entry.observation_count, 3);
     }
 
     // === ensure_*_cached tests ===
