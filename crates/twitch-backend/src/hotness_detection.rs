@@ -131,8 +131,8 @@ pub fn compute_bucket_stats(observations: &[ViewerObservation]) -> BucketStats {
 /// Otherwise returns `Some(HotnessInfo)`. The `eligible` field is `true` only when
 /// all gating conditions pass (within age window, enough observations, enough
 /// distinct streams, non-degenerate baseline). When `eligible` is `false`,
-/// `is_hot` is forced to `false` and `z_score` is `0.0` if it cannot be safely
-/// computed.
+/// `is_hot` is forced to `false`, but `z_score` still reports the real value
+/// whenever the baseline stddev is non-zero (only `0.0` when truly uncomputable).
 ///
 /// `age_within_window` indicates whether the stream's age is within the
 /// hotness evaluation window (caller checks `is_within_hotness_window`).
@@ -159,17 +159,22 @@ pub fn compute_hotness(
         && stats.distinct_streams >= config.min_streams
         && stats.transformed_stddev != 0.0;
 
-    let (z_score, is_hot) = if gates_pass {
-        let z = (anscombe(f64::from(current_viewers)) - stats.transformed_mean)
-            / stats.transformed_stddev;
-        let hot = if was_hot {
-            z >= config.z_cool_threshold
-        } else {
-            z >= config.z_threshold
-        };
-        (z, hot)
+    // Compute the real z-score whenever the baseline is non-degenerate, even if
+    // gates fail — debug UIs and downstream cool-off checks need the true value.
+    let z_score = if stats.transformed_stddev == 0.0 {
+        0.0
     } else {
-        (0.0, false)
+        (anscombe(f64::from(current_viewers)) - stats.transformed_mean) / stats.transformed_stddev
+    };
+
+    let is_hot = if gates_pass {
+        if was_hot {
+            z_score >= config.z_cool_threshold
+        } else {
+            z_score >= config.z_threshold
+        }
+    } else {
+        false
     };
 
     Some(HotnessInfo {
@@ -446,6 +451,37 @@ mod tests {
         let info = compute_hotness("123", 5000, &stats, &config, false, true).unwrap();
         assert!(!info.eligible);
         assert!(!info.is_hot);
+    }
+
+    #[test]
+    fn ineligible_still_reports_real_z_score() {
+        // Gates fail (age outside window), but baseline is non-degenerate.
+        // The z-score must reflect reality, not be forced to 0.0 — debug UIs
+        // and downstream cool-off checks rely on the true value.
+        let stats = BucketStats {
+            mean: 2000.0,
+            stddev: 500.0,
+            count: 50,
+            distinct_streams: 10,
+            transformed_mean: 44.0,
+            transformed_stddev: 5.0,
+        };
+        let config = HotnessConfig {
+            z_threshold: 2.0,
+            z_cool_threshold: 1.0,
+            min_observations: 5,
+            min_streams: 1,
+        };
+        // age_within_window=false → ineligible
+        let info = compute_hotness("123", 1000, &stats, &config, false, false).unwrap();
+        assert!(!info.eligible);
+        assert!(!info.is_hot);
+        let expected_z = ((1000.0_f64 + 0.375).sqrt() - 44.0) / 5.0;
+        assert!(
+            (info.z_score - expected_z).abs() < f64::EPSILON,
+            "expected real z={expected_z}, got {}",
+            info.z_score
+        );
     }
 
     #[test]

@@ -70,13 +70,19 @@ fn evaluate_stream_hotness(
 
     cached.last_hotness.clone_from(&result);
 
-    // Past the detection window: preserve the sticky hot state on the cached
-    // info so the 🔥 ring stays lit, but never notify.
+    // Past the detection window: a previously-hot stream stays hot only while
+    // its current z-score is still above the cool threshold. This prevents a
+    // stale 🔥 from clinging to a stream whose viewership has since dropped.
+    // We never notify past the window (no new transitions out here).
     if !age_within_window {
         if cached.was_hot {
+            let still_hot = result
+                .as_ref()
+                .is_some_and(|info| info.z_score >= params.hotness_cfg.z_cool_threshold);
             if let Some(ref mut info) = cached.last_hotness {
-                info.is_hot = true;
+                info.is_hot = still_hot;
             }
+            cached.was_hot = still_hot;
         }
         return None;
     }
@@ -1534,20 +1540,43 @@ mod tests {
         assert!(!cached.was_hot);
     }
 
-    // === Window gate: hot streams stay hot after window ===
+    // === Window gate: hot streams stay hot after window if still above cool threshold ===
 
     #[test]
-    fn hot_stream_stays_hot_after_window() {
+    fn hot_stream_stays_hot_after_window_when_above_cool_threshold() {
         let mut cached = make_cached(true);
         let stats = make_stats(10, 7);
         let cfg = default_hotness_cfg();
+        // viewers=500, transformed_mean=10, transformed_stddev=1 → z ≈ 12.4, well above cool=1.0
         let params = make_params(&stats, 91, 90, 500, &cfg, true);
         let result = evaluate_stream_hotness(&mut cached, &params);
         // No notification (not a new transition)
         assert!(result.is_none());
-        // But stays hot
+        // Stays hot — current z is still above cool threshold
         assert!(cached.was_hot);
         assert!(cached.last_hotness.as_ref().unwrap().is_hot);
+    }
+
+    #[test]
+    fn hot_stream_cools_off_after_window_when_z_drops() {
+        // Past the age cap, but the streamer is no longer drawing unusual numbers.
+        // The 🔥 must turn off — sticky-hot was masking real cool-offs (the andersonjph bug).
+        let mut cached = make_cached(true);
+        let stats = make_stats(10, 7);
+        let cfg = default_hotness_cfg();
+        // viewers=100 → anscombe≈10.02, z≈0.02 → below cool threshold (1.0)
+        let params = make_params(&stats, 91, 90, 100, &cfg, true);
+        let result = evaluate_stream_hotness(&mut cached, &params);
+        assert!(result.is_none());
+        assert!(
+            !cached.was_hot,
+            "should cool off past window when z below cool threshold"
+        );
+        let info = cached.last_hotness.as_ref().unwrap();
+        assert!(!info.is_hot);
+        // And the real z must be reported, not 0.0
+        assert!(info.z_score < cfg.z_cool_threshold);
+        assert!(info.z_score.abs() > f64::EPSILON || info.z_score == 0.0);
     }
 
     // === Normal detection within window ===
