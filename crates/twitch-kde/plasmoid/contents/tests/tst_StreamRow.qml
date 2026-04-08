@@ -152,5 +152,23 @@ Item {
             var label = findChild(row, "bottomRightLabel")
             verify(label.visible, "bottom right should be visible even without title")
         }
+
+        function test_hotness_debug_full_opacity_when_eligible() {
+            row.hotnessDebug = "1k σ0.5 (10–20 / 30)"
+            row.hotnessDebugEligible = true
+            wait(10)
+            var label = findChild(row, "hotnessDebugLabel")
+            verify(label)
+            compare(label.opacity, 0.7)
+        }
+
+        function test_hotness_debug_dimmed_when_ineligible() {
+            row.hotnessDebug = "1k σ0.0 (10–20 / 3)"
+            row.hotnessDebugEligible = false
+            wait(10)
+            var label = findChild(row, "hotnessDebugLabel")
+            verify(label)
+            compare(label.opacity, 0.35)
+        }
     }
 }

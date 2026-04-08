@@ -12,6 +12,7 @@ StreamRow {
     property string durationFormatted: ""
     // isFavourite: inherited
     // hotnessDebug: inherited
+    // hotnessDebugEligible: inherited
 
     signal streamClicked(string userLogin)
 

@@ -85,6 +85,7 @@ Controls.ScrollView {
                     isFavourite: modelData.is_favourite
                     isHot: modelData.is_hot
                     hotnessDebug: modelData.hotness_debug || ""
+                    hotnessDebugEligible: modelData.hotness_debug_eligible !== false
                     onStreamClicked: (login) => scrollView.openStream(login)
                 }
             }
@@ -111,6 +112,7 @@ Controls.ScrollView {
                         isFavourite: modelData.is_favourite
                         isHot: modelData.is_hot
                         hotnessDebug: modelData.hotness_debug || ""
+                        hotnessDebugEligible: modelData.hotness_debug_eligible !== false
                         onStreamClicked: (login) => scrollView.openStream(login)
                     }
                 }

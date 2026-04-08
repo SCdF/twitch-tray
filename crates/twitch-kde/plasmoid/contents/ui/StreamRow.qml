@@ -16,6 +16,7 @@ Controls.ItemDelegate {
     property bool isFavourite: false
     property bool isHot: false
     property string hotnessDebug: ""
+    property bool hotnessDebugEligible: true
 
     signal clicked_(string login)
 
@@ -61,7 +62,7 @@ Controls.ItemDelegate {
                     objectName: "hotnessDebugLabel"
                     text: "\u00B7 " + root.hotnessDebug
                     visible: root.hovered && root.hotnessDebug !== ""
-                    opacity: 0.7
+                    opacity: root.hotnessDebugEligible ? 0.7 : 0.35
                     elide: Text.ElideRight
                     Layout.fillWidth: true
                 }
