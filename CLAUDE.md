@@ -342,6 +342,15 @@ The project is a **Cargo workspace** with four crates enforcing hard compile-tim
 - **State Management**: `Arc<AppState>` with `RwLock`; a watch channel (`display_tx`) drives reactive menu rebuilds; a broadcast channel carries `BackendEvent` to the notification path and the app layer.
 - **No Frontend**: This is a tray-only app — the `src/` directory contains only a placeholder HTML file.
 
+## Simplest Solution First
+
+Always reach for the simplest solution that satisfies the requirements. Do not add fields,
+enums, abstractions, or configurability "in case we need it later" — if a `bool` does the job,
+use a `bool` instead of an enum; if one function is enough, do not introduce a trait. When
+proposing a design, actively challenge every piece of structure: "what breaks if I remove
+this?" If nothing breaks, remove it. YAGNI is the default; complexity must be justified by a
+concrete, current need.
+
 ## Architectural Principles
 
 ### Hexagonal Architecture (Ports and Adapters)
