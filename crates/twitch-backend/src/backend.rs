@@ -160,7 +160,18 @@ pub(crate) struct Backend {
     /// Maps user_id -> entry with original started_at and when it went offline.
     /// Entries older than `stream_reset_grace_min` are pruned each poll.
     recent_streams: Arc<std::sync::Mutex<HashMap<String, RecentStream>>>,
+
+    /// Last raw `started_at` value seen from the API per live user_id (NOT the
+    /// canonical/patched value stored in `state`). Used to make instant-reset
+    /// detection idempotent: a "reset" is only flagged when the *API value*
+    /// jumps forward, not when it persistently disagrees with a frozen
+    /// canonical value. Entries are pruned when a stream goes offline.
+    last_raw_started_at: Arc<std::sync::Mutex<HashMap<String, DateTime<Utc>>>>,
 }
+
+/// Minimum forward jump in `started_at` (raw API value to raw API value)
+/// required to be considered a real stream reset rather than API jitter.
+const STREAM_RESET_THRESHOLD: chrono::Duration = chrono::Duration::seconds(60);
 
 impl Backend {
     fn new() -> anyhow::Result<Self> {
@@ -221,6 +232,7 @@ impl Backend {
             box_art_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
             hotness_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
             recent_streams: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            last_raw_started_at: Arc::new(std::sync::Mutex::new(HashMap::new())),
         })
     }
 
@@ -608,17 +620,47 @@ impl Backend {
 
         let mut resumed = HashSet::new();
 
-        // Case 1: instant reset — same user_id still live, different started_at
-        for stream in streams.iter_mut() {
-            if let Some(old) = old_by_id.get(stream.user_id.as_str()) {
-                if stream.started_at != old.started_at {
-                    tracing::info!(
-                        "Stream reset detected for {} (instant) — preserving original started_at",
-                        stream.user_name,
-                    );
+        // Case 1: instant reset — same user_id still live, raw API `started_at`
+        // jumped forward by more than the threshold from its previously-seen
+        // raw value. Comparing raw-vs-raw (rather than raw-vs-canonical) keeps
+        // detection idempotent: a persistent disagreement between the API
+        // value and a frozen canonical value won't re-fire every poll.
+        {
+            let mut last_raw = self.last_raw_started_at.lock().unwrap();
+            for stream in streams.iter_mut() {
+                let new_raw = stream.started_at;
+
+                // Reference: prefer the previously-seen raw API value. On the
+                // very first encounter (e.g. fresh start), fall back to the
+                // canonical value in state so we can still catch a reset that
+                // happened between backend startup and the first poll-pair.
+                let reference = last_raw
+                    .get(&stream.user_id)
+                    .copied()
+                    .or_else(|| old_by_id.get(stream.user_id.as_str()).map(|s| s.started_at));
+
+                let is_real_reset =
+                    reference.is_some_and(|r| (new_raw - r) > STREAM_RESET_THRESHOLD);
+
+                if is_real_reset {
+                    if let Some(old) = old_by_id.get(stream.user_id.as_str()) {
+                        tracing::info!(
+                            "Stream reset detected for {} (instant) — preserving original started_at",
+                            stream.user_name,
+                        );
+                        stream.started_at = old.started_at;
+                    }
+                } else if let Some(old) = old_by_id.get(stream.user_id.as_str()) {
+                    // Sub-threshold jitter (or no change): silently normalise
+                    // to the canonical value to avoid drift. No log.
                     stream.started_at = old.started_at;
                 }
+
+                last_raw.insert(stream.user_id.clone(), new_raw);
             }
+
+            // Drop entries for streams that are no longer live this poll.
+            last_raw.retain(|id, _| new_by_id.contains(id));
         }
 
         // Stash streams that just went offline into the grace-period map
@@ -1337,6 +1379,7 @@ impl Clone for Backend {
             box_art_cache: self.box_art_cache.clone(),
             hotness_cache: self.hotness_cache.clone(),
             recent_streams: self.recent_streams.clone(),
+            last_raw_started_at: self.last_raw_started_at.clone(),
         }
     }
 }
@@ -1429,6 +1472,7 @@ impl Backend {
             box_art_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
             hotness_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
             recent_streams: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            last_raw_started_at: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 }
@@ -2115,6 +2159,72 @@ mod tests {
         let mut streams = vec![reset2];
         let _ = backend.normalize_stream_resets(&mut streams).await;
         assert_eq!(streams[0].started_at, original_start);
+    }
+
+    #[tokio::test]
+    async fn instant_reset_not_re_flagged_on_subsequent_polls() {
+        // Regression: persistent disagreement between API and the frozen
+        // canonical value used to re-fire reset detection every poll.
+        let (backend, _tmp) = make_test_backend(60);
+
+        let original = Utc::now() - Duration::hours(2);
+        let post_reset_raw = Utc::now() - Duration::minutes(30);
+
+        let mut s = make_stream("123", "TestStreamer");
+        s.started_at = original;
+        backend
+            .state
+            .set_followed_streams(vec![s.clone()], HashSet::new())
+            .await;
+
+        // Poll 1: API reports a forward jump → real reset, preserved.
+        let mut first = s.clone();
+        first.started_at = post_reset_raw;
+        let mut v = vec![first];
+        backend.normalize_stream_resets(&mut v).await;
+        assert_eq!(v[0].started_at, original);
+        backend.state.set_followed_streams(v, HashSet::new()).await;
+
+        // Poll 2: API reports the SAME post-reset raw value. last_raw now
+        // matches → must NOT be treated as a new reset, but the canonical
+        // value is still preserved.
+        let mut second = s.clone();
+        second.started_at = post_reset_raw;
+        let mut v2 = vec![second];
+        backend.normalize_stream_resets(&mut v2).await;
+        assert_eq!(v2[0].started_at, original);
+
+        let last_raw = backend.last_raw_started_at.lock().unwrap();
+        assert_eq!(last_raw.get("123").copied(), Some(post_reset_raw));
+    }
+
+    #[tokio::test]
+    async fn sub_threshold_jitter_does_not_trigger_reset() {
+        let (backend, _tmp) = make_test_backend(60);
+
+        let original = Utc::now() - Duration::hours(2);
+        let mut s = make_stream("123", "TestStreamer");
+        s.started_at = original;
+        backend
+            .state
+            .set_followed_streams(vec![s.clone()], HashSet::new())
+            .await;
+
+        // Seed last_raw with the canonical value.
+        let mut seed = vec![s.clone()];
+        backend.normalize_stream_resets(&mut seed).await;
+        backend
+            .state
+            .set_followed_streams(seed, HashSet::new())
+            .await;
+
+        // API reports a 30-second jitter — well under the 60s threshold.
+        let mut jittered = s.clone();
+        jittered.started_at = original + Duration::seconds(30);
+        let mut v = vec![jittered];
+        backend.normalize_stream_resets(&mut v).await;
+        // Normalised back to canonical without being flagged as a reset.
+        assert_eq!(v[0].started_at, original);
     }
 
     #[tokio::test]
