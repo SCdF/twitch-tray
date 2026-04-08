@@ -71,6 +71,7 @@ fn evaluate_stream_hotness(
         params.stats,
         params.hotness_cfg,
         cached.was_hot,
+        is_within_hotness_window(params.stream_age, params.max_stream_age_min),
     );
 
     cached.last_hotness.clone_from(&result);
@@ -1420,6 +1421,7 @@ mod tests {
                     broadcaster_id: "123".to_string(),
                     z_score: 2.5,
                     is_hot: true,
+                    eligible: true,
                     mean_viewers: 100.0,
                     stddev: 20.0,
                     current_viewers: 200,

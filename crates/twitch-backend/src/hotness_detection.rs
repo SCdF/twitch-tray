@@ -27,6 +27,7 @@ pub struct HotnessInfo {
     pub broadcaster_id: String,
     pub z_score: f64,
     pub is_hot: bool,
+    pub eligible: bool,
     pub mean_viewers: f64,
     pub stddev: f64,
     pub current_viewers: u32,
@@ -124,46 +125,58 @@ pub fn compute_bucket_stats(observations: &[ViewerObservation]) -> BucketStats {
     }
 }
 
-/// Evaluates whether a stream is "hot" based on current viewers and historical bucket stats.
+/// Evaluates hotness for a stream.
+///
+/// Returns `None` only when the bucket is completely empty (`stats.count == 0`).
+/// Otherwise returns `Some(HotnessInfo)`. The `eligible` field is `true` only when
+/// all gating conditions pass (within age window, enough observations, enough
+/// distinct streams, non-degenerate baseline). When `eligible` is `false`,
+/// `is_hot` is forced to `false` and `z_score` is `0.0` if it cannot be safely
+/// computed.
+///
+/// `age_within_window` indicates whether the stream's age is within the
+/// hotness evaluation window (caller checks `is_within_hotness_window`).
+/// `was_hot` indicates whether the stream was hot on the previous evaluation.
 ///
 /// Uses hysteresis (Schmitt trigger) to prevent oscillation at the threshold boundary:
 /// - A stream becomes hot when z-score >= `z_threshold`
 /// - A hot stream cools off only when z-score < `z_cool_threshold`
 /// - Between the two thresholds, the previous state is preserved
-///
-/// `was_hot` indicates whether the stream was hot on the previous evaluation.
-///
-/// Returns `None` if there are insufficient observations or zero standard deviation
-/// (all historical observations were identical).
 pub fn compute_hotness(
     broadcaster_id: &str,
     current_viewers: u32,
     stats: &BucketStats,
     config: &HotnessConfig,
     was_hot: bool,
+    age_within_window: bool,
 ) -> Option<HotnessInfo> {
-    if stats.count < config.min_observations
-        || stats.distinct_streams < config.min_streams
-        || stats.transformed_stddev == 0.0
-    {
+    if stats.count == 0 {
         return None;
     }
 
-    let z_score =
-        (anscombe(f64::from(current_viewers)) - stats.transformed_mean) / stats.transformed_stddev;
+    let gates_pass = age_within_window
+        && stats.count >= config.min_observations
+        && stats.distinct_streams >= config.min_streams
+        && stats.transformed_stddev != 0.0;
 
-    let is_hot = if was_hot {
-        // Already hot — stay hot unless z drops below cool threshold
-        z_score >= config.z_cool_threshold
+    let (z_score, is_hot) = if gates_pass {
+        let z = (anscombe(f64::from(current_viewers)) - stats.transformed_mean)
+            / stats.transformed_stddev;
+        let hot = if was_hot {
+            z >= config.z_cool_threshold
+        } else {
+            z >= config.z_threshold
+        };
+        (z, hot)
     } else {
-        // Not hot — only become hot if z exceeds entry threshold
-        z_score >= config.z_threshold
+        (0.0, false)
     };
 
     Some(HotnessInfo {
         broadcaster_id: broadcaster_id.to_string(),
         z_score,
         is_hot,
+        eligible: gates_pass,
         mean_viewers: stats.mean,
         stddev: stats.stddev,
         current_viewers,
@@ -338,7 +351,7 @@ mod tests {
             min_observations: 5,
             min_streams: 1,
         };
-        let info = compute_hotness("123", 3500, &stats, &config, false).unwrap();
+        let info = compute_hotness("123", 3500, &stats, &config, false, true).unwrap();
         // z = (anscombe(3500) - 44.0) / 5.0
         let expected_z = ((3500.0_f64 + 0.375).sqrt() - 44.0) / 5.0;
         assert!((info.z_score - expected_z).abs() < f64::EPSILON);
@@ -362,7 +375,7 @@ mod tests {
             min_observations: 5,
             min_streams: 1,
         };
-        let info = compute_hotness("123", 4000, &stats, &config, false).unwrap();
+        let info = compute_hotness("123", 4000, &stats, &config, false, true).unwrap();
         assert!(info.is_hot);
         assert_eq!(info.current_viewers, 4000);
         assert!((info.mean_viewers - 2000.0).abs() < f64::EPSILON);
@@ -385,7 +398,7 @@ mod tests {
             min_observations: 5,
             min_streams: 1,
         };
-        let info = compute_hotness("123", 2500, &stats, &config, false).unwrap();
+        let info = compute_hotness("123", 2500, &stats, &config, false, true).unwrap();
         assert!(!info.is_hot);
     }
 
@@ -410,7 +423,7 @@ mod tests {
             min_observations: 5,
             min_streams: 1,
         };
-        let info = compute_hotness("123", 3600, &stats, &config, false).unwrap();
+        let info = compute_hotness("123", 3600, &stats, &config, false, true).unwrap();
         assert!(info.is_hot);
     }
 
@@ -430,7 +443,9 @@ mod tests {
             min_observations: 5,
             min_streams: 1,
         };
-        assert!(compute_hotness("123", 5000, &stats, &config, false).is_none());
+        let info = compute_hotness("123", 5000, &stats, &config, false, true).unwrap();
+        assert!(!info.eligible);
+        assert!(!info.is_hot);
     }
 
     #[test]
@@ -449,7 +464,9 @@ mod tests {
             min_observations: 5,
             min_streams: 1,
         };
-        assert!(compute_hotness("123", 5000, &stats, &config, false).is_none());
+        let info = compute_hotness("123", 5000, &stats, &config, false, true).unwrap();
+        assert!(!info.eligible);
+        assert!(!info.is_hot);
     }
 
     // === compute_hotness_profile ===
@@ -544,7 +561,9 @@ mod tests {
             min_observations: 5,
             min_streams: 7,
         };
-        assert!(compute_hotness("123", 5000, &stats, &config, false).is_none());
+        let info = compute_hotness("123", 5000, &stats, &config, false, true).unwrap();
+        assert!(!info.eligible);
+        assert!(!info.is_hot);
     }
 
     #[test]
@@ -564,7 +583,7 @@ mod tests {
             min_observations: 5,
             min_streams: 7,
         };
-        let info = compute_hotness("123", 5000, &stats, &config, false).unwrap();
+        let info = compute_hotness("123", 5000, &stats, &config, false, true).unwrap();
         assert!(info.is_hot);
     }
 
@@ -641,8 +660,8 @@ mod tests {
             min_streams: 7,
         };
 
-        let small_info = compute_hotness("1", 16, &small_stats, &config, false).unwrap();
-        let large_info = compute_hotness("2", 16000, &large_stats, &config, false).unwrap();
+        let small_info = compute_hotness("1", 16, &small_stats, &config, false, true).unwrap();
+        let large_info = compute_hotness("2", 16000, &large_stats, &config, false, true).unwrap();
 
         // The z-scores should be in the same ballpark (both ~60% above mean)
         // rather than the small streamer having a dramatically higher z-score
@@ -675,7 +694,7 @@ mod tests {
             min_streams: 1,
         };
         // anscombe(v) = 40 + 1.5*10 = 55 → v = 55²-0.375 ≈ 3024.625
-        let info = compute_hotness("123", 3025, &stats, &config, true).unwrap();
+        let info = compute_hotness("123", 3025, &stats, &config, true, true).unwrap();
         assert!(
             info.is_hot,
             "z={:.2} should stay hot (above cool threshold)",
@@ -700,7 +719,7 @@ mod tests {
             min_observations: 5,
             min_streams: 1,
         };
-        let info = compute_hotness("123", 3025, &stats, &config, false).unwrap();
+        let info = compute_hotness("123", 3025, &stats, &config, false, true).unwrap();
         assert!(
             !info.is_hot,
             "z={:.2} should stay cold (below entry threshold)",
@@ -727,7 +746,7 @@ mod tests {
         };
         // anscombe(v) needs to be < 40 + 1.0*10 = 50 → v < 2500-0.375
         // Use 2000 viewers → anscombe(2000) ≈ 44.72, z ≈ 0.47
-        let info = compute_hotness("123", 2000, &stats, &config, true).unwrap();
+        let info = compute_hotness("123", 2000, &stats, &config, true, true).unwrap();
         assert!(
             !info.is_hot,
             "z={:.2} should cool off (below cool threshold)",
@@ -761,5 +780,49 @@ mod tests {
     fn zero_age_always_within_window() {
         assert!(is_within_hotness_window(0, 90));
         assert!(is_within_hotness_window(0, 0));
+    }
+
+    #[test]
+    fn ineligible_when_insufficient_observations_but_has_data() {
+        let stats = BucketStats {
+            mean: 2000.0,
+            stddev: 500.0,
+            count: 3,
+            distinct_streams: 2,
+            transformed_mean: 44.0,
+            transformed_stddev: 5.0,
+        };
+        let config = HotnessConfig {
+            z_threshold: 2.0,
+            z_cool_threshold: 1.0,
+            min_observations: 5,
+            min_streams: 1,
+        };
+        let info = compute_hotness("123", 5000, &stats, &config, false, true).unwrap();
+        assert!(!info.eligible);
+        assert!(!info.is_hot);
+        assert_eq!(info.observation_count, 3);
+    }
+
+    #[test]
+    fn ineligible_when_age_outside_window() {
+        let stats = BucketStats {
+            mean: 2000.0,
+            stddev: 500.0,
+            count: 50,
+            distinct_streams: 10,
+            transformed_mean: 44.0,
+            transformed_stddev: 5.0,
+        };
+        let config = HotnessConfig {
+            z_threshold: 2.0,
+            z_cool_threshold: 1.0,
+            min_observations: 5,
+            min_streams: 7,
+        };
+        let info = compute_hotness("123", 5000, &stats, &config, false, false).unwrap();
+        assert!(!info.eligible);
+        assert!(!info.is_hot);
+        assert_eq!(info.observation_count, 50);
     }
 }
