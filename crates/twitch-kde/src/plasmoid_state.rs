@@ -56,10 +56,9 @@ fn live_stream_to_dto(
     let is_hot = hot_stream_ids.contains(&s.user_id);
     let viewer_count_formatted = s.format_viewer_count();
     let duration_formatted = s.format_duration();
-    let debug_str = hotness_debug
-        .get(&s.user_id)
-        .map(format_hotness_debug)
-        .unwrap_or_default();
+    let debug_entry = hotness_debug.get(&s.user_id);
+    let debug_str = debug_entry.map(format_hotness_debug).unwrap_or_default();
+    let hotness_debug_eligible = debug_entry.is_none_or(|d| d.eligible);
     LiveStreamDto {
         user_login: s.user_login,
         user_name: s.user_name,
@@ -71,6 +70,7 @@ fn live_stream_to_dto(
         is_favourite,
         is_hot,
         hotness_debug: debug_str,
+        hotness_debug_eligible,
     }
 }
 
@@ -779,6 +779,61 @@ mod tests {
         let state = compute_plasmoid_state(raw, None, Utc::now());
 
         assert!(state.categories[0].streams[0].is_favourite);
+    }
+
+    // =========================================================
+    // Hotness debug eligibility
+    // =========================================================
+
+    #[test]
+    fn live_stream_dto_marks_ineligible_hotness_debug() {
+        let mut hotness_debug = HashMap::new();
+        hotness_debug.insert(
+            "1".to_string(),
+            HotnessDebugData {
+                mean_viewers: 1234.0,
+                z_score: 0.0,
+                age_window_lo: 10,
+                age_window_hi: 20,
+                observation_count: 3,
+                eligible: false,
+            },
+        );
+
+        let stream = make_stream("1", "Streamer1");
+        let dto = live_stream_to_dto(stream, &HashMap::new(), &HashSet::new(), &hotness_debug);
+
+        assert!(!dto.hotness_debug.is_empty(), "debug string still rendered");
+        assert!(!dto.hotness_debug_eligible);
+    }
+
+    #[test]
+    fn live_stream_dto_marks_eligible_hotness_debug() {
+        let mut hotness_debug = HashMap::new();
+        hotness_debug.insert(
+            "1".to_string(),
+            HotnessDebugData {
+                mean_viewers: 1234.0,
+                z_score: 1.5,
+                age_window_lo: 10,
+                age_window_hi: 20,
+                observation_count: 50,
+                eligible: true,
+            },
+        );
+
+        let stream = make_stream("1", "Streamer1");
+        let dto = live_stream_to_dto(stream, &HashMap::new(), &HashSet::new(), &hotness_debug);
+
+        assert!(dto.hotness_debug_eligible);
+    }
+
+    #[test]
+    fn live_stream_dto_defaults_eligible_true_when_no_debug_entry() {
+        let stream = make_stream("1", "Streamer1");
+        let dto = live_stream_to_dto(stream, &HashMap::new(), &HashSet::new(), &HashMap::new());
+        assert!(dto.hotness_debug_eligible);
+        assert!(dto.hotness_debug.is_empty());
     }
 
     // =========================================================

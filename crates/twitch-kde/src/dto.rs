@@ -39,6 +39,12 @@ pub struct LiveStreamDto {
     pub is_hot: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub hotness_debug: String,
+    #[serde(default = "default_true")]
+    pub hotness_debug_eligible: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
@@ -128,6 +134,7 @@ mod tests {
             is_favourite: true,
             is_hot: false,
             hotness_debug: String::new(),
+            hotness_debug_eligible: true,
         };
         let json = serde_json::to_string(&dto).unwrap();
         let parsed: LiveStreamDto = serde_json::from_str(&json).unwrap();
