@@ -44,18 +44,35 @@ struct EvalHotnessParams<'a> {
 ///
 /// Side effects on `cached`:
 /// - `last_observation_count`, `last_distinct_streams` — always updated
-/// - `last_hotness`, `was_hot` — updated when inside the detection window
+/// - `last_hotness` — always updated with the evaluation (eligible or ineligible)
+/// - `was_hot` — updated when inside the detection window
 /// - When outside the window: hot status is preserved (streams don't lose 🔥 mid-stream)
 fn evaluate_stream_hotness(
     cached: &mut CachedHotnessProfile,
     params: &EvalHotnessParams<'_>,
 ) -> Option<HotnessInfo> {
-    // Always update debug stats
+    // Always update raw debug stats
     cached.last_observation_count = params.stats.count;
     cached.last_distinct_streams = params.stats.distinct_streams;
 
-    // Past the detection window: preserve existing hot status, no new evaluation
-    if !is_within_hotness_window(params.stream_age, params.max_stream_age_min) {
+    let age_within_window = is_within_hotness_window(params.stream_age, params.max_stream_age_min);
+
+    // Evaluate hotness — compute_hotness returns Some for any non-empty bucket,
+    // with eligible=false when age_within_window is false or gates fail.
+    let result = compute_hotness(
+        params.broadcaster_id,
+        params.viewer_count,
+        params.stats,
+        params.hotness_cfg,
+        cached.was_hot,
+        age_within_window,
+    );
+
+    cached.last_hotness.clone_from(&result);
+
+    // Past the detection window: preserve the sticky hot state on the cached
+    // info so the 🔥 ring stays lit, but never notify.
+    if !age_within_window {
         if cached.was_hot {
             if let Some(ref mut info) = cached.last_hotness {
                 info.is_hot = true;
@@ -64,24 +81,12 @@ fn evaluate_stream_hotness(
         return None;
     }
 
-    // Evaluate hotness
-    let result = compute_hotness(
-        params.broadcaster_id,
-        params.viewer_count,
-        params.stats,
-        params.hotness_cfg,
-        cached.was_hot,
-        is_within_hotness_window(params.stream_age, params.max_stream_age_min),
-    );
-
-    cached.last_hotness.clone_from(&result);
-
-    // Preserve was_hot on None — don't forget hot status in data-sparse regions
+    // Inside the window: drive was_hot from the (possibly ineligible) evaluation
+    // and emit a notification on the not-hot → hot edge.
     if let Some(ref info) = result {
         let was_hot = cached.was_hot;
         cached.was_hot = info.is_hot;
 
-        // Edge detection: notify only on not-hot → hot transition
         if info.is_hot && !was_hot && params.notify_on_hot {
             return result;
         }
@@ -714,6 +719,20 @@ impl Backend {
 
                 let age = (now - stream.started_at).num_minutes().max(0);
                 let (age_lo, age_hi) = compute_age_window(age, cfg.hotness_age_window_divisor);
+
+                // Release builds: skip the DB query (and the entire eval)
+                // past the age cap, since the result would never be displayed.
+                #[cfg(not(debug_assertions))]
+                if !is_within_hotness_window(age, cfg.hotness_max_stream_age_min) {
+                    cached.last_age_window = Some((age_lo, age_hi));
+                    // Preserve sticky hot state without re-evaluating.
+                    if cached.was_hot {
+                        if let Some(ref mut info) = cached.last_hotness {
+                            info.is_hot = true;
+                        }
+                    }
+                    continue;
+                }
 
                 let obs = match self.db.get_viewer_observations_excluding_stream(
                     broadcaster_id,
@@ -1595,6 +1614,47 @@ mod tests {
         let result = evaluate_stream_hotness(&mut cached, &params);
         assert!(result.is_none());
         assert!(!cached.was_hot);
+    }
+
+    // === Record ineligible evaluations past age cap ===
+
+    #[test]
+    fn evaluate_stream_hotness_records_ineligible_past_age_cap() {
+        let stats = BucketStats {
+            mean: 2000.0,
+            stddev: 500.0,
+            count: 50,
+            distinct_streams: 10,
+            transformed_mean: 44.0,
+            transformed_stddev: 5.0,
+        };
+        let cfg = HotnessConfig {
+            z_threshold: 2.0,
+            z_cool_threshold: 1.0,
+            min_observations: 5,
+            min_streams: 7,
+        };
+        let mut cached = make_cached(false);
+        let params = EvalHotnessParams {
+            stats: &stats,
+            stream_age: 200, // past the cap
+            max_stream_age_min: 90,
+            viewer_count: 5000,
+            broadcaster_id: "123",
+            hotness_cfg: &cfg,
+            notify_on_hot: false,
+        };
+
+        let notify = evaluate_stream_hotness(&mut cached, &params);
+
+        assert!(notify.is_none(), "no notification past age cap");
+        let info = cached
+            .last_hotness
+            .as_ref()
+            .expect("evaluation should be recorded even past age cap");
+        assert!(!info.eligible);
+        assert!(!info.is_hot);
+        assert_eq!(info.observation_count, 50);
     }
 
     // === tick_stream_poll / tick_followed_channels tests ===
