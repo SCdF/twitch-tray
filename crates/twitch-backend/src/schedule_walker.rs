@@ -176,7 +176,8 @@ impl ScheduleWalker {
                         tracing::debug!("Inferred {} schedule(s) from history", deduped.len());
                         combined.extend(deduped);
                         combined.sort_by(|a, b| {
-                            a.start_time.cmp(&b.start_time)
+                            a.start_time
+                                .cmp(&b.start_time)
                                 .then_with(|| a.broadcaster_login.cmp(&b.broadcaster_login))
                         });
                     }
