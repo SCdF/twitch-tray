@@ -18,6 +18,9 @@ This is the only file a human has edited.
     - how to deal with cross linux vs plasmoid? Can we bundle the KDE build in one thing?
   - Cross platform settings to start at startup, exposed in settings
 
+- record blocks of time we are active. Start at N, every time we are around a minute, resave it in the DB as N->M. Use this in the future to prove negatives. ie, remove a scheduled stream if that scheduled stream is historicially ignored.
+- 
+
 - debug DB. Show disk usage. Can we also get debug stats from sqlite, showing bad / slow queries? Button to clear historic data our algorithms don't use. I think this would right now mean > 1 month, but we should check and be specific
 - how can we tell how much CPU / etc are used over time? I want to make sure this doesn't use a lot of background resources, doesn't drain battery, etc.
 
